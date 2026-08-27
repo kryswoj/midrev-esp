@@ -39,6 +39,18 @@ w bieżącej sesji Claude Code, otwórz nową sesję w tym katalogu (`cd midrev-
    exec`, z kontekstem: co to robi, historia błędów, na czym się skupić)
 4. Triage → druga runda review → dopiero wtedy moduł zamknięty
 
+## Zasada twarda: migracji nie edytuje się po zastosowaniu
+
+`migrations/0001_init.sql` był edytowany w miejscu 27.08 (dwie rundy review Codeksa) —
+dopuszczalne WYŁĄCZNIE dlatego, że projekt jeszcze nie miał żadnego realnego wdrożenia i
+jedyny wolumen sandboxa został przy okazji skasowany (`docker compose down -v`). Od
+pierwszego realnego użycia (nawet przez jedną osobę na drugiej maszynie) — **każda zmiana
+schematu to NOWY plik migracji**, nigdy edycja istniejącego. `scripts/migrate.ts` i tak to
+wymusi (porównuje checksum, rzuca błąd przy rozjeździe), ale nie ratuje to kogoś, kto ma
+stary wolumen z czasu przed dodaniem tabeli `schema_migrations` — taki wolumen trzeba
+świadomie skasować i zmigrować od zera, nie ufać "applied" bez sprawdzenia realnych
+constraintów.
+
 ## Zasada twarda: testy jako specyfikacja
 
 Żaden moduł nie jest "zrobiony" bez testu, który realnie sprawdza zachowanie opisane w
