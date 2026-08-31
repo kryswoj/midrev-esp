@@ -18,6 +18,8 @@ const IKONY: Record<string, React.ReactNode> = {
   segmenty: <path d="M13 3H3l4 4.7V13l2-1.2V7.7L13 3Z" />,
   listy: <path d="M5.5 4.5h8M5.5 8h8M5.5 11.5h8M2.8 4.5h.01M2.8 8h.01M2.8 11.5h.01" />,
   zgody: <path d="m3.5 8.2 3 3 6-6.4" />,
+  popupy: <path d="M2.5 3.5h11v6h-11z M5.5 12.5h5 M8 9.5v3" />,
+  automatyzacje: <path d="M8 2.5v3 M8 10.5v3 M2.5 8h3 M10.5 8h3 M8 6.5A1.5 1.5 0 1 0 8 9.5 1.5 1.5 0 0 0 8 6.5Z" />,
 };
 
 function Ikona({ nazwa }: { nazwa: string }) {

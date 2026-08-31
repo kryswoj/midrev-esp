@@ -21,6 +21,8 @@ const SEKCJE = [
     tytul: "Marketing",
     pozycje: [
       { href: "/kampanie", etykieta: "Kampanie", ikona: "kampanie" },
+      { href: "/automatyzacje", etykieta: "Automatyzacje", ikona: "automatyzacje" },
+      { href: "/popupy", etykieta: "Popupy", ikona: "popupy" },
       { href: "/segmenty", etykieta: "Segmenty", ikona: "segmenty" },
       { href: "/listy", etykieta: "Listy", ikona: "listy" },
       { href: "/zgody", etykieta: "Zgody i wykluczenia", ikona: "zgody" },

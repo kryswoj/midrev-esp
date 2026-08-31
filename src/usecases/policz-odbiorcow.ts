@@ -11,6 +11,8 @@ export interface RozbicieOdbiorcow {
   docelowo: number;
   probka: { email: string | null; imie: string | null; nazwisko: string | null }[];
   zrodla: { mode: string; typ: string; nazwa: string; ile: number }[];
+  /** pełna lista docelowych profili; z niej silnik wysyłki buduje wiadomości */
+  doceloweIds: string[];
 }
 
 async function idZeZrodla(
@@ -82,6 +84,7 @@ export async function policzOdbiorcow(
       docelowo: 0,
       probka: [],
       zrodla,
+      doceloweIds: [],
     };
   }
 
@@ -131,5 +134,6 @@ export async function policzOdbiorcow(
       nazwisko: r.last_name,
     })),
     zrodla,
+    doceloweIds: docelowi.map((r: any) => r.id),
   };
 }

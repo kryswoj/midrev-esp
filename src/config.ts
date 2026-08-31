@@ -10,6 +10,12 @@ const schemat = z.object({
     .length(64, "SECRETS_KEY musi być 32 bajtami zapisanymi szesnastkowo (64 znaki)")
     .default("0".repeat(64)),
   ALERT_WEBHOOK_URL: z.string().url().optional(),
+  /* Publiczny adres aplikacji: na nim stoją linki w mailach (klik, wypisanie, akceptacja).
+     Link w mailu musi działać u odbiorcy, nie na localhost. */
+  APP_URL: z.string().url().default("http://137.74.42.199:3005"),
+  SMTP_HOST: z.string().default("127.0.0.1"),
+  SMTP_PORT: z.coerce.number().default(1025),
+  MAIL_FROM: z.string().default("kampanie@midrev-esp.local"),
 });
 
 let zbuforowana: z.infer<typeof schemat> | undefined;

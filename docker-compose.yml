@@ -10,6 +10,17 @@ services:
     volumes:
       - pgdata18:/var/lib/postgresql   # PG18 zmienil punkt montowania: katalog danych ladzie w podkatalogu
 
+  # Mailpit: lokalna skrzynka na czas developmentu. Przyjmuje SMTP na 1025 i pokazuje
+  # odebrane maile w przeglądarce na 8026. Adapter SMTP mówi do niego dokładnie tak samo,
+  # jak mówiłby do prawdziwego dostawcy, więc cała ścieżka wysyłki jest realna.
+  mailpit:
+    image: axllent/mailpit
+    ports:
+      - "127.0.0.1:1025:1025"
+      - "0.0.0.0:8026:8025"
+    environment:
+      MP_MAX_MESSAGES: 5000
+
 # pgdata (Postgres 16) zostaje nietknięty na wypadek potrzeby powrotu.
 # Nowy wolumen, bo 18 nie czyta katalogu danych szesnastki.
 volumes:
