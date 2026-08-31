@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { wymaganyTenant } from "../../autoryzacja";
 import {
   kampanieTenanta,
   podsumowanieTenanta,
@@ -8,16 +9,13 @@ import {
   statystykiZgod,
   zamowieniaTenanta,
 } from "../../../adapters/db/repozytoria";
+import { formatujDate } from "../../../domain/daty";
 import { zGroszy } from "../../../domain/kwoty";
+import { odmien } from "../../../domain/liczebniki";
 import { nazwaStatusu, wagaStatusu } from "../../../domain/statusy";
 import { Komunikat, MetrykaWiodaca, Naglowek, PasekMetryk } from "./naglowek";
 
 export const dynamic = "force-dynamic";
-
-function data(d: Date | string | null) {
-  if (!d) return "—";
-  return new Date(d).toLocaleDateString("pl-PL", { day: "2-digit", month: "short", year: "numeric" });
-}
 
 export default async function Przeglad({
   params,
@@ -27,6 +25,9 @@ export default async function Przeglad({
   searchParams: Promise<{ ok?: string; blad?: string }>;
 }) {
   const { tenantId } = await params;
+  // strona weryfikuje sama (AD-21): layout nie jest granica auth (RSC potrafi
+  // renderowac sam segment strony) - patrz src/app/autoryzacja.ts
+  await wymaganyTenant(tenantId);
   const { ok, blad } = await searchParams;
   const [dane, sklepy, zamowienia, importy, segmenty, kampanie, zgody] = await Promise.all([
     podsumowanieTenanta(tenantId),
@@ -60,18 +61,7 @@ export default async function Przeglad({
         <MetrykaWiodaca
           etykieta="Przychód ze zsynchronizowanych zamówień"
           wartosc={zGroszy(Number(dane.przychod_minor))}
-          opis={`${dane.zamowienia} zamówień od ${data(dane.najstarsze)} · opłacone i w realizacji`}
-          dodatek={
-            <div className="flex items-end gap-1" aria-hidden="true">
-              {[38, 52, 30, 64, 44, 72, 58, 80].map((h, i) => (
-                <span
-                  key={i}
-                  className="w-2 rounded-t-[2px] bg-[var(--color-akcent)]/35"
-                  style={{ height: `${h * 0.5}px` }}
-                />
-              ))}
-            </div>
-          }
+          opis={`${odmien(Number(dane.zamowienia), "zamówienie", "zamówienia", "zamówień")} od ${formatujDate(dane.najstarsze)} · opłacone i w realizacji`}
         />
 
         <PasekMetryk
@@ -82,7 +72,7 @@ export default async function Przeglad({
             {
               etykieta: "Zgody na e-mail",
               wartosc: String(zgody.zgody_email),
-              opis: `${zgody.wycofane_email} wycofanych`,
+              opis: odmien(Number(zgody.wycofane_email), "wycofana", "wycofane", "wycofanych"),
             },
           ]}
         />
@@ -100,7 +90,7 @@ export default async function Przeglad({
                 Brak danych. Podłącz sklep i uruchom import w zakładce Sklepy.
               </p>
             ) : (
-              <div className="p-1.5">
+              <div className="overflow-x-auto p-1.5">
                 <table className="tabela">
                   <thead>
                     <tr>
@@ -122,7 +112,7 @@ export default async function Przeglad({
                           </span>
                         </td>
                         <td className="num">{zGroszy(Number(z.total_minor), z.currency)}</td>
-                        <td className="num text-[var(--color-tekst-3)]">{data(z.occurred_at)}</td>
+                        <td className="num text-[var(--color-tekst-3)]">{formatujDate(z.occurred_at)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -172,11 +162,11 @@ export default async function Przeglad({
                         <span className={`plakietka ${i.status === "done" ? "plakietka-ok" : "plakietka-blad"}`}>
                           {i.status === "done" ? "zakończony" : i.status}
                         </span>
-                        <span className="liczba text-[var(--color-tekst-3)]">{data(i.created_at)}</span>
+                        <span className="liczba text-[var(--color-tekst-3)]">{formatujDate(i.created_at)}</span>
                       </div>
                       <div className="text-[var(--color-tekst-3)]">
-                        zapowiedziano {i.planned?.zamowienia ?? "?"} zamówień i {i.planned?.noweProfile ?? "?"} profili,
-                        zapisano {i.counters?.utworzoneZamowienia ?? 0} i {i.counters?.utworzoneProfile ?? 0}
+                        zapowiedziano {i.planned?.zamowienia != null ? odmien(Number(i.planned.zamowienia), "zamówienie", "zamówienia", "zamówień") : "? zamówień"} i {i.planned?.noweProfile != null ? odmien(Number(i.planned.noweProfile), "profil", "profile", "profili") : "? profili"},
+                        zapisano {odmien(Number(i.counters?.utworzoneZamowienia ?? 0), "zamówienie", "zamówienia", "zamówień")} i {odmien(Number(i.counters?.utworzoneProfile ?? 0), "profil", "profile", "profili")}
                       </div>
                       {i.last_error ? <div className="mt-1 text-[var(--color-blad)]">{i.last_error}</div> : null}
                     </li>

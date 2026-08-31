@@ -50,21 +50,29 @@ export async function utrzymajPartycje(dniWprzod = 3, retencjaDni = 14) {
 
 /**
  * Odzyskiwanie po śmierci workera. Dwa rodzaje zombie:
- * 1. Wiadomość w 'claimed' bez zdarzenia 'sending': worker padł między zajęciem partii
- *    a bramką. Nic nie wyszło do dostawcy, więc powrót do 'queued' jest bezpieczny,
- *    a bramka canSendTo i tak sprawdzi się ponownie przy następnym podejściu.
- *    Wiadomości w 'sending' NIE ruszamy automatem: mogły wyjść do dostawcy i wymagają
- *    wyjaśnienia po idempotencyKey, nie ślepego ponowienia (AD-23).
+ * 1. Wiadomość w 'claimed': worker padł między zajęciem partii a commitem przejścia
+ *    w 'sending'. Stan 'claimed' GWARANTUJE, że dostawca nie był wołany w tej próbie,
+ *    bo wywołanie dostawcy następuje dopiero po commicie, który przestawia stan na
+ *    'sending' — więc powrót do 'queued' jest bezpieczny, a bramka canSendTo i tak
+ *    sprawdzi się ponownie. (Zdarzenie 'sending' w historii NIE dyskwalifikuje: może
+ *    pochodzić z poprzedniej próby zakończonej błędem przejściowym przed przyjęciem.)
+ *    Wiadomości w 'sending' NIE ruszamy automatem: mogły wyjść do dostawcy — nimi
+ *    zajmuje się rekoncyliacja, która przenosi je w 'held' i alarmuje (AD-23).
  * 2. Zadanie w 'running' z locked_at starszym niż kwadrans: wraca do 'pending'.
+ *    Worker odświeża locked_at heartbeatem co minutę, więc kwadrans bez heartbeatu
+ *    naprawdę znaczy martwy proces, a nie handler pracujący długo.
+ *
+ * Zegarem wiadomości jest claimed_at (moment zajęcia partii), nie created_at:
+ * wiadomość zbudowana wczoraj (limit dobowy przerwał wysyłkę) była cofana do queued
+ * w trakcie, gdy inny worker właśnie ją przetwarzał — i wychodziła dwa razy.
+ * coalesce z created_at obsługuje wiadomości zajęte przed migracją 0011.
  */
 export async function odzyskajZombie() {
   const pool = getPool();
   const wiadomosci = await pool.query(
-    `update messages m set current_state = 'queued'
+    `update messages m set current_state = 'queued', claimed_at = null
       where m.current_state = 'claimed'
-        and not exists (select 1 from message_events e
-                         where e.message_id = m.id and e.event_type = 'sending')
-        and m.created_at < now() - interval '15 minutes'
+        and coalesce(m.claimed_at, m.created_at) < now() - interval '15 minutes'
       returning m.id`,
   );
   const zadania = await pool.query(

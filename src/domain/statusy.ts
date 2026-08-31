@@ -24,3 +24,27 @@ export function wagaStatusu(status: string): WagaStatusu {
   if (status === "cancelled" || status === "refunded" || status === "failed") return "blad";
   return "uwaga";
 }
+
+/** Źródła zgód z rejestru. Wpis "popup:Nazwa" niesie nazwę popupu w sobie. */
+const ZRODLA_ZGOD: Record<string, string> = {
+  checkout_woocommerce: "checkout sklepu",
+  link_wypisania: "link wypisania w stopce",
+};
+
+export function zrodloZgody(source: string): string {
+  if (source.startsWith("popup:")) return `popup „${source.slice("popup:".length)}”`;
+  return ZRODLA_ZGOD[source] ?? source;
+}
+
+/** Uprawnienia sklepu (klucze MozliwosciPlatformy) w języku interfejsu. */
+const NAZWY_MOZLIWOSCI: Record<string, string> = {
+  zamowienia: "zamówienia",
+  klienci: "klienci",
+  produkty: "produkty",
+  porzuconyKoszyk: "porzucony koszyk",
+  webhooki: "webhooki",
+};
+
+export function nazwaMozliwosci(klucz: string): string {
+  return NAZWY_MOZLIWOSCI[klucz] ?? klucz;
+}

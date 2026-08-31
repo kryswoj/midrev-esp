@@ -1,10 +1,13 @@
 import { segmentyTenanta } from "../../../../adapters/db/repozytoria";
+import { wymaganyTenant } from "../../../autoryzacja";
 import { policzSegment } from "../../../../adapters/db/segmenty";
 import { opiszRegule, type Regula } from "../../../../domain/segmenty";
 import { utworzSegmentAkcja } from "../../../akcje";
 import { Komunikat, Naglowek } from "../naglowek";
 
 export const dynamic = "force-dynamic";
+
+export const metadata = { title: "Segmenty" };
 
 export default async function Segmenty({
   params,
@@ -14,6 +17,9 @@ export default async function Segmenty({
   searchParams: Promise<{ ok?: string; blad?: string }>;
 }) {
   const { tenantId } = await params;
+  // strona weryfikuje sama (AD-21): layout nie jest granica auth (RSC potrafi
+  // renderowac sam segment strony) - patrz src/app/autoryzacja.ts
+  await wymaganyTenant(tenantId);
   const { ok, blad } = await searchParams;
   const segmenty = await segmentyTenanta(tenantId);
   const zLiczba = await Promise.all(
@@ -32,7 +38,7 @@ export default async function Segmenty({
       <Komunikat ok={ok} blad={blad} />
 
       <div className="grid gap-6 p-4 lg:grid-cols-[1fr_320px]">
-        <section className="karta overflow-hidden">
+        <section className="karta overflow-x-auto">
           <table className="tabela">
             <thead>
               <tr>
@@ -45,7 +51,7 @@ export default async function Segmenty({
               {zLiczba.map((s: any) => (
                 <tr key={s.id}>
                   <td className="font-medium">{s.name}</td>
-                  <td className="text-[var(--color-muted)]">
+                  <td className="text-[var(--color-tekst-2)]">
                     {(s.rules as Regula[]).map((r) => opiszRegule(r)).join(" · ")}
                   </td>
                   <td className="text-right">
@@ -55,7 +61,7 @@ export default async function Segmenty({
               ))}
               {zLiczba.length === 0 ? (
                 <tr>
-                  <td colSpan={3} className="text-[var(--color-muted)]">
+                  <td colSpan={3} className="text-[var(--color-tekst-2)]">
                     Nie ma jeszcze żadnego segmentu.
                   </td>
                 </tr>
@@ -66,17 +72,17 @@ export default async function Segmenty({
 
         <section className="karta h-fit p-4">
           <h2 className="mb-1 text-sm font-semibold">Nowy segment</h2>
-          <p className="mb-4 text-xs text-[var(--color-muted)]">
+          <p className="mb-4 text-xs text-[var(--color-tekst-2)]">
             Reguły liczą się na żywych danych sklepu. Liczebność zobaczysz od razu po zapisaniu.
           </p>
           <form action={utworzSegmentAkcja} className="space-y-3">
             <input type="hidden" name="tenantId" value={tenantId} />
             <label className="block">
-              <span className="mb-1 block text-xs text-[var(--color-muted)]">Nazwa</span>
+              <span className="mb-1 block text-xs text-[var(--color-tekst-2)]">Nazwa</span>
               <input name="nazwa" required placeholder="np. Kupili w 30 dni" className="pole" />
             </label>
             <label className="block">
-              <span className="mb-1 block text-xs text-[var(--color-muted)]">Reguła</span>
+              <span className="mb-1 block text-xs text-[var(--color-tekst-2)]">Reguła</span>
               <select name="typ" className="pole" defaultValue="kupil_w_ostatnich">
                 <option value="kupil_w_ostatnich">kupił w ostatnich N dniach</option>
                 <option value="nie_kupil_od">nie kupił od N dni</option>
@@ -86,7 +92,7 @@ export default async function Segmenty({
               </select>
             </label>
             <label className="block">
-              <span className="mb-1 block text-xs text-[var(--color-muted)]">Wartość N</span>
+              <span className="mb-1 block text-xs text-[var(--color-tekst-2)]">Wartość N</span>
               <input name="wartosc" type="number" defaultValue={30} className="pole" />
             </label>
             <button className="przycisk w-full justify-center" type="submit">

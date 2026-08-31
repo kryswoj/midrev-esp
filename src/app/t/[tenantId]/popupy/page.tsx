@@ -1,9 +1,13 @@
 import { config } from "../../../../config";
+import { wymaganyTenant } from "../../../autoryzacja";
 import { popupyTenanta } from "../../../../usecases/popupy/zarzadzaj";
 import { Komunikat, Naglowek } from "../naglowek";
-import { przelaczPopupAkcja, utworzPopupAkcja } from "./akcje";
+import { przelaczPopupAkcja } from "./akcje";
+import { FormularzPopupu } from "./formularz-popupu";
 
 export const dynamic = "force-dynamic";
+
+export const metadata = { title: "Popupy" };
 
 export default async function Popupy({
   params,
@@ -13,6 +17,9 @@ export default async function Popupy({
   searchParams: Promise<{ ok?: string; blad?: string }>;
 }) {
   const { tenantId } = await params;
+  // strona weryfikuje sama (AD-21): layout nie jest granica auth (RSC potrafi
+  // renderowac sam segment strony) - patrz src/app/autoryzacja.ts
+  await wymaganyTenant(tenantId);
   const { ok, blad } = await searchParams;
   const popupy = await popupyTenanta(tenantId);
   // snippet budowany z APP_URL, bo to ten sam adres, na ktory skrypt wysle zgloszenia;
@@ -29,13 +36,13 @@ export default async function Popupy({
 
       <div className="grid gap-6 p-4 lg:grid-cols-[1fr_320px]">
         <div className="space-y-6">
-          <section className="karta overflow-hidden">
+          <section className="karta overflow-x-auto">
             <table className="tabela">
               <thead>
                 <tr>
                   <th>Popup</th>
                   <th>Status</th>
-                  <th className="text-right">Zgłoszenia</th>
+                  <th className="text-right">Zapisy</th>
                   <th className="text-right"></th>
                 </tr>
               </thead>
@@ -65,7 +72,7 @@ export default async function Popupy({
                         <input type="hidden" name="tenantId" value={tenantId} />
                         <input type="hidden" name="popupId" value={p.id} />
                         <input type="hidden" name="wlacz" value={p.active ? "0" : "1"} />
-                        <button className="przycisk-wtorny" type="submit">
+                        <button className="przycisk przycisk-wtorny" type="submit">
                           {p.active ? "Wyłącz" : "Włącz"}
                         </button>
                       </form>
@@ -100,46 +107,7 @@ export default async function Popupy({
           <p className="mb-4 text-xs text-[var(--color-tekst-3)]">
             Popup rodzi się wyłączony: najpierw sprawdź treść, potem włącz go w tabeli.
           </p>
-          <form action={utworzPopupAkcja} className="space-y-3">
-            <input type="hidden" name="tenantId" value={tenantId} />
-            <label className="block">
-              <span className="mb-1 block text-xs text-[var(--color-tekst-3)]">Nazwa robocza</span>
-              <input name="name" required placeholder="np. Rabat powitalny" className="pole" />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-xs text-[var(--color-tekst-3)]">Nagłówek</span>
-              <input name="headline" required placeholder="np. -10% na pierwsze zakupy" className="pole" />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-xs text-[var(--color-tekst-3)]">Treść</span>
-              <textarea
-                name="bodyText"
-                required
-                rows={3}
-                placeholder="Zostaw adres e-mail, a wyślemy Ci kod rabatowy."
-                className="pole"
-              />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-xs text-[var(--color-tekst-3)]">Tekst przycisku</span>
-              <input name="buttonText" required placeholder="np. Odbieram rabat" className="pole" />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-xs text-[var(--color-tekst-3)]">
-                Kod rabatowy (opcjonalny)
-              </span>
-              <input name="discountCode" placeholder="np. WITAJ10" className="pole" />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-xs text-[var(--color-tekst-3)]">
-                Pokaż po (sekundy)
-              </span>
-              <input name="delaySeconds" type="number" min={0} max={600} defaultValue={5} className="pole" />
-            </label>
-            <button className="przycisk w-full justify-center" type="submit">
-              Zapisz popup
-            </button>
-          </form>
+          <FormularzPopupu tenantId={tenantId} />
         </section>
       </div>
     </>

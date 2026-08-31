@@ -125,6 +125,8 @@ select.pole, textarea.pole { height: auto; min-height: 26px; padding: 4px 8px; }
 .plakietka-uwaga::before { clip-path: polygon(50% 0, 100% 100%, 0 100%); }
 .plakietka-blad { color: var(--color-blad); }
 .plakietka-blad::before { border-radius: 999px; background: transparent; box-shadow: inset 0 0 0 2px currentColor; }
+/* Szkic to brak stanu, nie stan dobry: kwadrat konturowy, żeby nie mieszać osi kształtów */
+.plakietka-szkic::before { border-radius: 2px; background: transparent; box-shadow: inset 0 0 0 1.5px currentColor; }
 
 table.tabela { width: 100%; border-collapse: collapse; }
 .tabela th {

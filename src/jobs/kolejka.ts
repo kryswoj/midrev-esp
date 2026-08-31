@@ -1,3 +1,4 @@
+import type { Pool, PoolClient } from "pg";
 import { getPool } from "../adapters/db/pool";
 
 /**
@@ -22,9 +23,13 @@ export async function dodajZadanie(
   tenantId: string,
   kind: string,
   payload: Record<string, unknown> = {},
-  opcje: { opoznienieSek?: number } = {},
+  // `przez` pozwala dopisać job w CUDZEJ transakcji (np. webhook: zapis surowego
+  // zdarzenia i job muszą wejść albo razem, albo wcale - inaczej retry nadawcy
+  // trafia w idempotencję zapisu i zdarzenie zostaje bez jobu na zawsze)
+  opcje: { opoznienieSek?: number; przez?: Pool | PoolClient } = {},
 ) {
-  const { rows } = await getPool().query(
+  const wykonawca = opcje.przez ?? getPool();
+  const { rows } = await wykonawca.query(
     `insert into jobs (tenant_id, kind, payload, run_after)
      values ($1, $2, $3, now() + make_interval(secs => $4::int))
      returning id, created_at::text as token`,
@@ -47,6 +52,21 @@ export async function zajmijZadanie(workerId: string): Promise<Zadanie | null> {
     [workerId],
   );
   return (rows[0] as Zadanie) ?? null;
+}
+
+/**
+ * Heartbeat zadania (W5): worker co minutę odświeża locked_at swojego running.
+ * Dzięki temu recovery zombie może po locked_at odróżnić martwy worker od handlera,
+ * który po prostu pracuje długo (kampania z partiami przez SMTP idzie godzinami).
+ * Zwraca false, gdy zadanie nie należy już do tego workera (odzyskane jako zombie).
+ */
+export async function odswiezHeartbeat(zadanie: Zadanie, workerId: string): Promise<boolean> {
+  const wynik = await getPool().query(
+    `update jobs set locked_at = now()
+      where id = $1 and created_at = $2::timestamptz and status = 'running' and locked_by = $3`,
+    [zadanie.id, zadanie.token, workerId],
+  );
+  return (wynik.rowCount ?? 0) > 0;
 }
 
 export async function domknijZadanie(zadanie: Zadanie, workerId: string) {

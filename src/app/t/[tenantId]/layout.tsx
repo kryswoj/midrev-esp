@@ -1,8 +1,9 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
-import { licznikiNawigacji, listaTenantow, tenant as pobierzTenanta } from "../../../adapters/db/repozytoria";
+import { licznikiNawigacji, listaTenantow } from "../../../adapters/db/repozytoria";
+import { wylogujAkcja } from "../../logowanie/akcje";
+import { wymaganyTenant } from "../../autoryzacja";
 import { PrzelacznikTenanta } from "./przelacznik";
-import { Nawigacja } from "./nawigacja";
+import { Nawigacja, NawigacjaMobilna } from "./nawigacja";
 
 export const dynamic = "force-dynamic";
 
@@ -37,10 +38,15 @@ export default async function Uklad({
   children: React.ReactNode;
   params: Promise<{ tenantId: string }>;
 }) {
-  const { tenantId } = await params;
-  const biezacy = await pobierzTenanta(tenantId);
-  if (!biezacy) notFound();
-  const wszyscy = await listaTenantow();
+  const { tenantId: zadany } = await params;
+  // Bramka calej strefy /t/ (AD-21): sesja z ciasteczka, membership z bazy.
+  // Zamyka odczyt kazdej strony ponizej; akcje mimo to weryfikuja same, bo
+  // server action da sie wywolac bez renderowania layoutu. Membership implikuje
+  // istnienie tenanta (FK), wiec osobne pobierzTenanta() jest zbedne.
+  const { tenantId, sesja } = await wymaganyTenant(zadany);
+  // przelacznik pokazuje wylacznie tenanty widoczne w sesji - client nie ma
+  // widziec nazw pozostalych klientow agencji
+  const wszyscy = (await listaTenantow()).filter((t) => sesja.tenantIds.includes(t.id));
   const liczniki = await licznikiNawigacji(tenantId);
 
   return (
@@ -61,22 +67,29 @@ export default async function Uklad({
           segmentacja i zgody działają. Wysyłka wchodzi w Epiku 3, dlatego kampanie
           zatrzymują się na akceptacji.
         </div>
+
+        {/* Tożsamość operatora + wylogowanie (audyt P1): panel bywa otwarty na
+            wspólnym komputerze agencji, więc musi być widać, kto pracuje, i da
+            się zamknąć sesję bez czekania na jej wygaśnięcie. */}
+        <div className="mt-2 flex items-center justify-between gap-2 px-2.5 pb-0.5 text-[11px] leading-[16px] text-[var(--color-tekst-3)]">
+          <span className="truncate" title={sesja.email}>
+            {sesja.email}
+          </span>
+          <form action={wylogujAkcja}>
+            <button
+              type="submit"
+              className="cursor-pointer whitespace-nowrap underline decoration-dotted underline-offset-2 hover:text-[var(--color-tekst)]"
+            >
+              Wyloguj
+            </button>
+          </form>
+        </div>
       </aside>
 
       {/* Na telefonie nawigacja boczna znika, więc musi być jej odpowiednik u góry:
           właściciel sklepu wchodzi tu głównie z telefonu (NFR32). */}
       <div className="min-w-0 flex-1 md:py-3 md:pr-3">
-        <nav className="flex gap-1 overflow-x-auto border-b border-[var(--color-linia)] bg-[var(--color-panel)] px-3 py-2 md:hidden">
-          {SEKCJE.flatMap((s) => s.pozycje).map((p) => (
-            <Link
-              key={p.href}
-              href={`/t/${tenantId}${p.href}`}
-              className="whitespace-nowrap rounded-md px-2.5 py-1 text-[13px] text-[var(--color-tekst-2)]"
-            >
-              {p.etykieta}
-            </Link>
-          ))}
-        </nav>
+        <NawigacjaMobilna tenantId={tenantId} pozycje={SEKCJE.flatMap((s) => s.pozycje)} />
         <div className="min-h-full overflow-hidden bg-[var(--color-app)] md:rounded-md md:border md:border-[var(--color-linia)]">
           {children}
         </div>

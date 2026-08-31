@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { przyjmijZgloszenie, schematZgloszenia } from "../../../../usecases/popupy/zglos-popup";
 import { popupPubliczny } from "../../../../usecases/popupy/zarzadzaj";
+import { przeczytajOgraniczone } from "../../przeczytaj-ograniczone";
 
 /**
  * Publiczny endpoint popupu (Epik F): GET oddaje konfiguracje, POST przyjmuje
@@ -69,34 +70,6 @@ function ipZadania(zadanie: NextRequest): string {
 // go w calosci przed walidacja byloby zaproszeniem do zapychania pamieci
 const MAKS_CIALO_B = 4096;
 
-/**
- * Czyta cialo strumieniowo z twardym limitem bajtow. Sam naglowek Content-Length
- * to deklaracja klienta: request chunked albo z falszywym naglowkiem i tak
- * dostarczylby dowolnie duze cialo do `zadanie.json()` (znalezisko drugiej rundy
- * review). Zwraca null, gdy cialo przekracza limit.
- */
-async function przeczytajOgraniczone(zadanie: NextRequest): Promise<string | null> {
-  const strumien = zadanie.body;
-  if (!strumien) return "";
-  const czytnik = strumien.getReader();
-  const kawalki: Uint8Array[] = [];
-  let bajtow = 0;
-  try {
-    for (;;) {
-      const { done, value } = await czytnik.read();
-      if (done) break;
-      bajtow += value.byteLength;
-      if (bajtow > MAKS_CIALO_B) {
-        await czytnik.cancel();
-        return null;
-      }
-      kawalki.push(value);
-    }
-  } finally {
-    czytnik.releaseLock();
-  }
-  return Buffer.concat(kawalki).toString("utf-8");
-}
 
 // id waliduje zod, a nie bezposrednio SQL: zly format uuid w zapytaniu pg konczy sie
 // bledem skladni i piecsetka, a dla klienta to zwykle "nie ma takiego popupu"
@@ -140,7 +113,7 @@ export async function POST(zadanie: NextRequest, ctx: { params: Promise<{ popupI
   if (przekroczonyLimit(ipZadania(zadanie))) {
     return NextResponse.json({ ok: false, blad: "za_duzo_zadan" }, { status: 429, headers: CORS });
   }
-  const surowe = await przeczytajOgraniczone(zadanie);
+  const surowe = await przeczytajOgraniczone(zadanie, MAKS_CIALO_B);
   if (surowe === null) {
     return NextResponse.json({ ok: false, blad: "za_duze_cialo" }, { status: 413, headers: CORS });
   }

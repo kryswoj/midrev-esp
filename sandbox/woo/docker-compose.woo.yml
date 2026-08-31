@@ -46,6 +46,14 @@ services:
     user: "33:33"
     entrypoint: ["tail", "-f", "/dev/null"]
 
+  # Sklep bez ruchu nie odpala wp-crona, a Woo dostarcza webhooki właśnie z crona:
+  # bez tego tyknięcia zamówienia nigdy nie wyjdą ze sklepu do ESP.
+  woo-cron:
+    image: curlimages/curl:8.10.1
+    depends_on:
+      - woo
+    entrypoint: ["sh", "-c", "while true; do curl -s -o /dev/null 'http://woo/wp-cron.php?doing_wp_cron'; sleep 30; done"]
+
 volumes:
   woodb:
   woofiles:

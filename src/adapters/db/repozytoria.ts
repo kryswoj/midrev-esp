@@ -27,6 +27,40 @@ export async function utworzTenanta(nazwa: string): Promise<Tenant> {
   return rows[0];
 }
 
+/**
+ * Tenant + membership tworcy w JEDNEJ transakcji. Rozdzielone operacje przy
+ * awarii miedzy insertami zostawialyby tenanta, ktorego tworca-client nie widzi
+ * (znalezisko z review), a ponowienie tworzyloby drugiego. clientUserId = null
+ * dla admin/operator - oni maja dostep globalny z roli i membership nic by dla
+ * nich nie znaczyl (0006).
+ */
+export async function utworzTenantaZDostepem(
+  nazwa: string,
+  clientUserId: string | null,
+): Promise<Tenant> {
+  const klient = await getPool().connect();
+  try {
+    await klient.query("begin");
+    const { rows } = await klient.query<Tenant>(
+      "insert into tenants (name) values ($1) returning id, name, created_at",
+      [nazwa],
+    );
+    if (clientUserId) {
+      await klient.query(
+        "insert into memberships (user_id, tenant_id, role) values ($1, $2, 'client')",
+        [clientUserId, rows[0].id],
+      );
+    }
+    await klient.query("commit");
+    return rows[0];
+  } catch (blad) {
+    await klient.query("rollback");
+    throw blad;
+  } finally {
+    klient.release();
+  }
+}
+
 export async function tenant(tenantId: string): Promise<Tenant | null> {
   const { rows } = await getPool().query<Tenant>(
     "select id, name, created_at from tenants where id = $1",
@@ -268,10 +302,24 @@ export async function wykluczeniaGlobalne(limit = 50) {
 }
 
 export async function zgodyTenanta(tenantId: string, limit = 50) {
+  // "wykluczony" liczony w SQL, nie z pobranej listy wykluczeń: lista jest limitowana,
+  // a adres spoza limitu dostawałby czyste "zgoda" mimo faktycznej blokady.
   const { rows } = await getPool().query(
     `select distinct on (c.profile_id, c.channel)
             c.profile_id, c.channel, c.state, c.source, c.wording, c.occurred_at,
-            p.email, p.first_name, p.last_name
+            p.email, p.first_name, p.last_name,
+            (
+              exists (select 1 from suppressions s
+                       where lower(btrim(s.email)) = lower(btrim(p.email)))
+              or coalesce((
+                select ts.action = 'suppressed'
+                  from tenant_suppressions ts
+                 where ts.tenant_id = c.tenant_id
+                   and lower(btrim(ts.email)) = lower(btrim(p.email))
+                 order by ts.occurred_at desc
+                 limit 1
+              ), false)
+            ) as wykluczony
        from consents c
        join profiles p on p.tenant_id = c.tenant_id and p.id = c.profile_id
       where c.tenant_id = $1
@@ -308,7 +356,14 @@ export async function licznikiNawigacji(tenantId: string): Promise<Record<string
        (select count(*)::int from orders where tenant_id = $1) as zamowienia,
        (select count(*)::int from campaigns where tenant_id = $1) as kampanie,
        (select count(*)::int from segments where tenant_id = $1) as segmenty,
-       (select count(*)::int from lists where tenant_id = $1) as listy`,
+       (select count(*)::int from lists where tenant_id = $1) as listy,
+       (select count(*)::int from popups where tenant_id = $1) as popupy,
+       (select count(*)::int from journeys where tenant_id = $1) as automatyzacje,
+       (select count(*)::int from (
+          select distinct on (lower(btrim(email))) action
+            from tenant_suppressions where tenant_id = $1
+           order by lower(btrim(email)), occurred_at desc
+        ) w where w.action = 'suppressed') as zgody`,
     [tenantId],
   );
   return rows[0] as Record<string, number>;

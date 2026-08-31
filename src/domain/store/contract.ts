@@ -32,6 +32,9 @@ export interface ZamowienieSklepu {
   waluta: Waluta;
   /** Data złożenia zamówienia ZE ŹRÓDŁA. Bez niej zapis jest błędem (AD-10). */
   occurredAt: Date;
+  /** Data ostatniej modyfikacji ZE ŹRÓDŁA - rozstrzyga, który payload jest nowszy,
+   *  bo kolejność dostarczania webhooków nie jest gwarantowana. */
+  zmodyfikowaneAt: Date;
   pozycje: PozycjaZamowienia[];
   surowe: unknown;
 }

@@ -21,9 +21,10 @@ export const HANDLERY_AUTOMATYZACJI: Record<string, (z: Zadanie) => Promise<void
         `odmowy ${wynik.wysylka.odmowy}, błędy ${wynik.wysylka.bledy}`,
     );
     if (wynik.wysylka.powodZatrzymania === "limit_dobowy") {
-      // rzut celowy: zadanie wraca do kolejki i reszta wyjdzie po polnocy,
-      // dokladnie jak przy kampaniach (FR52)
-      throw new Error("limit dobowy wyczerpany, automatyzacje wznowią się po północy");
+      // limit dobowy NIE jest bledem (FR52): tik domyka sie normalnie, a nastepny
+      // przychodzi za minute i tak. Rzut zuzywalby proby joba i po wyczerpaniu
+      // budzil czlowieka alertem o czyms, co jest zwyklym stanem konca doby.
+      console.log(`[automatyzacje] tenant ${z.tenant_id}: limit dobowy wyczerpany, reszta wyjdzie po polnocy`);
     }
   },
 };

@@ -30,6 +30,45 @@ function Ikona({ nazwa }: { nazwa: string }) {
   );
 }
 
+/**
+ * Pasek zakładek na telefonie (< md). Ten sam sygnał aktywności co w nawigacji bocznej:
+ * jaśniejsza powierzchnia + aria-current, inaczej po przejściu pasek wygląda identycznie
+ * i operator nie wie, gdzie jest.
+ */
+export function NawigacjaMobilna({
+  tenantId,
+  pozycje,
+}: {
+  tenantId: string;
+  pozycje: { href: string; etykieta: string }[];
+}) {
+  const sciezka = usePathname();
+  const baza = `/t/${tenantId}`;
+
+  return (
+    <nav className="flex gap-1 overflow-x-auto border-b border-[var(--color-linia)] bg-[var(--color-panel)] px-3 py-2 md:hidden">
+      {pozycje.map((p) => {
+        const cel = `${baza}${p.href}`;
+        const aktywna = p.href === "" ? sciezka === baza : sciezka.startsWith(cel);
+        return (
+          <Link
+            key={p.href}
+            href={cel}
+            aria-current={aktywna ? "page" : undefined}
+            className={`whitespace-nowrap rounded-md px-2.5 py-1 text-[13px] ${
+              aktywna
+                ? "bg-[var(--color-powierzchnia-2)] text-[var(--color-tekst)]"
+                : "text-[var(--color-tekst-2)]"
+            }`}
+          >
+            {p.etykieta}
+          </Link>
+        );
+      })}
+    </nav>
+  );
+}
+
 export function Nawigacja({
   tenantId,
   sekcje,

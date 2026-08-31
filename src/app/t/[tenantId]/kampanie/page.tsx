@@ -1,13 +1,17 @@
 import Link from "next/link";
+import { wymaganyTenant } from "../../../autoryzacja";
 import { getPool } from "../../../../adapters/db/pool";
+import { formatujDateICzas } from "../../../../domain/daty";
 import { kampanieTenanta } from "../../../../adapters/db/repozytoria";
 import { utworzKampanieAkcja } from "../../../akcje";
 import { Komunikat, Naglowek } from "../naglowek";
 
 export const dynamic = "force-dynamic";
 
+export const metadata = { title: "Kampanie" };
+
 const STANY: Record<string, { etykieta: string; klasa: string }> = {
-  draft: { etykieta: "szkic", klasa: "" },
+  draft: { etykieta: "szkic", klasa: "plakietka-szkic" },
   awaiting_approval: { etykieta: "czeka na akceptację klienta", klasa: "plakietka-uwaga" },
   approved: { etykieta: "zaakceptowana", klasa: "plakietka-ok" },
   scheduled: { etykieta: "zaplanowana", klasa: "plakietka-ok" },
@@ -24,6 +28,9 @@ export default async function Kampanie({
   searchParams: Promise<{ ok?: string; blad?: string }>;
 }) {
   const { tenantId } = await params;
+  // strona weryfikuje sama (AD-21): layout nie jest granica auth (RSC potrafi
+  // renderowac sam segment strony) - patrz src/app/autoryzacja.ts
+  await wymaganyTenant(tenantId);
   const { ok, blad } = await searchParams;
   const kampanie = await kampanieTenanta(tenantId);
 
@@ -55,14 +62,14 @@ export default async function Kampanie({
                 <div className="mb-2 flex flex-wrap items-start justify-between gap-3">
                   <div>
                     <h2 className="font-medium">{k.name}</h2>
-                    <p className="mt-0.5 text-xs text-[var(--color-muted)]">
+                    <p className="mt-0.5 text-xs text-[var(--color-tekst-2)]">
                       {k.subject ?? "brak tematu"}
                     </p>
                   </div>
                   <span className={`plakietka ${stan.klasa}`}>{stan.etykieta}</span>
                 </div>
 
-                <div className="flex flex-wrap gap-x-6 gap-y-2 text-xs text-[var(--color-muted)]">
+                <div className="flex flex-wrap gap-x-6 gap-y-2 text-xs text-[var(--color-tekst-2)]">
                   <span>
                     <span className="etykieta">odbiorcy</span>{" "}
                     {moi.filter((o: any) => o.mode === "include").map((o: any) => o.nazwa).join(", ") ||
@@ -77,7 +84,7 @@ export default async function Kampanie({
                   {k.scheduled_at ? (
                     <span>
                       <span className="etykieta">planowana</span>{" "}
-                      {new Date(k.scheduled_at).toLocaleString("pl-PL", { dateStyle: "medium", timeStyle: "short" })}
+                      {formatujDateICzas(k.scheduled_at)}
                     </span>
                   ) : null}
                 </div>
@@ -85,7 +92,7 @@ export default async function Kampanie({
             );
           })}
           {kampanie.length === 0 ? (
-            <p className="text-sm text-[var(--color-muted)]">Nie ma jeszcze żadnej kampanii.</p>
+            <p className="text-sm text-[var(--color-tekst-2)]">Nie ma jeszcze żadnej kampanii.</p>
           ) : null}
         </section>
 
@@ -94,18 +101,18 @@ export default async function Kampanie({
           <form action={utworzKampanieAkcja} className="space-y-3">
             <input type="hidden" name="tenantId" value={tenantId} />
             <label className="block">
-              <span className="mb-1 block text-xs text-[var(--color-muted)]">Nazwa robocza</span>
+              <span className="mb-1 block text-xs text-[var(--color-tekst-2)]">Nazwa robocza</span>
               <input name="nazwa" required placeholder="np. Black Friday" className="pole" />
             </label>
             <label className="block">
-              <span className="mb-1 block text-xs text-[var(--color-muted)]">Temat wiadomości</span>
+              <span className="mb-1 block text-xs text-[var(--color-tekst-2)]">Temat wiadomości</span>
               <input name="temat" placeholder="to zobaczy odbiorca" className="pole" />
             </label>
             <button className="przycisk w-full justify-center" type="submit">
               Utwórz szkic
             </button>
           </form>
-          <p className="mt-3 text-xs leading-relaxed text-[var(--color-muted)]">
+          <p className="mt-3 text-xs leading-relaxed text-[var(--color-tekst-2)]">
             Edytor treści wchodzi razem z Epikiem 4. Będzie to Maily.to: licencja MIT,
             w całości na naszym serwerze, bez dokładania kolejnego podprocesora do umowy
             powierzenia.

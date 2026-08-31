@@ -9,8 +9,17 @@ export const dynamic = "force-dynamic";
  * i decyduje BEZ logowania: token jednorazowy, ważny 7 dni, w bazie tylko hash (NFR10).
  * Strona musi działać na telefonie (NFR32), bo tam zostanie otwarta.
  */
-export default async function Akceptacja({ params }: { params: Promise<{ token: string }> }) {
+export default async function Akceptacja({
+  params,
+  searchParams,
+}: {
+  params: Promise<{ token: string }>;
+  searchParams: Promise<{ blad?: string }>;
+}) {
   const { token } = await params;
+  // flaga błędu, nie treść: komunikat renderuje strona, więc URL nie jest
+  // kanałem do wstrzyknięcia tekstu
+  const { blad } = await searchParams;
   const hash = createHash("sha256").update(token).digest("hex");
   const { rows } = await getPool().query(
     `select a.id, a.decided_at, a.decision, a.expires_at, c.name, c.subject, c.preheader, c.content,
@@ -74,9 +83,14 @@ export default async function Akceptacja({ params }: { params: Promise<{ token: 
         <input type="hidden" name="token" value={token} />
         <label className="block">
           <span className="mb-1 block text-[12px] text-[var(--color-tekst-3)]">
-            Uwagi (wypełnij tylko, jeśli zgłaszasz poprawki)
+            Uwagi (wymagane przy zgłaszaniu poprawek)
           </span>
           <textarea name="uwagi" rows={3} className="pole" placeholder="np. zmieńcie zdjęcie w nagłówku" />
+          {blad === "uwagi" ? (
+            <span role="alert" className="mt-1 block text-[12px] text-[var(--color-blad)]">
+              Napisz, co poprawić — zgłoszenie poprawek bez uwag nie mówi agencji, co zmienić.
+            </span>
+          ) : null}
         </label>
         <div className="flex flex-wrap gap-2">
           <button className="przycisk" name="decyzja" value="approved" type="submit">

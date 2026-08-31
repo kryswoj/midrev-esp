@@ -2,30 +2,20 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { aktualnaSesja } from "../../../../adapters/auth-sesja";
 import {
   SZABLONY,
   przelaczJourney,
   utworzJourney,
 } from "../../../../usecases/automatyzacje/journeye";
+import { sklepyTenanta } from "../../../../adapters/db/repozytoria";
+import { wymaganyTenant } from "../../../autoryzacja";
+import type { StanFormularza } from "../../../formularze";
 
 // Server actions sa cienkim opakowaniem use-case (AD-17). Zero logiki biznesowej tutaj.
+// tenantId z hidden inputa przechodzi przez wspolna bramke wymaganyTenant (AD-21) -
+// pierwotny wzorzec z tego pliku zostal wyniesiony do src/app/autoryzacja.ts.
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/**
- * tenantId przychodzi z hidden inputa, czyli od klienta: bez sprawdzenia wobec
- * sesji (AD-21) spreparowany formularz moglby wlaczac automatyzacje CUDZEGO
- * tenanta (znalezisko z review). Walidacja UUID przy okazji zamienia smieciowy
- * identyfikator w kontrolowana odmowe zamiast bledu Postgresa.
- */
-async function wymaganyTenant(surowy: FormDataEntryValue | null): Promise<string> {
-  const tenantId = String(surowy ?? "");
-  if (!UUID.test(tenantId)) redirect("/");
-  const sesja = await aktualnaSesja();
-  if (!sesja || !sesja.tenantIds.includes(tenantId)) redirect("/logowanie");
-  return tenantId;
-}
 
 function wroc(tenantId: string, wynik: { ok?: string; blad?: string }): never {
   revalidatePath(`/t/${tenantId}/automatyzacje`);
@@ -35,33 +25,64 @@ function wroc(tenantId: string, wynik: { ok?: string; blad?: string }): never {
   redirect(`/t/${tenantId}/automatyzacje?${parametr}`);
 }
 
-export async function utworzAutomatyzacjeAkcja(formularz: FormData) {
-  const tenantId = await wymaganyTenant(formularz.get("tenantId"));
-  const wynik = await utworzJourney(tenantId, {
-    name: String(formularz.get("nazwa") ?? ""),
-    triggerEvent: String(formularz.get("trigger") ?? ""),
-    delayMinutes: Number(formularz.get("opoznienie") ?? 0),
-    subject: String(formularz.get("temat") ?? ""),
+// useActionState (audyt B4): blad z use-case'u wraca do formularza razem
+// z recznie pisanym HTML-em maila, zamiast redirectem kasowac cala tresc.
+export async function utworzAutomatyzacjeAkcja(
+  _poprzedni: StanFormularza | undefined,
+  formularz: FormData,
+): Promise<StanFormularza> {
+  const { tenantId } = await wymaganyTenant(formularz.get("tenantId"));
+  const wartosci = {
+    nazwa: String(formularz.get("nazwa") ?? ""),
+    trigger: String(formularz.get("trigger") ?? ""),
+    opoznienie: String(formularz.get("opoznienie") ?? ""),
+    temat: String(formularz.get("temat") ?? ""),
     html: String(formularz.get("html") ?? ""),
+  };
+  const wynik = await utworzJourney(tenantId, {
+    name: wartosci.nazwa,
+    triggerEvent: wartosci.trigger,
+    delayMinutes: Number(wartosci.opoznienie || 0),
+    subject: wartosci.temat,
+    html: wartosci.html,
   });
-  wroc(tenantId, wynik.ok ? { ok: "Automatyzacja utworzona. Włącz ją, gdy treść będzie gotowa." } : { blad: wynik.blad });
+  if (!wynik.ok) return { blad: wynik.blad, wartosci };
+  revalidatePath(`/t/${tenantId}/automatyzacje`);
+  redirect(
+    `/t/${tenantId}/automatyzacje?ok=${encodeURIComponent("Automatyzacja utworzona. Włącz ją, gdy treść będzie gotowa.")}`,
+  );
 }
 
 export async function utworzZSzablonuAkcja(formularz: FormData) {
-  const tenantId = await wymaganyTenant(formularz.get("tenantId"));
+  const { tenantId } = await wymaganyTenant(formularz.get("tenantId"));
   const szablon = SZABLONY[String(formularz.get("szablon"))];
   if (!szablon) wroc(tenantId, { blad: "Nieznany szablon" });
-  const wynik = await utworzJourney(tenantId, szablon);
+  // Szablon nie zostawia placeholdera do recznej podmiany - edycji automatyzacji
+  // jeszcze nie ma, wiec obietnica "podmien link" bylaby poleceniem bez narzedzia
+  // (audyt P14). Link do sklepu wstawiamy z podlaczonego sklepu; bez sklepu
+  // odmawiamy z powodem, zamiast tworzyc automatyzacje z linkiem-atrapa.
+  const sklep = (await sklepyTenanta(tenantId)).find((s) => s.status === "connected");
+  if (!sklep) {
+    wroc(tenantId, {
+      blad: "Szablon wstawia w treść link do Twojego sklepu - najpierw podłącz sklep w zakładce Sklepy.",
+    });
+  }
+  const wynik = await utworzJourney(tenantId, {
+    ...szablon,
+    html: szablon.html.replaceAll("https://TWOJ-SKLEP.example.pl", sklep.base_url),
+  });
   wroc(
     tenantId,
     wynik.ok
-      ? { ok: `Utworzono „${szablon.name}". Podmień link do sklepu i włącz automatyzację.` }
+      ? {
+          ok: `Utworzono „${szablon.name}". Link w treści prowadzi do ${sklep.base_url.replace(/^https?:\/\//, "")}. Włącz automatyzację, gdy będziesz gotowy.`,
+        }
       : { blad: wynik.blad },
   );
 }
 
 export async function przelaczAutomatyzacjeAkcja(formularz: FormData) {
-  const tenantId = await wymaganyTenant(formularz.get("tenantId"));
+  const { tenantId } = await wymaganyTenant(formularz.get("tenantId"));
   const journeyId = String(formularz.get("journeyId"));
   if (!UUID.test(journeyId)) wroc(tenantId, { blad: "Automatyzacja nie istnieje" });
   // formularz niesie STAN DOCELOWY, nie komende "przelacz": ponowiony submit

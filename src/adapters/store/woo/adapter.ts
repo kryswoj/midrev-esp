@@ -16,6 +16,34 @@ export interface PoswiadczeniaWoo {
 }
 
 /**
+ * Mapowanie surowego zamówienia Woo na model domenowy. Wyciągnięte z adaptera,
+ * bo z tego samego kształtu korzysta import historyczny (REST) i webhook (faza 2):
+ * dwa mapowania rozjechałyby się przy pierwszej zmianie.
+ */
+export function mapujZamowienieWoo(z: any): ZamowienieSklepu {
+  return {
+    externalId: String(z.id),
+    numer: z.number ?? null,
+    status: z.status,
+    email: z.billing?.email || null,
+    imie: z.billing?.first_name || null,
+    nazwisko: z.billing?.last_name || null,
+    sumaMinor: naGrosze(z.total),
+    waluta: z.currency ?? "PLN",
+    // data ZE ŹRÓDŁA (AD-10). Woo podaje czas UTC bez sufiksu, stąd doklejone "Z".
+    occurredAt: new Date(z.date_created_gmt + "Z"),
+    zmodyfikowaneAt: new Date((z.date_modified_gmt ?? z.date_created_gmt) + "Z"),
+    pozycje: (z.line_items ?? []).map((p: any) => ({
+      sku: p.sku || null,
+      nazwa: p.name,
+      ilosc: Number(p.quantity),
+      cenaMinor: naGrosze(p.price ?? "0"),
+    })),
+    surowe: z,
+  };
+}
+
+/**
  * Adapter WooCommerce (AD-8). Uwierzytelnianie Basic po HTTPS, dokładnie tak, jak
  * w prawdziwym sklepie klienta. Lokalny sandbox udaje HTTPS dla ścieżek REST po swojej
  * stronie, więc adapter nie ma tu żadnego wyjątku "na testy".
@@ -138,25 +166,7 @@ export class AdapterWoo implements PortPlatformy {
     const dane = (await odpowiedz.json()) as any[];
     return {
       lacznie: Number(odpowiedz.headers.get("x-wp-total") ?? dane.length),
-      pozycje: dane.map((z) => ({
-        externalId: String(z.id),
-        numer: z.number ?? null,
-        status: z.status,
-        email: z.billing?.email || null,
-        imie: z.billing?.first_name || null,
-        nazwisko: z.billing?.last_name || null,
-        sumaMinor: naGrosze(z.total),
-        waluta: z.currency ?? "PLN",
-        // data ZE ŹRÓDŁA (AD-10). Woo podaje czas UTC bez sufiksu, stąd doklejone "Z".
-        occurredAt: new Date(z.date_created_gmt + "Z"),
-        pozycje: (z.line_items ?? []).map((p: any) => ({
-          sku: p.sku || null,
-          nazwa: p.name,
-          ilosc: Number(p.quantity),
-          cenaMinor: naGrosze(p.price ?? "0"),
-        })),
-        surowe: z,
-      })),
+      pozycje: dane.map(mapujZamowienieWoo),
     };
   }
 

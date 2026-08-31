@@ -3,8 +3,10 @@
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { CIASTECZKO_SESJI } from "../../adapters/auth-sesja";
+import { config } from "../../config";
 import { zaloguj } from "../../usecases/auth/zaloguj";
 import { wyloguj } from "../../usecases/auth/wyloguj";
+import type { StanFormularza } from "../formularze";
 
 // Server actions logowania: cienkie opakowanie use-case (AD-17) plus ciasteczko,
 // ktore jako mechanizm HTTP nalezy do tej warstwy, nie do use-case'a.
@@ -18,7 +20,10 @@ function bezpiecznaSciezka(dalej: string): string {
   return dalej.startsWith("/") && !dalej.startsWith("//") ? dalej : "/";
 }
 
-export async function zalogujAkcja(formularz: FormData) {
+export async function zalogujAkcja(
+  _poprzedni: StanFormularza | undefined,
+  formularz: FormData,
+): Promise<StanFormularza> {
   const email = String(formularz.get("email") ?? "").trim();
   const haslo = String(formularz.get("haslo") ?? "");
   const dalej = String(formularz.get("dalej") ?? "");
@@ -31,10 +36,11 @@ export async function zalogujAkcja(formularz: FormData) {
 
   const wynik = await zaloguj(email, haslo, klientIp);
   if (!wynik.ok) {
-    // blad jako flaga w URL-u, nie tresc: komunikaty sa stale i renderuje je
-    // strona, wiec URL nie stanie sie kanalem do wstrzykniecia tekstu
-    const flaga = wynik.blad.startsWith("Za dużo") ? "limit" : "1";
-    redirect(`/logowanie?blad=${flaga}${dalej ? `&dalej=${encodeURIComponent(dalej)}` : ""}`);
+    // blad jako FLAGA, nie tresc: komunikaty sa stale i mapuje je formularz,
+    // wiec stan nie stanie sie kanalem do wstrzykniecia tekstu. E-mail wraca
+    // w wartosciach, zeby bledne haslo nie kasowalo tez adresu (audyt B4).
+    const flaga = wynik.blad.startsWith("Za dużo") ? "limit" : "dane";
+    return { blad: flaga, wartosci: { email } };
   }
 
   const sloik = await cookies();
@@ -42,10 +48,10 @@ export async function zalogujAkcja(formularz: FormData) {
     httpOnly: true,
     sameSite: "lax",
     path: "/",
-    // NODE_ENV to jedyny swiadomy wyjatek od reguly "process.env tylko w config":
-    // ustawia go Next, nie operator, i nie jest sekretem ani konfiguracja aplikacji.
-    // W dev po http ciasteczko Secure by nie wrocilo i logowanie by nie dzialalo.
-    secure: process.env.NODE_ENV === "production",
+    // Secure musi odpowiadac protokolowi, pod ktorym panel realnie stoi:
+    // przy produkcyjnym buildzie serwowanym po zwyklym http przegladarka
+    // odrzuca ciasteczko Secure i kazda nawigacja wraca na ekran logowania.
+    secure: config().APP_URL.startsWith("https://"),
     expires: wynik.wygasa,
   });
 

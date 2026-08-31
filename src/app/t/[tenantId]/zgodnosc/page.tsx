@@ -1,11 +1,18 @@
 import { sklepyTenanta } from "../../../../adapters/db/repozytoria";
+import { wymaganyTenant } from "../../../autoryzacja";
+import { formatujDate } from "../../../../domain/daty";
 import { sprawdzZgodnosc } from "../../../../usecases/sprawdz-zgodnosc";
 import { Naglowek } from "../naglowek";
 
 export const dynamic = "force-dynamic";
 
+export const metadata = { title: "Zgodność danych" };
+
 export default async function Zgodnosc({ params }: { params: Promise<{ tenantId: string }> }) {
   const { tenantId } = await params;
+  // strona weryfikuje sama (AD-21): layout nie jest granica auth (RSC potrafi
+  // renderowac sam segment strony) - patrz src/app/autoryzacja.ts
+  await wymaganyTenant(tenantId);
   const sklepy = await sklepyTenanta(tenantId);
   const wyniki = await Promise.all(sklepy.map((s) => sprawdzZgodnosc(tenantId, s.id, 400)));
 
@@ -23,8 +30,8 @@ export default async function Zgodnosc({ params }: { params: Promise<{ tenantId:
               <div className="mb-4 flex items-start justify-between gap-3">
                 <div>
                   <div className="font-medium">{s.base_url.replace(/^https?:\/\//, "")}</div>
-                  <div className="text-xs text-[var(--color-faint)]">
-                    okres od {w.okresOd.toLocaleDateString("pl-PL")}
+                  <div className="text-xs text-[var(--color-tekst-3)]">
+                    okres od {formatujDate(w.okresOd)}
                   </div>
                 </div>
                 <span
@@ -38,17 +45,17 @@ export default async function Zgodnosc({ params }: { params: Promise<{ tenantId:
 
               <div className="grid grid-cols-3 gap-4">
                 <div>
-                  <div className="text-xs text-[var(--color-faint)]">W sklepie</div>
-                  <div className="liczba text-2xl font-bold">{w.wSklepie ?? "—"}</div>
+                  <div className="text-xs text-[var(--color-tekst-3)]">W sklepie</div>
+                  <div className="wielkosc-hero">{w.wSklepie ?? "—"}</div>
                 </div>
                 <div>
-                  <div className="text-xs text-[var(--color-faint)]">W bazie</div>
-                  <div className="liczba text-2xl font-bold">{w.wBazie}</div>
+                  <div className="text-xs text-[var(--color-tekst-3)]">W bazie</div>
+                  <div className="wielkosc-hero">{w.wBazie}</div>
                 </div>
                 <div>
-                  <div className="text-xs text-[var(--color-faint)]">Różnica</div>
+                  <div className="text-xs text-[var(--color-tekst-3)]">Różnica</div>
                   <div
-                    className={`liczba text-2xl font-bold ${
+                    className={`wielkosc-hero ${
                       w.roznica === 0 ? "" : w.roznica === null ? "text-[var(--color-czeka)]" : "text-[var(--color-blad)]"
                     }`}
                   >
@@ -58,7 +65,7 @@ export default async function Zgodnosc({ params }: { params: Promise<{ tenantId:
               </div>
 
               {w.stan === "nieustalone" ? (
-                <p className="mt-4 text-xs text-[var(--color-muted)]">
+                <p className="mt-4 text-xs text-[var(--color-tekst-2)]">
                   Sklep nie odpowiedział. To nie jest rozjazd danych, tylko brak odpowiedzi, i tak
                   jest liczone, żeby niedostępność sklepu nie wywoływała fałszywych alarmów.
                 </p>
@@ -67,7 +74,7 @@ export default async function Zgodnosc({ params }: { params: Promise<{ tenantId:
           );
         })}
         {sklepy.length === 0 ? (
-          <p className="text-sm text-[var(--color-muted)]">Podłącz sklep, żeby zobaczyć kontrolę zgodności.</p>
+          <p className="text-sm text-[var(--color-tekst-2)]">Podłącz sklep, żeby zobaczyć kontrolę zgodności.</p>
         ) : null}
       </div>
     </>

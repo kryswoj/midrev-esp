@@ -93,6 +93,10 @@ export async function wykonajImport(tenantId: string, storeId: string): Promise<
   let utworzoneProfile = 0;
   let utworzoneZamowienia = 0;
   let pominieteDuplikaty = 0;
+  // unikalne zamowienia realnie objete przebiegiem: suma prob (insert+duplikat)
+  // przeklamuje przy niestabilnej paginacji Woo, gdy ta sama pozycja wraca
+  // na dwoch stronach (znalezisko review R2)
+  const objeteId = new Set<string>();
 
   const klient = await pool.connect();
   try {
@@ -135,15 +139,22 @@ export async function wykonajImport(tenantId: string, storeId: string): Promise<
             [
               tenantId,
               storeId,
-              adapter.kluczIdempotencji("order", zamowienie.externalId, zamowienie.status),
+              adapter.kluczIdempotencji(
+                "order",
+                zamowienie.externalId,
+                // wersja bytu = data modyfikacji ze zrodla; identycznie w webhooku (AD-24)
+                zamowienie.surowe && (zamowienie.surowe as any).date_modified_gmt
+                  ? String((zamowienie.surowe as any).date_modified_gmt)
+                  : zamowienie.status,
+              ),
               JSON.stringify(zamowienie.surowe),
             ],
           );
 
           const wynik = await klient.query<{ id: string }>(
             `insert into orders (tenant_id, store_id, profile_id, external_id, number, status,
-                                 total_minor, currency, occurred_at, raw)
-             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+                                 total_minor, currency, occurred_at, source_updated_at, raw)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
              on conflict (tenant_id, store_id, external_id) do nothing
              returning id`,
             [
@@ -156,10 +167,12 @@ export async function wykonajImport(tenantId: string, storeId: string): Promise<
               zamowienie.sumaMinor,
               zamowienie.waluta,
               zamowienie.occurredAt, // data ZE ŹRÓDŁA
+              zamowienie.zmodyfikowaneAt,
               JSON.stringify(zamowienie.surowe),
             ],
           );
 
+          objeteId.add(zamowienie.externalId);
           if (wynik.rowCount) {
             utworzoneZamowienia++;
             await klient.query(
@@ -188,17 +201,18 @@ export async function wykonajImport(tenantId: string, storeId: string): Promise<
   }
 
   // ODCZYT ZWROTNY (NFR1): liczymy to, co faktycznie jest w bazie, a nie to, ile razy
-  // wywołaliśmy insert. Rozbieżność wobec planu jest raportowana, a nie przemilczana.
-  const kontrola = await pool.query<{ zamowienia: number; najstarsza: Date | null }>(
-    `select count(*)::int as zamowienia, min(occurred_at) as najstarsza
-       from orders where tenant_id = $1 and store_id = $2`,
+  // wywołaliśmy insert. Kontrola dotyczy TEGO przebiegu (utworzone + zastane duplikaty
+  // wobec planu), a nie całej tabeli - równoległy webhook dokładający zamówienia nie
+  // może fałszywie oblać poprawnego importu (znalezisko review).
+  const kontrola = await pool.query<{ najstarsza: Date | null }>(
+    "select min(occurred_at) as najstarsza from orders where tenant_id = $1 and store_id = $2",
     [tenantId, storeId],
   );
-  const wBazie = kontrola.rows[0].zamowienia;
+  const objete = objeteId.size;
   const rozbieznosc =
-    wBazie === plan.zamowienia
+    objete >= plan.zamowienia
       ? null
-      : `Plan zapowiadał ${plan.zamowienia} zamówień, w bazie jest ${wBazie}`;
+      : `Plan zapowiadał ${plan.zamowienia} zamówień, przebieg objął ${objete}`;
 
   await pool.query(
     `update import_runs set status = $2, counters = $3, finished_at = now(), last_error = $4
@@ -210,7 +224,7 @@ export async function wykonajImport(tenantId: string, storeId: string): Promise<
         utworzoneProfile,
         utworzoneZamowienia,
         pominieteDuplikaty,
-        zamowienWBazie: wBazie,
+        objetePrzebiegiem: objete,
       }),
       rozbieznosc,
     ],

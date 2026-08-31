@@ -1,22 +1,27 @@
 import Link from "next/link";
+import { wymaganyTenant } from "../../../../autoryzacja";
 import { notFound } from "next/navigation";
 import { getPool } from "../../../../../adapters/db/pool";
 import { zGroszy } from "../../../../../domain/kwoty";
+import { odmien } from "../../../../../domain/liczebniki";
 import { raportKampanii } from "../../../../../usecases/przelicz-atrybucje";
 import { policzOdbiorcow } from "../../../../../usecases/policz-odbiorcow";
+import { config } from "../../../../../config";
+import { formatujDateICzas } from "../../../../../domain/daty";
 import {
   doAkceptacjiAkcja,
   przeliczAtrybucjeAkcja,
   wyslijTerazAkcja,
   wyslijTestAkcja,
-  zapiszTrescAkcja,
 } from "../../../../akcje";
 import { Kafelek, Komunikat, Naglowek } from "../../naglowek";
+import { FormularzTresci } from "./formularz-tresci";
+import { PrzyciskKopiuj } from "./kopiuj";
 
 export const dynamic = "force-dynamic";
 
 const STANY: Record<string, { etykieta: string; klasa: string }> = {
-  draft: { etykieta: "szkic", klasa: "" },
+  draft: { etykieta: "szkic", klasa: "plakietka-szkic" },
   awaiting_approval: { etykieta: "czeka na akceptację klienta", klasa: "plakietka-uwaga" },
   approved: { etykieta: "zaakceptowana", klasa: "plakietka-ok" },
   sending: { etykieta: "w wysyłce", klasa: "plakietka-uwaga" },
@@ -29,10 +34,21 @@ export default async function Kampania({
   searchParams,
 }: {
   params: Promise<{ tenantId: string; campaignId: string }>;
-  searchParams: Promise<{ ok?: string; blad?: string }>;
+  searchParams: Promise<{ ok?: string; blad?: string; link?: string }>;
 }) {
   const { tenantId, campaignId } = await params;
-  const { ok, blad } = await searchParams;
+  // strona weryfikuje sama (AD-21): layout nie jest granica auth (RSC potrafi
+  // renderowac sam segment strony) - patrz src/app/autoryzacja.ts
+  await wymaganyTenant(tenantId);
+  const { ok, blad, link: surowyLink } = await searchParams;
+  // ?link= to parametr z URL-a, czyli wejście atakującego: renderujemy go jako
+  // "link do akceptacji" wyłącznie, gdy faktycznie prowadzi na naszą stronę
+  // akceptacji (review Codeksa, runda 1 - podrzucony URL panelu z obcym linkiem
+  // wyglądałby jak wygenerowany przez system)
+  const link =
+    surowyLink && surowyLink.startsWith(`${config().APP_URL}/akceptacja/`)
+      ? surowyLink
+      : undefined;
   const { rows } = await getPool().query(
     "select id, name, subject, preheader, content, status, scheduled_at from campaigns where tenant_id = $1 and id = $2",
     [tenantId, campaignId],
@@ -40,10 +56,20 @@ export default async function Kampania({
   const kampania = rows[0];
   if (!kampania) notFound();
 
-  const [odbiorcy, raport] = await Promise.all([
+  const [odbiorcy, raport, akceptacje] = await Promise.all([
     policzOdbiorcow(tenantId, campaignId),
     raportKampanii(tenantId, campaignId),
+    // najnowsza runda akceptacji: stan bramki ma byc widoczny NA STALE na karcie,
+    // nie tylko w znikajacym banerze po wygenerowaniu linku (audyt P3)
+    getPool().query(
+      `select created_at, expires_at, decided_at, decision, comment
+         from campaign_approvals
+        where tenant_id = $1 and campaign_id = $2
+        order by created_at desc limit 1`,
+      [tenantId, campaignId],
+    ),
   ]);
+  const akceptacja = akceptacje.rows[0];
   const stan = STANY[kampania.status] ?? { etykieta: kampania.status, klasa: "" };
   const html = String((kampania.content as any)?.html ?? "");
   const poWysylce = ["sending", "sent"].includes(kampania.status);
@@ -67,7 +93,7 @@ export default async function Kampania({
         <Kafelek etykieta="Do wysyłki" wartosc={String(odbiorcy.docelowo)} opis={`z ${odbiorcy.kandydaci} kandydatów, stan na teraz`} />
         <Kafelek etykieta="Wysłane" wartosc={String(raport.wyslane)} opis={raport.zatrzymane ? `${raport.zatrzymane} zatrzymanych bramką` : "wiadomości u odbiorców"} />
         <Kafelek etykieta="Kliknięcia" wartosc={String(raport.klikniecia)} opis="odbiorcy, którzy kliknęli" />
-        <Kafelek etykieta="Przychód" wartosc={zGroszy(Number(raport.przychod_minor))} opis={`${raport.zamowien} zamówień, ostatni przebieg atrybucji`} />
+        <Kafelek etykieta="Przychód" wartosc={zGroszy(Number(raport.przychod_minor))} opis={`${odmien(Number(raport.zamowien), "zamówienie", "zamówienia", "zamówień")}, ostatni przebieg atrybucji`} />
       </div>
 
       <div className="grid gap-4 px-4 pb-4 xl:grid-cols-2">
@@ -75,40 +101,14 @@ export default async function Kampania({
           <div className="flex h-10 items-center justify-between border-b border-[var(--color-linia)] px-3">
             <h2>Treść</h2>
           </div>
-          <form action={zapiszTrescAkcja} className="space-y-3 p-3">
-            <input type="hidden" name="tenantId" value={tenantId} />
-            <input type="hidden" name="campaignId" value={campaignId} />
-            <label className="block">
-              <span className="mb-1 block text-[12px] text-[var(--color-tekst-3)]">Temat</span>
-              <input name="temat" defaultValue={kampania.subject ?? ""} className="pole" placeholder="to zobaczy odbiorca w skrzynce" />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-[12px] text-[var(--color-tekst-3)]">Preheader</span>
-              <input name="preheader" defaultValue={kampania.preheader ?? ""} className="pole" placeholder="szara linijka obok tematu" />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-[12px] text-[var(--color-tekst-3)]">
-                Treść HTML · linki zostaną automatycznie przepisane na śledzone, stopka z wypisaniem dokleja się sama
-              </span>
-              <textarea
-                name="html"
-                rows={12}
-                defaultValue={html}
-                className="pole font-mono text-[12px] leading-[18px]"
-                placeholder={'<h1>Nagłówek</h1>\n<p>Treść…</p>\n<p><a href="https://sklep.pl/promocja">Zobacz promocję</a></p>'}
-              />
-            </label>
-            <div className="flex flex-wrap items-center gap-2">
-              <button className="przycisk przycisk-wtorny" type="submit" disabled={poWysylce}>
-                Zapisz treść
-              </button>
-              {poWysylce ? (
-                <span className="text-[12px] text-[var(--color-tekst-3)]">
-                  po starcie wysyłki treść jest zamrożona: odbiorcy dostali to, co zaakceptował klient
-                </span>
-              ) : null}
-            </div>
-          </form>
+          <FormularzTresci
+            tenantId={tenantId}
+            campaignId={campaignId}
+            temat={kampania.subject ?? ""}
+            preheader={kampania.preheader ?? ""}
+            html={html}
+            poWysylce={poWysylce}
+          />
 
           <div className="border-t border-[var(--color-linia)] p-3">
             <form action={wyslijTestAkcja} className="flex flex-wrap items-end gap-2">
@@ -141,12 +141,33 @@ export default async function Kampania({
 
           <section className="karta p-3">
             <h2 className="mb-2">Ścieżka wysyłki</h2>
+
+            {link ? (
+              <div className="mb-3 rounded-md border border-[var(--color-linia)] bg-[var(--color-powierzchnia-2)] p-2.5">
+                <div className="mb-1.5 text-[12px] font-medium text-[var(--color-tekst-2)]">
+                  Link do akceptacji dla klienta
+                </div>
+                <div className="flex items-center gap-2">
+                  <code className="karta-plaska min-w-0 flex-1 overflow-x-auto whitespace-nowrap px-2 py-1.5 text-[12px]">
+                    {link}
+                  </code>
+                  <PrzyciskKopiuj tekst={link} />
+                </div>
+                <p className="mt-1.5 text-[12px] text-[var(--color-tekst-3)]">
+                  Skopiuj go teraz - w bazie trzymamy tylko skrót, więc po opuszczeniu tej
+                  strony linku nie da się odzyskać. Zawsze możesz wygenerować nowy.
+                </p>
+              </div>
+            ) : null}
+
             <div className="flex flex-wrap gap-2">
               <form action={doAkceptacjiAkcja}>
                 <input type="hidden" name="tenantId" value={tenantId} />
                 <input type="hidden" name="campaignId" value={campaignId} />
                 <button className="przycisk przycisk-wtorny" type="submit" disabled={poWysylce}>
-                  Wyślij do akceptacji klienta
+                  {akceptacja && !akceptacja.decided_at
+                    ? "Wygeneruj nowy link"
+                    : "Wyślij do akceptacji klienta"}
                 </button>
               </form>
               <form action={wyslijTerazAkcja}>
@@ -170,6 +191,49 @@ export default async function Kampania({
                 nie wychodzi, także o zaplanowanej porze.
               </p>
             ) : null}
+            {poWysylce ? (
+              <p className="mt-2 text-[12px] text-[var(--color-tekst-3)]">
+                Kampania {kampania.status === "sent" ? "wysłana" : "w wysyłce"} — treść
+                i ścieżka są zamknięte.
+              </p>
+            ) : null}
+
+            {/* Stan bramki akceptacji NA STALE na karcie (audyt P3): kiedy poszedl
+                link, czy klient zdecydowal, jaka decyzja i z jakimi uwagami. */}
+            {akceptacja ? (
+              <div className="mt-3 space-y-1 border-t border-[var(--color-linia)] pt-2.5 text-[12px] text-[var(--color-tekst-3)]">
+                <div className="text-[11px] font-medium uppercase tracking-[0.08em]">
+                  Akceptacja klienta
+                </div>
+                <div>
+                  Link wygenerowany {formatujDateICzas(akceptacja.created_at)}
+                  {new Date(akceptacja.expires_at) < new Date() && !akceptacja.decided_at
+                    ? ", wygasł - wygeneruj nowy"
+                    : `, ważny do ${formatujDateICzas(akceptacja.expires_at)}`}
+                  .
+                </div>
+                {akceptacja.decided_at ? (
+                  <>
+                    <div className="text-[var(--color-tekst-2)]">
+                      {akceptacja.decision === "approved"
+                        ? "Klient zaakceptował"
+                        : "Klient zgłosił uwagi"}{" "}
+                      {formatujDateICzas(akceptacja.decided_at)}.
+                    </div>
+                    {akceptacja.comment ? (
+                      <div className="text-[var(--color-tekst-2)]">
+                        Uwagi: „{akceptacja.comment}"
+                      </div>
+                    ) : null}
+                  </>
+                ) : (
+                  <div>
+                    Klient jeszcze nie zdecydował. Nowy link nie unieważnia starego — stary
+                    działa do wygaśnięcia.
+                  </div>
+                )}
+              </div>
+            ) : null}
           </section>
 
           <section className="karta p-3">
@@ -177,8 +241,10 @@ export default async function Kampania({
             {odbiorcy.zrodla.map((z, i) => (
               <div key={i} className="flex items-center justify-between py-1 text-[13px]">
                 <span className="flex items-center gap-2">
-                  <span className={`plakietka ${z.mode === "include" ? "plakietka-ok" : "plakietka-blad"}`}>
-                    {z.mode === "include" ? "dodaje" : "odejmuje"}
+                  {/* to nie jest stan, tylko rola zrodla — plakietka-blad na poprawnej regule
+                      wykluczajacej wygladalaby jak blad konfiguracji */}
+                  <span className="liczba text-[12px] text-[var(--color-tekst-2)]">
+                    {z.mode === "include" ? "+ dodaje" : "− odejmuje"}
                   </span>
                   {z.nazwa}
                 </span>

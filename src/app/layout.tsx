@@ -5,7 +5,8 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin", "latin-ext"], variable: "--font-inter" });
 
 export const metadata: Metadata = {
-  title: "midrev-esp",
+  // szablon: operator pracuje na kilku sklepach naraz i musi rozróżniać karty przeglądarki
+  title: { template: "%s · midrev esp", default: "midrev esp" },
   description: "Panel operatora - email marketing dla sklepów klientów MidRev",
 };
 
