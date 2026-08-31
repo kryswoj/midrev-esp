@@ -1,4 +1,5 @@
 import pg from "pg";
+import { config } from "../../config";
 
 const { Pool } = pg;
 
@@ -6,11 +7,7 @@ let pool: pg.Pool | undefined;
 
 export function getPool(): pg.Pool {
   if (!pool) {
-    const connectionString = process.env.DATABASE_URL;
-    if (!connectionString) {
-      throw new Error("DATABASE_URL is not set — copy .env.example to .env");
-    }
-    pool = new Pool({ connectionString });
+    pool = new Pool({ connectionString: config().DATABASE_URL });
   }
   return pool;
 }

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cztery kierunki wizualne — midrev-esp</title>
+<style>
+  :root { --ink:#15181c; --muted:#5c6570; --line:#e6e8ec; --bg:#fbfbfc; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+    font:400 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing:antialiased; }
+  main { max-width:760px; margin:0 auto; padding:56px 24px 80px; }
+  h1 { font-size:26px; letter-spacing:-.02em; margin:0 0 10px; }
+  .lead { color:var(--muted); margin:0 0 32px; max-width:60ch; }
+  ul { list-style:none; margin:0; padding:0; display:grid; gap:12px; }
+  a.kafel { display:block; padding:18px 20px; background:#fff; border:1px solid var(--line);
+    border-radius:12px; text-decoration:none; color:inherit; transition:border-color 140ms ease; }
+  a.kafel:hover { border-color:#9aa3ad; }
+  .nazwa { font-size:17px; font-weight:600; letter-spacing:-.015em; margin-bottom:4px; }
+  .opis { color:var(--muted); font-size:14px; }
+  .dla { margin-top:8px; font-size:13px; color:#7a828c; }
+  footer { margin-top:36px; padding-top:20px; border-top:1px solid var(--line);
+    color:var(--muted); font-size:13px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Cztery kierunki wizualne</h1>
+  <p class="lead">Ten sam ekran przeglądu i ten sam szczegół kampanii, w czterech różnych
+  osobowościach. Prawdziwe dane, nie makiety. Wybierz jeden, a przepiszę na niego cały panel.</p>
+
+  <ul>
+    <li><a class="kafel" href="direction-warsztat.html">
+      <div class="nazwa">Warsztat</div>
+      <div class="opis">Maksymalna gęstość. Włosowe linie zamiast kart i cieni, jeden kobaltowy akcent na monochromie, kod statusu Woo obok polskiego słowa.</div>
+      <div class="dla">Dla operatora, który czyta ten ekran dziesiąty raz dziennie.</div>
+    </a></li>
+    <li><a class="kafel" href="direction-papier.html">
+      <div class="nazwa">Papier</div>
+      <div class="opis">Spokojny i przestronny, ciepła paleta papieru. Liczby 34 i 44 px, pełne zdania zamiast skrótów, wiersz tabeli 52 px.</div>
+      <div class="dla">Dla właściciela sklepu i na spotkanie z klientem.</div>
+    </a></li>
+    <li><a class="kafel" href="direction-kartoteka.html">
+      <div class="nazwa">Kartoteka</div>
+      <div class="opis">Dziewięć oddzielnych, miękko zaokrąglonych kart. Mocny kontrast wag: nagłówki 700, treść 400. Statusy jako plakietki z kształtem.</div>
+      <div class="dla">Dla kogoś, kto czyta ekran obiektami, nie jedną siatką.</div>
+    </a></li>
+    <li><a class="kafel" href="direction-noc.html">
+      <div class="nazwa">Noc</div>
+      <div class="opis">Ciemne narzędzie. Warstwy rozdzielane jasnością zamiast cieni, monospace na każdej liczbie, skróty klawiszowe wypisane na ekranie.</div>
+      <div class="dla">Dla domykania wysyłek wieczorem, z ręką na klawiaturze.</div>
+    </a></li>
+  </ul>
+
+  <footer>
+    Każdy wariant przeszedł dwie rundy review: poprawiono kontrast tekstów wyciszonych do
+    progu WCAG AA i rozdzielono zlewające się poziomy hierarchii. Wariant Noc jest sprzeczny
+    z zapisaną decyzją „bez trybu ciemnego w fazie 1" i wymaga świadomego odblokowania.
+  </footer>
+</main>
+</body>
+</html>

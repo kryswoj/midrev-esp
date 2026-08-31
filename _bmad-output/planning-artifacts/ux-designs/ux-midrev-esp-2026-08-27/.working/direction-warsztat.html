@@ -1,0 +1,473 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kierunek A: Warsztat / midrev-esp</title>
+<style>
+/* ==========================================================================
+   KIERUNEK A. WARSZTAT
+   Narzędzie inżynierskie o dużej gęstości. Włosowe linie zamiast kart i cieni.
+
+   PALETA (hex)
+     tło płótna         #EFEFF1
+     tło aplikacji      #FFFFFF
+     panel boczny       #F7F7F8
+     pasek pomocniczy   #FBFBFC
+     linia włosowa      #E4E4E7
+     linia mocniejsza   #D2D2D8
+     linia najsłabsza   #F2F2F4
+     tekst podstawowy   #18181B
+     tekst drugorzędny  #52525B
+     tekst wyciszony    #70707A
+     etykieta artboardu #6B6B74
+     akcent             #2C55F0
+     akcent, tło        #EEF2FE
+     stan ok            #157F3D
+     stan czeka         #9A6400
+     stan czeka, tło    #FDF6E7
+     stan czeka, ramka  #E4CFA0
+     stan błąd          #B4232A
+     stan neutralny     #6B7280
+
+   SKALA TYPOGRAFICZNA (px)
+     10 / 11 / 12 / 13 / 15 / 20 / 28
+     baza 13, interlinia 1.4, etykiety 10-11 wersaliki, tracking 0.07em
+
+   SKALA ODSTĘPÓW (px)
+     baza: 4 / 8 / 12 / 16 / 24 / 40
+     półkroki wewnątrz kontrolek i wierszy: 2 / 3 / 5 / 6 / 10 / 14
+
+   PROMIENIE: 2 kontrolki, 3 kontenery.  CIENIE: brak, hierarchia stoi na liniach.
+   ========================================================================== */
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: #EFEFF1;
+  color: #18181B;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+}
+.mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; }
+.num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
+
+/* --- nagłówek uzasadnienia ------------------------------------------------ */
+.brief { max-width: 1420px; margin: 0 auto; padding: 40px 24px 24px; }
+.brief__tag {
+  font-size: 10px; letter-spacing: .07em; text-transform: uppercase;
+  color: #2C55F0; font-weight: 600; margin-bottom: 8px;
+}
+.brief h1 { font-size: 28px; line-height: 1.15; margin: 0 0 12px; font-weight: 600; letter-spacing: -.01em; }
+.brief p { margin: 0 0 16px; max-width: 78ch; font-size: 15px; color: #52525B; line-height: 1.55; }
+.brief__meta { display: flex; flex-wrap: wrap; gap: 24px; margin: 0; padding: 12px 0 0; border-top: 1px solid #D2D2D8; }
+.brief__meta div { font-size: 11px; }
+.brief__meta dt { color: #6B6B74; text-transform: uppercase; letter-spacing: .07em; margin-bottom: 2px; }
+.brief__meta dd { margin: 0; color: #18181B; }
+
+/* --- ramka artboardu ------------------------------------------------------ */
+.board { max-width: 1420px; margin: 0 auto; padding: 0 24px 40px; }
+.board__label {
+  font-size: 11px; letter-spacing: .07em; text-transform: uppercase; color: #6B6B74;
+  margin: 24px 0 8px; font-weight: 600;
+}
+.scroller { overflow-x: auto; padding-bottom: 4px; }
+
+/* --- powłoka aplikacji ---------------------------------------------------- */
+.ap { display: flex; min-width: 1372px; background: #FFFFFF; border: 1px solid #D2D2D8; border-radius: 3px; }
+.ap--sm { min-width: 760px; max-width: 760px; }
+
+/* --- nawigacja boczna ----------------------------------------------------- */
+.side { width: 232px; flex: 0 0 232px; background: #F7F7F8; border-right: 1px solid #E4E4E7; display: flex; flex-direction: column; }
+.switcher { padding: 12px; border-bottom: 1px solid #E4E4E7; }
+.switcher__btn {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  background: #FFFFFF; border: 1px solid #D2D2D8; border-radius: 2px; padding: 6px 8px; text-align: left;
+}
+.switcher__mark {
+  width: 20px; height: 20px; flex: 0 0 20px; border-radius: 2px; background: #18181B; color: #FFFFFF;
+  font-size: 10px; font-weight: 600; display: flex; align-items: center; justify-content: center;
+}
+.switcher__txt { min-width: 0; flex: 1; }
+.switcher__name { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.switcher__host { font-size: 10px; color: #70707A; }
+.switcher__caret { color: #70707A; font-size: 10px; }
+
+.nav { padding: 8px 8px 0; }
+.nav__group { font-size: 10px; letter-spacing: .07em; text-transform: uppercase; color: #70707A; padding: 12px 8px 4px; font-weight: 600; }
+.nav a {
+  display: flex; align-items: center; gap: 8px; padding: 4px 8px; border-radius: 2px;
+  color: #52525B; text-decoration: none; font-size: 12px; line-height: 20px;
+}
+.nav a.is-active { background: #EEF2FE; color: #18181B; font-weight: 600; box-shadow: inset 2px 0 0 #2C55F0; }
+.nav a span.count { margin-left: auto; color: #70707A; font-size: 11px; font-variant-numeric: tabular-nums; }
+.nav a.is-active span.count { color: #52525B; }
+.side__foot { margin-top: auto; border-top: 1px solid #E4E4E7; padding: 8px 12px; display: flex; align-items: center; gap: 8px; }
+.side__foot .avatar { width: 18px; height: 18px; border-radius: 2px; background: #D2D2D8; font-size: 10px; display: flex; align-items: center; justify-content: center; color: #52525B; font-weight: 600; }
+.side__foot .who { font-size: 11px; color: #52525B; }
+
+/* --- kolumna główna ------------------------------------------------------- */
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.top { display: flex; align-items: center; gap: 12px; padding: 0 16px; height: 40px; border-bottom: 1px solid #E4E4E7; }
+.crumbs { font-size: 12px; color: #70707A; }
+.crumbs b { color: #18181B; font-weight: 600; }
+.top__search {
+  margin-left: auto; width: 250px; height: 24px; border: 1px solid #D2D2D8; border-radius: 2px;
+  display: flex; align-items: center; padding: 0 6px; gap: 6px; color: #70707A; font-size: 11px; background: #FFFFFF;
+}
+.btn { height: 24px; padding: 0 10px; border: 1px solid #D2D2D8; border-radius: 2px; background: #FFFFFF; font-size: 12px; color: #18181B; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.btn--primary { background: #2C55F0; border-color: #2C55F0; color: #FFFFFF; font-weight: 500; }
+.btn--ghost { border-color: transparent; background: transparent; color: #2C55F0; padding: 0 6px; }
+.btn[aria-disabled="true"] { color: #70707A; background: #F7F7F8; }
+
+/* --- pasek stanu wyjątkowego ---------------------------------------------- */
+.flag {
+  display: flex; align-items: center; gap: 8px; padding: 6px 16px;
+  background: #FDF6E7; border-bottom: 1px solid #E4E4E7; font-size: 12px; color: #52525B;
+}
+.flag b { color: #18181B; font-weight: 600; }
+.flag__mark { width: 0; height: 0; border-left: 5px solid transparent; border-right: 5px solid transparent; border-bottom: 9px solid #9A6400; flex: 0 0 10px; }
+.flag__word { font-size: 10px; letter-spacing: .07em; text-transform: uppercase; font-weight: 700; color: #9A6400; }
+.flag .btn { margin-left: auto; }
+
+/* --- listwa wskaźników ---------------------------------------------------- */
+.rail { display: flex; border-bottom: 1px solid #E4E4E7; background: #FBFBFC; }
+.rail__cell { flex: 1; min-width: 0; padding: 10px 14px; border-right: 1px solid #E4E4E7; }
+.rail__cell:last-child { border-right: 0; }
+.rail__k { font-size: 10px; letter-spacing: .07em; text-transform: uppercase; color: #70707A; font-weight: 600; white-space: nowrap; }
+.rail__v { font-size: 20px; line-height: 1.2; margin-top: 4px; letter-spacing: -.01em; font-variant-numeric: tabular-nums; }
+.rail__v--sm { font-size: 15px; padding-top: 3px; padding-bottom: 2px; }
+.rail__n { font-size: 11px; color: #52525B; margin-top: 2px; display: flex; align-items: center; gap: 5px; white-space: nowrap; }
+.rail__n--warn { color: #9A6400; }
+.dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 6px; display: inline-block; }
+.sq { width: 6px; height: 6px; flex: 0 0 6px; display: inline-block; }
+.tri { width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-bottom: 7px solid currentColor; flex: 0 0 8px; display: inline-block; }
+.ring { width: 7px; height: 7px; border-radius: 50%; border: 2px solid currentColor; flex: 0 0 7px; display: inline-block; }
+
+/* --- podział: tabela + panel boczny --------------------------------------- */
+.split { display: flex; flex: 1; min-height: 0; }
+.split__main { flex: 1; min-width: 0; padding: 16px; }
+.split__aside { width: 300px; flex: 0 0 300px; border-left: 1px solid #E4E4E7; background: #FBFBFC; padding: 16px; }
+
+.sect { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+.sect h2 { font-size: 12px; font-weight: 600; margin: 0; }
+.sect .hint { font-size: 11px; color: #70707A; }
+.sect .btn { margin-left: auto; }
+
+table.tbl { width: 100%; border-collapse: collapse; }
+table.tbl th {
+  font-size: 10px; letter-spacing: .07em; text-transform: uppercase; color: #70707A; font-weight: 600;
+  text-align: left; padding: 6px 8px; border-bottom: 1px solid #D2D2D8; white-space: nowrap;
+}
+table.tbl td { padding: 0 8px; height: 30px; border-bottom: 1px solid #E4E4E7; font-size: 12px; vertical-align: middle; }
+th.r, td.r { text-align: right; }
+td.id { color: #52525B; }
+.st { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.st--ok { color: #157F3D; }
+.st--proc { color: #9A6400; }
+.st--ref { color: #B4232A; }
+.st--can { color: #6B7280; }
+.st__word { color: #18181B; font-size: 12px; }
+.st__code { color: #70707A; font-size: 10px; }
+.tbl__foot { display: flex; align-items: center; padding: 8px 8px 0; font-size: 11px; color: #70707A; font-variant-numeric: tabular-nums; }
+.tbl__foot .btn { margin-left: auto; }
+
+/* --- bloki w panelu bocznym ----------------------------------------------- */
+.blk { border: 1px solid #E4E4E7; border-radius: 3px; background: #FFFFFF; margin-bottom: 16px; }
+.blk__h { font-size: 10px; letter-spacing: .07em; text-transform: uppercase; color: #70707A; font-weight: 600; padding: 8px 10px; border-bottom: 1px solid #E4E4E7; }
+.kv { display: flex; margin: 0; padding: 5px 10px; font-size: 12px; border-bottom: 1px solid #F2F2F4; }
+.kv:last-of-type { border-bottom: 0; }
+.kv dt { color: #70707A; width: 92px; flex: 0 0 92px; }
+.kv dd { margin: 0; color: #18181B; min-width: 0; }
+.blk__warn { display: flex; gap: 8px; padding: 8px 10px; border-top: 1px solid #E4E4E7; background: #FDF6E7; font-size: 11px; color: #52525B; line-height: 1.45; }
+.blk__warn .tri { color: #9A6400; margin-top: 4px; }
+.blk__warn b { display: block; color: #9A6400; font-size: 10px; letter-spacing: .07em; text-transform: uppercase; margin-bottom: 2px; }
+
+table.rec { width: 100%; border-collapse: collapse; }
+table.rec th { font-size: 10px; letter-spacing: .07em; text-transform: uppercase; color: #70707A; font-weight: 600; padding: 6px 10px; text-align: right; border-bottom: 1px solid #E4E4E7; }
+table.rec th:first-child { text-align: left; }
+table.rec td { padding: 5px 10px; font-size: 12px; text-align: right; border-bottom: 1px solid #F2F2F4; font-variant-numeric: tabular-nums; }
+table.rec td:first-child { text-align: left; color: #52525B; white-space: nowrap; }
+table.rec tr:last-child td { border-bottom: 0; }
+.rec__ok { display: flex; align-items: center; gap: 6px; padding: 8px 10px; border-top: 1px solid #E4E4E7; font-size: 11px; color: #157F3D; }
+.rec__ok span.txt { color: #52525B; }
+
+/* --- ekran 2: szczegół kampanii ------------------------------------------- */
+.cmp { flex: 1; min-width: 0; }
+.cmp__top { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid #E4E4E7; }
+.cmp__top h2 { font-size: 15px; margin: 0; font-weight: 600; }
+.badge {
+  display: inline-flex; align-items: center; gap: 6px; height: 20px; padding: 0 8px;
+  border: 1px solid #E4CFA0; background: #FDF6E7; color: #9A6400; border-radius: 2px;
+  font-size: 10px; letter-spacing: .07em; text-transform: uppercase; font-weight: 700;
+}
+.cmp__acts { margin-left: auto; display: flex; gap: 8px; }
+.cmp__body { display: flex; }
+.cmp__col { flex: 1; padding: 16px; }
+.cmp__col + .cmp__col { border-left: 1px solid #E4E4E7; background: #FBFBFC; flex: 0 0 264px; }
+table.fun { width: 100%; border-collapse: collapse; }
+table.fun td { padding: 5px 0; font-size: 12px; border-bottom: 1px solid #F2F2F4; font-variant-numeric: tabular-nums; }
+table.fun td.r { text-align: right; }
+table.fun tr.total td { border-top: 1px solid #18181B; border-bottom: 0; padding-top: 8px; font-weight: 600; font-size: 13px; }
+.bar { display: flex; height: 8px; border: 1px solid #D2D2D8; border-radius: 2px; overflow: hidden; margin: 12px 0 6px; }
+.bar__fill { flex: 4; background: #2C55F0; }
+.bar__cut { flex: 2; background: repeating-linear-gradient(135deg, #E4E4E7 0 3px, #FFFFFF 3px 6px); }
+.bar__lg { display: flex; gap: 16px; font-size: 11px; color: #52525B; font-variant-numeric: tabular-nums; }
+.bar__lg i { width: 8px; height: 8px; display: inline-block; margin-right: 5px; vertical-align: -1px; }
+.lock { display: flex; gap: 8px; align-items: flex-start; margin-top: 16px; padding: 8px 10px; border: 1px solid #E4CFA0; background: #FDF6E7; border-radius: 2px; font-size: 11px; color: #52525B; line-height: 1.45; }
+.lock .tri { color: #9A6400; margin-top: 4px; }
+.note { font-size: 11px; color: #70707A; margin-top: 10px; line-height: 1.5; }
+</style>
+</head>
+<body>
+
+<header class="brief">
+  <div class="brief__tag">Kierunek A</div>
+  <h1>Warsztat</h1>
+  <p>Dla operatora MidRev, który trzyma otwarte kilka sklepów naraz i ogląda ten ekran dziesiąty raz dziennie. Charakter narzędzia inżynierskiego: maksymalna gęstość, włosowe linie zamiast kart i cieni, monochrom z jednym kobaltowym akcentem, który pojawia się wyłącznie tam, gdzie coś trzeba kliknąć. Od pozostałych trzech różni się tym, że nic tutaj nie jest większe, niż musi być: cała hierarchia stoi na siatce, wersalikach i odstępach, nie na kolorze.</p>
+  <dl class="brief__meta">
+    <div><dt>Gęstość</dt><dd>maksymalna, wiersz tabeli 30 px</dd></div>
+    <div><dt>Typografia</dt><dd>baza 13 px, etykiety 10 px wersaliki</dd></div>
+    <div><dt>Rejestr</dt><dd>skrótowy, techniczny, kod obok słowa</dd></div>
+    <div><dt>Akcent</dt><dd>jeden, #2C55F0</dd></div>
+    <div><dt>Krawędzie</dt><dd>ostre, promień 2-3 px, zero cieni</dd></div>
+  </dl>
+</header>
+
+<div class="board">
+  <div class="board__label">Ekran 1 / Przegląd sklepu klienta</div>
+  <div class="scroller">
+  <div class="ap">
+
+    <nav class="side">
+      <div class="switcher">
+        <div class="switcher__btn">
+          <div class="switcher__mark">ST</div>
+          <div class="switcher__txt">
+            <div class="switcher__name">Sklep Testowy MidRev</div>
+            <div class="switcher__host mono">localhost:8091</div>
+          </div>
+          <div class="switcher__caret">&#9662;</div>
+        </div>
+      </div>
+      <div class="nav">
+        <a href="#" class="is-active">Przegląd</a>
+        <a href="#">Sklepy<span class="count">1</span></a>
+        <a href="#">Profile<span class="count">6</span></a>
+        <a href="#">Zamówienia<span class="count">40</span></a>
+        <a href="#">Zgodność danych<span class="count" style="display:inline-flex;align-items:center;gap:5px"><i class="sq" style="background:#157F3D"></i>bez uwag</span></a>
+        <div class="nav__group">Marketing</div>
+        <a href="#">Kampanie<span class="count">3</span></a>
+        <a href="#">Segmenty<span class="count">4</span></a>
+        <a href="#">Listy<span class="count">1</span></a>
+        <a href="#">Zgody i wykluczenia<span class="count">5</span></a>
+      </div>
+      <div class="side__foot">
+        <div class="avatar">A</div>
+        <div class="who">Agata, operator</div>
+      </div>
+    </nav>
+
+    <div class="main">
+      <div class="top">
+        <div class="crumbs">Sklep Testowy MidRev / <b>Przegląd</b></div>
+        <div class="top__search mono">szukaj profilu lub zamówienia</div>
+        <span class="btn">Uruchom import</span>
+        <span class="btn btn--primary">Nowa kampania</span>
+      </div>
+
+      <div class="flag">
+        <i class="flag__mark"></i>
+        <span class="flag__word">Czeka</span>
+        <span><b>Wrześniowa Wyprzedaż</b> czeka na akceptację klienta. Wysyłka jest zablokowana do momentu decyzji.</span>
+        <span class="btn">Otwórz kampanię</span>
+      </div>
+
+      <div class="rail">
+        <div class="rail__cell">
+          <div class="rail__k">Profile</div>
+          <div class="rail__v">6</div>
+        </div>
+        <div class="rail__cell">
+          <div class="rail__k">Zamówienia</div>
+          <div class="rail__v">40</div>
+        </div>
+        <div class="rail__cell">
+          <div class="rail__k">Przychód</div>
+          <div class="rail__v">6061,00 <span style="font-size:12px;color:#70707A">PLN</span></div>
+        </div>
+        <div class="rail__cell">
+          <div class="rail__k">Historia od</div>
+          <div class="rail__v rail__v--sm">23 lip 2025</div>
+        </div>
+        <div class="rail__cell">
+          <div class="rail__k">Segmenty</div>
+          <div class="rail__v">4</div>
+        </div>
+        <div class="rail__cell">
+          <div class="rail__k">Kampanie</div>
+          <div class="rail__v">3</div>
+          <div class="rail__n rail__n--warn"><i class="tri"></i>1 czeka na akceptację</div>
+        </div>
+        <div class="rail__cell">
+          <div class="rail__k">Zgody na e-mail</div>
+          <div class="rail__v">5</div>
+          <div class="rail__n"><i class="ring" style="color:#B4232A"></i>1 wycofana</div>
+        </div>
+      </div>
+
+      <div class="split">
+        <div class="split__main">
+          <div class="sect">
+            <h2>Ostatnie zamówienia</h2>
+            <span class="hint">bez filtrów, sortowanie po dacie malejąco</span>
+            <span class="btn btn--ghost">Filtry</span>
+          </div>
+          <table class="tbl">
+            <thead>
+              <tr>
+                <th style="width:56px">Nr</th>
+                <th>E-mail</th>
+                <th style="width:196px">Status</th>
+                <th class="r" style="width:112px">Kwota</th>
+                <th class="r" style="width:104px">Data</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td class="id mono num">#63</td>
+                <td>jan.lewandowski@example.test</td>
+                <td><span class="st st--proc"><i class="tri"></i><span class="st__word">W realizacji</span><span class="st__code mono">processing</span></span></td>
+                <td class="r num">110,00</td>
+                <td class="r num">17 sie 2026</td>
+              </tr>
+              <tr>
+                <td class="id mono num">#62</td>
+                <td>maria.wisniewska@example.test</td>
+                <td><span class="st st--ok"><i class="sq" style="background:currentColor"></i><span class="st__word">Zrealizowane</span><span class="st__code mono">completed</span></span></td>
+                <td class="r num">414,00</td>
+                <td class="r num">07 sie 2026</td>
+              </tr>
+              <tr>
+                <td class="id mono num">#61</td>
+                <td>piotr.nowak@example.test</td>
+                <td><span class="st st--ok"><i class="sq" style="background:currentColor"></i><span class="st__word">Zrealizowane</span><span class="st__code mono">completed</span></span></td>
+                <td class="r num">205,00</td>
+                <td class="r num">28 lip 2026</td>
+              </tr>
+              <tr>
+                <td class="id mono num">#58</td>
+                <td>tomasz.zielinski@example.test</td>
+                <td><span class="st st--ref"><i class="ring"></i><span class="st__word">Zwrócone</span><span class="st__code mono">refunded</span></span></td>
+                <td class="r num">528,00</td>
+                <td class="r num">08 lip 2026</td>
+              </tr>
+              <tr>
+                <td class="id mono num">#57</td>
+                <td>ewa.dabrowska@example.test</td>
+                <td><span class="st st--can"><i class="dot" style="background:currentColor"></i><span class="st__word">Anulowane</span><span class="st__code mono">cancelled</span></span></td>
+                <td class="r num">159,00</td>
+                <td class="r num">28 cze 2026</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="tbl__foot">
+            <span>Widoczne 5 z 40 zamówień</span>
+            <span class="btn btn--ghost">Pokaż wszystkie</span>
+          </div>
+        </div>
+
+        <aside class="split__aside">
+          <div class="blk">
+            <div class="blk__h">Sklep</div>
+            <dl class="kv"><dt>Adres</dt><dd class="mono">localhost:8091</dd></dl>
+            <dl class="kv"><dt>Platforma</dt><dd>WooCommerce</dd></dl>
+            <dl class="kv"><dt>Połączenie</dt><dd><span class="st st--ok"><i class="sq" style="background:currentColor"></i><span class="st__word">Połączony</span></span></dd></dl>
+            <dl class="kv"><dt>Zdarzenia</dt><dd>zamówienia, profile</dd></dl>
+            <div class="blk__warn">
+              <i class="tri"></i>
+              <div>
+                <b>Brakuje zdarzenia</b>
+                Sklep nie wysyła zdarzenia porzuconego koszyka. Do czasu podpięcia nie zbudujesz na nim segmentu ani automatyzacji.
+              </div>
+            </div>
+          </div>
+
+          <div class="blk">
+            <div class="blk__h">Ostatni import</div>
+            <table class="rec">
+              <thead>
+                <tr><th>Rekord</th><th>Zapowiedziano</th><th>Zapisano</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Zamówienia</td><td>40</td><td>40</td></tr>
+                <tr><td>Nowe profile</td><td>6</td><td>6</td></tr>
+              </tbody>
+            </table>
+            <div class="rec__ok">
+              <i class="sq" style="background:currentColor"></i>
+              <span>Zgadza się, <span class="txt">rozjazd 0 rekordów</span></span>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </div>
+  </div>
+
+  <div class="board__label">Ekran 2 / Szczegół kampanii</div>
+  <div class="scroller">
+  <div class="ap ap--sm">
+    <div class="cmp">
+      <div class="cmp__top">
+        <h2>Wrześniowa Wyprzedaż</h2>
+        <span class="badge"><i class="tri" style="color:#9A6400"></i>Czeka na akceptację</span>
+        <div class="cmp__acts">
+          <span class="btn">Wyślij test</span>
+          <span class="btn" aria-disabled="true">Wyślij kampanię</span>
+        </div>
+      </div>
+      <div class="cmp__body">
+        <div class="cmp__col">
+          <div class="sect"><h2>Odbiorcy</h2><span class="hint">stan na moment liczenia</span></div>
+          <table class="fun">
+            <tbody>
+              <tr><td>Kandydaci z segmentu</td><td class="r">6</td></tr>
+              <tr><td>Wypisani i wykluczeni</td><td class="r">&minus;2</td></tr>
+              <tr class="total"><td>Do wysyłki</td><td class="r">4</td></tr>
+            </tbody>
+          </table>
+          <div class="bar" role="img" aria-label="4 z 6 kandydatów trafi do wysyłki">
+            <div class="bar__fill"></div>
+            <div class="bar__cut"></div>
+          </div>
+          <div class="bar__lg">
+            <span><i style="background:#2C55F0"></i>Do wysyłki 4</span>
+            <span><i style="background:repeating-linear-gradient(135deg,#E4E4E7 0 3px,#FFFFFF 3px 6px);border:1px solid #D2D2D8"></i>Odpada 2</span>
+          </div>
+          <div class="lock">
+            <i class="tri"></i>
+            <div>Wysyłka zablokowana. Klient nie zaakceptował jeszcze treści, przycisk wysyłki pozostaje nieaktywny.</div>
+          </div>
+        </div>
+        <div class="cmp__col">
+          <div class="blk" style="margin:0">
+            <div class="blk__h">Kontekst</div>
+            <dl class="kv"><dt>Sklep</dt><dd>Sklep Testowy MidRev</dd></dl>
+            <dl class="kv"><dt>Profile</dt><dd class="num">6</dd></dl>
+            <dl class="kv"><dt>Zgody</dt><dd class="num">5, w tym 1 wycofana</dd></dl>
+            <dl class="kv"><dt>Segmenty</dt><dd class="num">4</dd></dl>
+          </div>
+          <div class="note">Liczba odbiorców jest przeliczana ponownie tuż przed wysyłką. Jeśli w międzyczasie ktoś wycofa zgodę, kampania wyjdzie do mniejszej grupy.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  </div>
+</div>
+
+</body>
+</html>

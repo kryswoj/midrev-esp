@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kierunek C: Kartoteka / midrev-esp</title>
+<style>
+/* ==========================================================================
+   KIERUNEK C. KARTOTEKA
+   Ekran złożony z osobnych, miękkich kart. Hierarchia budowana wagą pisma.
+
+   PALETA (hex)
+     tło płótna         #E7EAF0
+     tło aplikacji      #F6F7FA
+     powierzchnia karty #FFFFFF
+     panel boczny       #FFFFFF
+     linia              #E2E6EC
+     linia słaba        #EFF1F5
+     tekst podstawowy   #0F172A
+     tekst drugorzędny  #475569
+     tekst wyciszony    #5B6E89
+     etykieta artboardu #586A84
+     akcent             #4C46E0
+     akcent, tło        #EDECFD
+     stan ok            #067A4B  na #E9F7F0
+     stan czeka         #9A5B08  na #FDF3E3
+     stan zwrot         #B02B36  na #FCEDEE
+     stan neutralny     #475569  na #EEF1F5
+     linia mocniejsza   #D5DAE3
+     ramka stanu ok     #CFEADF
+     ramka stanu czeka  #F3E3C6
+     szrafura wykluczeń #CBD3DE
+
+   SKALA TYPOGRAFICZNA (px)
+     11 / 12 / 13 / 14 / 16 / 20 / 28
+     baza 14, nagłówki waga 700 z tracking -0.01em, treść waga 400, etykiety 12 waga 500
+
+   SKALA ODSTĘPÓW (px)
+     baza: 4 / 8 / 12 / 16 / 20 / 24
+     półkroki wewnątrz kontrolek i wierszy: 2 / 3 / 5 / 6 / 7 / 9 / 10 / 14 / 18
+     marginesy płótna: 28 / 48
+
+   PROMIENIE: 999 plakietki, 8 kontrolki, 12 karty.
+   CIENIE: 0 1px 2px rgba(15,23,42,.06) na kartach, 0 1px 3px rgba(15,23,42,.10) na akcencie.
+   ========================================================================== */
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: #E7EAF0;
+  color: #0F172A;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+.num { font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
+
+/* --- nagłówek uzasadnienia ------------------------------------------------ */
+.brief { max-width: 1470px; margin: 0 auto; padding: 48px 28px 20px; }
+.brief__tag { font-size: 12px; font-weight: 700; color: #4C46E0; letter-spacing: .02em; margin-bottom: 8px; }
+.brief h1 { font-size: 28px; line-height: 1.15; margin: 0 0 12px; font-weight: 700; letter-spacing: -.02em; }
+.brief p { margin: 0 0 20px; max-width: 76ch; font-size: 16px; color: #475569; line-height: 1.55; }
+.brief__meta { display: flex; flex-wrap: wrap; gap: 28px; margin: 0; padding: 20px 0 0; border-top: 1px solid #D5DAE3; }
+.brief__meta div { font-size: 12px; }
+.brief__meta dt { color: #586A84; font-weight: 500; margin-bottom: 2px; }
+.brief__meta dd { margin: 0; color: #0F172A; font-weight: 500; }
+
+.board { max-width: 1470px; margin: 0 auto; padding: 0 28px 48px; }
+.board__label { font-size: 12px; font-weight: 700; color: #586A84; margin: 28px 0 10px; letter-spacing: .02em; }
+.scroller { overflow-x: auto; padding-bottom: 4px; }
+
+.ap { display: flex; min-width: 1420px; background: #F6F7FA; border: 1px solid #D5DAE3; border-radius: 12px; overflow: hidden; }
+.ap--sm { min-width: 800px; max-width: 800px; display: block; background: #F6F7FA; }
+
+/* --- ikony rysowane CSS --------------------------------------------------- */
+.ico { width: 16px; height: 16px; flex: 0 0 16px; border: 1.5px solid currentColor; border-radius: 4px; opacity: .55; position: relative; }
+.ico--rows::after { content: ""; position: absolute; left: 2px; right: 2px; top: 5.5px; height: 1.5px; background: currentColor; }
+.ico--dot::after { content: ""; position: absolute; left: 4.5px; top: 4.5px; width: 4px; height: 4px; border-radius: 50%; background: currentColor; }
+.ico--split::after { content: ""; position: absolute; left: 6.2px; top: 1px; bottom: 1px; width: 1.5px; background: currentColor; }
+.ico--round { border-radius: 50%; }
+.is-active .ico { opacity: 1; }
+
+/* --- nawigacja boczna ----------------------------------------------------- */
+.side { width: 272px; flex: 0 0 272px; background: #FFFFFF; border-right: 1px solid #E2E6EC; padding: 16px 12px; display: flex; flex-direction: column; }
+.switcher { display: flex; align-items: center; gap: 10px; padding: 10px; border: 1px solid #E2E6EC; border-radius: 12px; box-shadow: 0 1px 2px rgba(15,23,42,.06); }
+.switcher__mark { width: 32px; height: 32px; flex: 0 0 32px; border-radius: 10px; background: #4C46E0; color: #FFFFFF; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 700; }
+.switcher__name { font-size: 14px; font-weight: 700; letter-spacing: -.01em; }
+.switcher__host { font-size: 11px; color: #5B6E89; font-weight: 500; }
+.switcher__caret { margin-left: auto; color: #5B6E89; font-size: 11px; }
+
+.nav { margin-top: 20px; }
+.nav__group { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: #5B6E89; padding: 20px 10px 6px; }
+.nav a { display: flex; align-items: center; gap: 10px; white-space: nowrap; padding: 7px 10px; border-radius: 8px; color: #475569; text-decoration: none; font-size: 14px; font-weight: 500; margin-bottom: 2px; }
+.nav a.is-active { background: #EDECFD; color: #4C46E0; font-weight: 700; }
+.nav a .count { margin-left: auto; font-size: 12px; color: #5B6E89; font-weight: 500; font-variant-numeric: tabular-nums; }
+.nav a .mini { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 999px; background: #FDF3E3; color: #9A5B08; }
+.side__foot { margin-top: auto; display: flex; align-items: center; gap: 10px; padding: 12px 10px 0; border-top: 1px solid #EFF1F5; }
+.side__foot .av { width: 28px; height: 28px; border-radius: 50%; background: #EEF1F5; color: #475569; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+.side__foot small { display: block; color: #5B6E89; font-size: 11px; font-weight: 500; }
+.side__foot b { font-size: 13px; }
+
+/* --- treść ---------------------------------------------------------------- */
+.main { flex: 1; min-width: 0; }
+.top { display: flex; align-items: center; gap: 12px; padding: 14px 24px; background: #FFFFFF; border-bottom: 1px solid #E2E6EC; }
+.top h1 { font-size: 20px; margin: 0; font-weight: 700; letter-spacing: -.02em; }
+.top .sub { font-size: 12px; color: #5B6E89; font-weight: 500; }
+.top__acts { margin-left: auto; display: flex; gap: 8px; }
+.btn { border: 1px solid #E2E6EC; background: #FFFFFF; color: #0F172A; border-radius: 8px; padding: 7px 14px; font-size: 13px; font-weight: 600; display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; box-shadow: 0 1px 2px rgba(15,23,42,.06); }
+.btn--primary { background: #4C46E0; border-color: #4C46E0; color: #FFFFFF; box-shadow: 0 1px 3px rgba(15,23,42,.10); }
+.btn--quiet { border-color: transparent; background: transparent; box-shadow: none; color: #4C46E0; padding: 7px 6px; }
+.btn[aria-disabled="true"] { color: #5B6E89; background: #EEF1F5; border-color: #E2E6EC; box-shadow: none; }
+
+.canvas { padding: 20px 24px 24px; }
+
+/* --- plakietki stanu ------------------------------------------------------ */
+.pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px 3px 8px; border-radius: 999px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.pill--ok { background: #E9F7F0; color: #067A4B; }
+.pill--wait { background: #FDF3E3; color: #9A5B08; }
+.pill--ref { background: #FCEDEE; color: #B02B36; }
+.pill--neu { background: #EEF1F5; color: #475569; }
+.dot { width: 7px; height: 7px; border-radius: 50%; flex: 0 0 7px; display: inline-block; background: currentColor; }
+.sq { width: 7px; height: 7px; flex: 0 0 7px; display: inline-block; background: currentColor; border-radius: 1px; }
+.tri { width: 0; height: 0; border-left: 4.5px solid transparent; border-right: 4.5px solid transparent; border-bottom: 8px solid currentColor; flex: 0 0 9px; display: inline-block; }
+.ring { width: 7px; height: 7px; border-radius: 50%; border: 2px solid currentColor; flex: 0 0 7px; display: inline-block; }
+
+/* --- karta ostrzeżenia ---------------------------------------------------- */
+.alert { display: flex; align-items: center; gap: 14px; background: #FFFFFF; border: 1px solid #E2E6EC; border-left: 4px solid #9A5B08; border-radius: 12px; padding: 14px 18px; margin-bottom: 16px; box-shadow: 0 1px 2px rgba(15,23,42,.06); }
+.alert h2 { font-size: 14px; font-weight: 700; margin: 0 0 2px; }
+.alert p { margin: 0; font-size: 13px; color: #475569; }
+.alert__acts { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+
+/* --- karty wskaźników ----------------------------------------------------- */
+.grid4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 16px; }
+.grid3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 20px; }
+.stat { background: #FFFFFF; border: 1px solid #E2E6EC; border-radius: 12px; padding: 16px 18px; box-shadow: 0 1px 2px rgba(15,23,42,.06); }
+.stat__k { font-size: 12px; font-weight: 600; color: #5B6E89; letter-spacing: .01em; }
+.stat__v { font-size: 28px; font-weight: 700; letter-spacing: -.02em; margin-top: 6px; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.stat__v small { font-size: 14px; font-weight: 600; color: #5B6E89; letter-spacing: 0; }
+.stat__v--date { font-size: 20px; padding: 5px 0 3px; }
+.stat__row { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+
+/* --- karty treści --------------------------------------------------------- */
+.cols { display: flex; gap: 16px; align-items: flex-start; }
+.cols__main { flex: 1; min-width: 0; }
+.cols__aside { width: 320px; flex: 0 0 320px; display: flex; flex-direction: column; gap: 16px; }
+.card { background: #FFFFFF; border: 1px solid #E2E6EC; border-radius: 12px; box-shadow: 0 1px 2px rgba(15,23,42,.06); overflow: hidden; }
+.card__h { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid #EFF1F5; }
+.card__h h2 { font-size: 14px; font-weight: 700; margin: 0; }
+.card__h .hint { font-size: 12px; color: #5B6E89; font-weight: 500; }
+.card__h .btn { margin-left: auto; }
+.card__body { padding: 14px 18px; }
+
+table.tbl { width: 100%; border-collapse: collapse; }
+table.tbl th { font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: #5B6E89; text-align: left; padding: 8px 16px; border-bottom: 1px solid #EFF1F5; white-space: nowrap; }
+table.tbl td { padding: 0 16px; height: 44px; white-space: nowrap; border-bottom: 1px solid #EFF1F5; font-size: 14px; vertical-align: middle; }
+table.tbl tr:last-child td { border-bottom: 0; }
+th.r, td.r { text-align: right; }
+td.id { font-weight: 700; font-variant-numeric: tabular-nums; }
+td.mail { color: #475569; }
+td.amount { font-weight: 600; font-variant-numeric: tabular-nums; }
+td.date { color: #475569; font-variant-numeric: tabular-nums; }
+.card__foot { display: flex; align-items: center; padding: 12px 18px; border-top: 1px solid #EFF1F5; font-size: 12px; color: #5B6E89; font-weight: 500; font-variant-numeric: tabular-nums; }
+.card__foot .btn { margin-left: auto; }
+
+.kv { display: flex; justify-content: space-between; gap: 12px; margin: 0; padding: 8px 0; border-bottom: 1px solid #EFF1F5; font-size: 13px; }
+.kv:last-of-type { border-bottom: 0; }
+.kv dt { color: #5B6E89; font-weight: 500; }
+.kv dd { margin: 0; font-weight: 600; text-align: right; font-variant-numeric: tabular-nums; }
+.strip { display: flex; gap: 10px; padding: 12px 18px; background: #FDF3E3; border-top: 1px solid #F3E3C6; }
+.strip .tri { color: #9A5B08; margin-top: 4px; }
+.strip b { display: block; font-size: 13px; font-weight: 700; color: #9A5B08; }
+.strip p { margin: 2px 0 0; font-size: 12px; color: #475569; line-height: 1.45; }
+.strip--ok { background: #E9F7F0; border-top-color: #CFEADF; }
+.strip--ok b { color: #067A4B; }
+.strip--ok .sq { color: #067A4B; margin-top: 5px; }
+
+table.rec { width: 100%; border-collapse: collapse; }
+table.rec th { font-size: 11px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: #5B6E89; padding: 6px 0; text-align: right; border-bottom: 1px solid #EFF1F5; }
+table.rec th:first-child { text-align: left; }
+table.rec td { padding: 9px 0; font-size: 14px; text-align: right; border-bottom: 1px solid #EFF1F5; font-weight: 600; font-variant-numeric: tabular-nums; }
+table.rec td:first-child { text-align: left; color: #475569; font-weight: 400; white-space: nowrap; }
+table.rec tr:last-child td { border-bottom: 0; }
+
+/* --- ekran 2 -------------------------------------------------------------- */
+.cmp { padding: 20px 24px 24px; }
+.cmp__top { display: flex; align-items: center; gap: 12px; padding: 14px 24px; margin: -20px -24px 20px; background: #FFFFFF; border-bottom: 1px solid #E2E6EC; }
+.cmp__top h2 { font-size: 20px; font-weight: 700; margin: 0; letter-spacing: -.02em; }
+.cmp__acts { margin-left: auto; display: flex; gap: 8px; }
+.funnel { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 16px; }
+.fcard { background: #FFFFFF; border: 1px solid #E2E6EC; border-radius: 12px; padding: 16px 18px; box-shadow: 0 1px 2px rgba(15,23,42,.06); }
+.fcard--out { background: #F6F7FA; box-shadow: none; }
+.fcard--final { border-color: #4C46E0; box-shadow: 0 1px 3px rgba(76,70,224,.20); }
+.fcard__k { font-size: 12px; font-weight: 600; color: #5B6E89; }
+.fcard__v { font-size: 28px; font-weight: 700; letter-spacing: -.02em; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.fcard--final .fcard__v { color: #4C46E0; }
+.fcard__n { font-size: 12px; color: #475569; margin-top: 4px; }
+.track { display: flex; height: 12px; border-radius: 999px; overflow: hidden; background: #EEF1F5; margin: 4px 0 10px; }
+.track i { display: block; }
+.track i.go { flex: 4; background: #4C46E0; }
+.track i.out { flex: 2; background: repeating-linear-gradient(135deg, #CBD3DE 0 4px, #EEF1F5 4px 8px); }
+.legend { display: flex; gap: 20px; font-size: 12px; color: #475569; font-weight: 500; font-variant-numeric: tabular-nums; }
+.legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; margin-right: 6px; vertical-align: -1px; }
+</style>
+</head>
+<body>
+
+<header class="brief">
+  <div class="brief__tag">Kierunek C</div>
+  <h1>Kartoteka</h1>
+  <p>Dla operatora, który pracuje szybko, ale chce mieć ekran rozbity na wyraźne, osobne obiekty do przeczytania po kolei. Charakter kartoteki: miękkie zaokrąglone karty na chłodnym płótnie, mocny kontrast wag pisma (nagłówki 700, treść 400) i statusy jako plakietki, w których obok koloru zawsze stoi kształt i słowo. Różnica wobec Warsztatu jest strukturalna: tam jedna ciągła siatka linii, tu dziewięć oddzielnych kart z własnym cieniem.</p>
+  <dl class="brief__meta">
+    <div><dt>Gęstość</dt><dd>średnia, wiersz tabeli 44 px</dd></div>
+    <div><dt>Typografia</dt><dd>baza 14 px, nagłówki 700, liczby 28 px</dd></div>
+    <div><dt>Rejestr</dt><dd>rzeczowy, krótkie etykiety, plakietki</dd></div>
+    <div><dt>Akcent</dt><dd>indygo #4C46E0 plus cztery tinty stanu</dd></div>
+    <div><dt>Krawędzie</dt><dd>zaokrąglone 12 px, cień 1 px</dd></div>
+  </dl>
+</header>
+
+<div class="board">
+  <div class="board__label">Ekran 1 / Przegląd sklepu klienta</div>
+  <div class="scroller">
+  <div class="ap">
+
+    <nav class="side">
+      <div class="switcher">
+        <div class="switcher__mark">ST</div>
+        <div>
+          <div class="switcher__name">Sklep Testowy MidRev</div>
+          <div class="switcher__host">localhost:8091</div>
+        </div>
+        <div class="switcher__caret">&#9662;</div>
+      </div>
+      <div class="nav">
+        <a href="#" class="is-active"><i class="ico ico--rows"></i>Przegląd</a>
+        <a href="#"><i class="ico"></i>Sklepy<span class="count">1</span></a>
+        <a href="#"><i class="ico ico--round ico--dot"></i>Profile<span class="count">6</span></a>
+        <a href="#"><i class="ico ico--rows"></i>Zamówienia<span class="count">40</span></a>
+        <a href="#"><i class="ico ico--split"></i>Zgodność danych<span class="count">bez uwag</span></a>
+        <div class="nav__group">Marketing</div>
+        <a href="#"><i class="ico ico--dot"></i>Kampanie<span class="mini"><i class="tri"></i>1 czeka</span></a>
+        <a href="#"><i class="ico ico--split"></i>Segmenty<span class="count">4</span></a>
+        <a href="#"><i class="ico ico--rows"></i>Listy<span class="count">1</span></a>
+        <a href="#"><i class="ico ico--round"></i>Zgody i wykluczenia<span class="count">5</span></a>
+      </div>
+      <div class="side__foot">
+        <div class="av">A</div>
+        <div><b>Agata</b><small>operator MidRev</small></div>
+      </div>
+    </nav>
+
+    <div class="main">
+      <div class="top">
+        <div>
+          <h1>Przegląd</h1>
+          <div class="sub">Sklep Testowy MidRev</div>
+        </div>
+        <div class="top__acts">
+          <span class="btn">Uruchom import</span>
+          <span class="btn btn--primary">Nowa kampania</span>
+        </div>
+      </div>
+
+      <div class="canvas">
+        <div class="alert">
+          <span class="pill pill--wait"><i class="tri"></i>Czeka na akceptację</span>
+          <div>
+            <h2>Wrześniowa Wyprzedaż</h2>
+            <p>Kampania jest gotowa i wstrzymana. Wysyłka ruszy dopiero po decyzji klienta.</p>
+          </div>
+          <div class="alert__acts">
+            <span class="btn">Ponów prośbę</span>
+            <span class="btn btn--quiet">Otwórz kampanię</span>
+          </div>
+        </div>
+
+        <div class="grid4">
+          <div class="stat">
+            <div class="stat__k">Przychód</div>
+            <div class="stat__v">6061,00 <small>PLN</small></div>
+          </div>
+          <div class="stat">
+            <div class="stat__k">Zamówienia</div>
+            <div class="stat__v">40</div>
+          </div>
+          <div class="stat">
+            <div class="stat__k">Profile</div>
+            <div class="stat__v">6</div>
+          </div>
+          <div class="stat">
+            <div class="stat__k">Historia od</div>
+            <div class="stat__v stat__v--date">23 lip 2025</div>
+          </div>
+        </div>
+
+        <div class="grid3">
+          <div class="stat">
+            <div class="stat__k">Segmenty</div>
+            <div class="stat__v">4</div>
+          </div>
+          <div class="stat">
+            <div class="stat__k">Kampanie</div>
+            <div class="stat__v">3</div>
+            <div class="stat__row"><span class="pill pill--wait"><i class="tri"></i>1 czeka na akceptację</span></div>
+          </div>
+          <div class="stat">
+            <div class="stat__k">Zgody na e-mail</div>
+            <div class="stat__v">5</div>
+            <div class="stat__row"><span class="pill pill--ref"><i class="ring"></i>1 wycofana</span></div>
+          </div>
+        </div>
+
+        <div class="cols">
+          <div class="cols__main">
+            <div class="card">
+              <div class="card__h">
+                <h2>Ostatnie zamówienia</h2>
+                <span class="hint">od najnowszego</span>
+                <span class="btn btn--quiet">Filtry</span>
+              </div>
+              <table class="tbl">
+                <thead>
+                  <tr>
+                    <th style="width:64px">Nr</th>
+                    <th>Klient</th>
+                    <th style="width:162px">Status</th>
+                    <th class="r" style="width:124px">Kwota</th>
+                    <th class="r" style="width:112px">Data</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td class="id">#63</td>
+                    <td class="mail">jan.lewandowski@example.test</td>
+                    <td><span class="pill pill--wait"><i class="tri"></i>W realizacji</span></td>
+                    <td class="r amount">110,00 PLN</td>
+                    <td class="r date">17 sie 2026</td>
+                  </tr>
+                  <tr>
+                    <td class="id">#62</td>
+                    <td class="mail">maria.wisniewska@example.test</td>
+                    <td><span class="pill pill--ok"><i class="sq"></i>Zrealizowane</span></td>
+                    <td class="r amount">414,00 PLN</td>
+                    <td class="r date">07 sie 2026</td>
+                  </tr>
+                  <tr>
+                    <td class="id">#61</td>
+                    <td class="mail">piotr.nowak@example.test</td>
+                    <td><span class="pill pill--ok"><i class="sq"></i>Zrealizowane</span></td>
+                    <td class="r amount">205,00 PLN</td>
+                    <td class="r date">28 lip 2026</td>
+                  </tr>
+                  <tr>
+                    <td class="id">#58</td>
+                    <td class="mail">tomasz.zielinski@example.test</td>
+                    <td><span class="pill pill--ref"><i class="ring"></i>Zwrócone</span></td>
+                    <td class="r amount">528,00 PLN</td>
+                    <td class="r date">08 lip 2026</td>
+                  </tr>
+                  <tr>
+                    <td class="id">#57</td>
+                    <td class="mail">ewa.dabrowska@example.test</td>
+                    <td><span class="pill pill--neu"><i class="dot"></i>Anulowane</span></td>
+                    <td class="r amount">159,00 PLN</td>
+                    <td class="r date">28 cze 2026</td>
+                  </tr>
+                </tbody>
+              </table>
+              <div class="card__foot">
+                <span>Widoczne 5 z 40 zamówień</span>
+                <span class="btn btn--quiet">Pokaż wszystkie</span>
+              </div>
+            </div>
+          </div>
+
+          <aside class="cols__aside">
+            <div class="card">
+              <div class="card__h"><h2>Sklep</h2><span class="pill pill--ok" style="margin-left:auto"><i class="sq"></i>Połączony</span></div>
+              <div class="card__body">
+                <dl class="kv"><dt>Adres</dt><dd>localhost:8091</dd></dl>
+                <dl class="kv"><dt>Platforma</dt><dd>WooCommerce</dd></dl>
+                <dl class="kv"><dt>Zdarzenia</dt><dd>zamówienia, profile</dd></dl>
+              </div>
+              <div class="strip">
+                <i class="tri"></i>
+                <div>
+                  <b>Brak zdarzenia porzuconego koszyka</b>
+                  <p>Sklep go nie wysyła. Segment i przypomnienie o koszyku pozostają niedostępne, dopóki tego nie podepniemy.</p>
+                </div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="card__h"><h2>Ostatni import</h2></div>
+              <div class="card__body">
+                <table class="rec">
+                  <thead>
+                    <tr><th>Rekord</th><th>Zapowiedziano</th><th>Zapisano</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr><td>Zamówienia</td><td>40</td><td>40</td></tr>
+                    <tr><td>Nowe profile</td><td>6</td><td>6</td></tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="strip strip--ok">
+                <i class="sq"></i>
+                <div>
+                  <b>Zgadza się, rozjazd 0</b>
+                  <p>Zapowiedziano 40 zamówień i 6 nowych profili, zapisano 40 zamówień i 6 profili.</p>
+                </div>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </div>
+    </div>
+  </div>
+  </div>
+
+  <div class="board__label">Ekran 2 / Szczegół kampanii</div>
+  <div class="scroller">
+  <div class="ap ap--sm">
+    <div class="cmp">
+      <div class="cmp__top">
+        <h2>Wrześniowa Wyprzedaż</h2>
+        <span class="pill pill--wait"><i class="tri"></i>Czeka na akceptację klienta</span>
+        <div class="cmp__acts">
+          <span class="btn">Wyślij test</span>
+          <span class="btn" aria-disabled="true">Wyślij kampanię</span>
+        </div>
+      </div>
+
+      <div class="funnel">
+        <div class="fcard">
+          <div class="fcard__k">Kandydaci z segmentu</div>
+          <div class="fcard__v">6</div>
+          <div class="fcard__n">tyle profili spełnia warunek</div>
+        </div>
+        <div class="fcard fcard--out">
+          <div class="fcard__k">Wypisani i wykluczeni</div>
+          <div class="fcard__v">&minus;2</div>
+          <div class="fcard__n">nie dostaną tej wiadomości</div>
+        </div>
+        <div class="fcard fcard--final">
+          <div class="fcard__k">Do wysyłki</div>
+          <div class="fcard__v">4</div>
+          <div class="fcard__n">po odjęciu wykluczeń</div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card__h"><h2>Podział odbiorców</h2><span class="hint">4 z 6 kandydatów</span></div>
+        <div class="card__body">
+          <div class="track" role="img" aria-label="Cztery z sześciu kandydatów trafią do wysyłki">
+            <i class="go"></i><i class="out"></i>
+          </div>
+          <div class="legend">
+            <span><i style="background:#4C46E0"></i>Do wysyłki 4</span>
+            <span><i style="background:repeating-linear-gradient(135deg,#CBD3DE 0 4px,#EEF1F5 4px 8px)"></i>Odpada 2</span>
+          </div>
+          <dl class="kv" style="margin-top:14px"><dt>Sklep</dt><dd>Sklep Testowy MidRev</dd></dl>
+          <dl class="kv"><dt>Zgody na e-mail w sklepie</dt><dd>5, w tym 1 wycofana</dd></dl>
+        </div>
+        <div class="strip">
+          <i class="tri"></i>
+          <div>
+            <b>Wysyłka zablokowana</b>
+            <p>Klient nie zaakceptował jeszcze treści. Liczba odbiorców zostanie przeliczona ponownie tuż przed startem wysyłki.</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  </div>
+</div>
+
+</body>
+</html>

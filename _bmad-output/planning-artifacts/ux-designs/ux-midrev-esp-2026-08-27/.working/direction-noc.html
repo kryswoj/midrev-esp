@@ -1,0 +1,476 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kierunek D: Noc / midrev-esp</title>
+<style>
+/* ==========================================================================
+   KIERUNEK D. NOC
+   Narzędzie nocne. Ciemne powierzchnie, monospace na każdej liczbie,
+   skróty klawiszowe widoczne wprost na ekranie.
+
+   PALETA (hex)
+     tło płótna         #08090B
+     tło aplikacji      #101114
+     panel boczny       #0B0C0F
+     powierzchnia       #16181C
+     powierzchnia wyżej #1C1F24
+     linia włosowa      #262A31
+     linia mocniejsza   #333841
+     tekst podstawowy   #EDEFF2
+     tekst drugorzędny  #9BA2AD
+     tekst wyciszony    #808791
+     etykieta artboardu #727A84
+     akcent             #7C9CFF
+     akcent, tło        #1A2035
+     stan ok            #46B784  tło #12261F
+     stan czeka         #E0A93E  tło #2A2113
+     stan zwrot         #E4736B  tło #2C1A19
+     stan neutralny     #8A9099  tło #1C1F24
+     linia najsłabsza   #1F2228
+     tekst tabeli       #C9CFD8
+     przycisk główny    tło #2C3E75, ramka #3C528F, tekst #DCE5FF
+     monogram sklepu    ramka #2E3A5C
+     stan czeka, ramka  #4A3A1B, przycisk #3A2E17 z ramką #5A4622
+     stan czeka, tekst  #F3E4C6 nagłówek, #D6CBB4 i #C0B69F treść
+     stan ok, ramka     #1F4636, tekst treści #A7BDB2
+
+   SKALA TYPOGRAFICZNA (px)
+     10 / 11 / 12 / 13 / 15 / 19 / 26
+     baza 13, etykiety 11 wersaliki tracking 0.08em, liczby monospace tabular
+
+   SKALA ODSTĘPÓW (px)
+     baza: 4 / 8 / 12 / 16 / 20 / 24
+     półkroki wewnątrz kontrolek i wierszy: 1 / 2 / 3 / 5 / 6 / 7 / 9 / 10 / 14 / 18
+     margines płótna: 44
+
+   PROMIENIE: 4 klawisze, 6 kontrolki i karty.
+   CIENIE: brak, rozdzielanie warstw jasnością powierzchni.
+   ========================================================================== */
+
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: #08090B;
+  color: #EDEFF2;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  font-size: 13px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+}
+.mono { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; font-variant-numeric: tabular-nums; }
+.num { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; font-variant-numeric: tabular-nums; font-feature-settings: "tnum" 1; }
+
+/* --- nagłówek uzasadnienia ------------------------------------------------ */
+.brief { max-width: 1420px; margin: 0 auto; padding: 44px 24px 20px; }
+.brief__tag { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #7C9CFF; font-weight: 600; margin-bottom: 8px; }
+.brief h1 { font-size: 26px; line-height: 1.15; margin: 0 0 12px; font-weight: 600; letter-spacing: -.01em; }
+.brief p { margin: 0 0 20px; max-width: 78ch; font-size: 15px; color: #9BA2AD; line-height: 1.6; }
+.brief__meta { display: flex; flex-wrap: wrap; gap: 24px; margin: 0; padding: 16px 0 0; border-top: 1px solid #262A31; }
+.brief__meta div { font-size: 11px; }
+.brief__meta dt { color: #727A84; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 3px; }
+.brief__meta dd { margin: 0; color: #EDEFF2; }
+
+.board { max-width: 1420px; margin: 0 auto; padding: 0 24px 44px; }
+.board__label { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #727A84; margin: 24px 0 8px; font-weight: 600; }
+.scroller { overflow-x: auto; padding-bottom: 4px; }
+
+.ap { display: flex; min-width: 1372px; background: #101114; border: 1px solid #262A31; border-radius: 6px; overflow: hidden; }
+.ap--sm { min-width: 780px; max-width: 780px; display: block; }
+
+kbd {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 10px;
+  border: 1px solid #333841; background: #1C1F24; color: #9BA2AD; border-radius: 4px;
+  padding: 1px 5px; line-height: 16px; display: inline-block;
+}
+
+/* --- nawigacja boczna ----------------------------------------------------- */
+.side { width: 240px; flex: 0 0 240px; background: #0B0C0F; border-right: 1px solid #262A31; display: flex; flex-direction: column; }
+.switcher { padding: 12px; border-bottom: 1px solid #262A31; }
+.switcher__btn { display: flex; align-items: center; gap: 10px; padding: 8px; background: #16181C; border: 1px solid #262A31; border-radius: 6px; }
+.switcher__mark { width: 24px; height: 24px; flex: 0 0 24px; border-radius: 5px; background: #1A2035; border: 1px solid #2E3A5C; color: #7C9CFF; font-size: 10px; font-weight: 600; display: flex; align-items: center; justify-content: center; }
+.switcher__name { font-size: 12px; font-weight: 500; }
+.switcher__host { font-size: 10px; color: #808791; }
+.switcher__caret { margin-left: auto; color: #808791; font-size: 10px; }
+
+.nav { padding: 8px; }
+.nav__group { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: #808791; padding: 14px 8px 5px; font-weight: 600; }
+.nav a { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border-radius: 5px; color: #9BA2AD; text-decoration: none; font-size: 12px; line-height: 20px; }
+.nav a.is-active { background: #1A2035; color: #EDEFF2; box-shadow: inset 2px 0 0 #7C9CFF; }
+.nav a .count { margin-left: auto; font-size: 11px; color: #808791; font-family: ui-monospace, Menlo, Consolas, monospace; font-variant-numeric: tabular-nums; }
+.nav a .kbdhint { margin-left: auto; }
+.nav a .warnc { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; font-size: 11px; color: #E0A93E; }
+.side__foot { margin-top: auto; border-top: 1px solid #262A31; padding: 10px 12px; display: flex; align-items: center; gap: 8px; font-size: 11px; color: #808791; }
+.side__foot .av { width: 20px; height: 20px; border-radius: 5px; background: #1C1F24; border: 1px solid #333841; color: #9BA2AD; font-size: 10px; display: flex; align-items: center; justify-content: center; }
+
+/* --- kolumna główna ------------------------------------------------------- */
+.main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.top { display: flex; align-items: center; gap: 12px; height: 44px; padding: 0 16px; border-bottom: 1px solid #262A31; background: #101114; }
+.crumbs { font-size: 12px; color: #808791; }
+.crumbs b { color: #EDEFF2; font-weight: 500; }
+.cmdbar {
+  flex: 1; max-width: 380px; margin: 0 auto; height: 26px; border: 1px solid #262A31; background: #16181C;
+  border-radius: 6px; display: flex; align-items: center; gap: 8px; padding: 0 8px; color: #808791; font-size: 12px;
+}
+.cmdbar kbd { margin-left: auto; }
+.btn { height: 26px; padding: 0 10px; border: 1px solid #333841; border-radius: 6px; background: #1C1F24; color: #EDEFF2; font-size: 12px; display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+.btn--primary { background: #2C3E75; border-color: #3C528F; color: #DCE5FF; }
+.btn--ghost { border-color: transparent; background: transparent; color: #7C9CFF; padding: 0 6px; }
+.btn[aria-disabled="true"] { color: #808791; background: #16181C; border-color: #262A31; }
+.btn kbd { background: #101114; }
+
+/* --- pasek stanu ---------------------------------------------------------- */
+.flag { display: flex; align-items: center; gap: 10px; padding: 8px 16px; background: #2A2113; border-bottom: 1px solid #4A3A1B; font-size: 12px; color: #D6CBB4; }
+.flag b { color: #F3E4C6; font-weight: 600; }
+.flag__word { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; font-weight: 700; color: #E0A93E; }
+.flag .btn { margin-left: auto; background: #3A2E17; border-color: #5A4622; color: #F3E4C6; }
+
+/* --- kształty stanu ------------------------------------------------------- */
+.dot { width: 6px; height: 6px; border-radius: 50%; flex: 0 0 6px; display: inline-block; background: currentColor; }
+.sq { width: 6px; height: 6px; flex: 0 0 6px; display: inline-block; background: currentColor; }
+.tri { width: 0; height: 0; border-left: 4px solid transparent; border-right: 4px solid transparent; border-bottom: 7px solid currentColor; flex: 0 0 8px; display: inline-block; }
+.ring { width: 7px; height: 7px; border-radius: 50%; border: 2px solid currentColor; flex: 0 0 7px; display: inline-block; }
+
+/* --- listwa wskaźników ---------------------------------------------------- */
+.rail { display: flex; background: #16181C; border-bottom: 1px solid #262A31; }
+.rail__cell { flex: 1; min-width: 0; padding: 10px 12px; border-right: 1px solid #262A31; }
+.rail__cell:last-child { border-right: 0; }
+.rail__k { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: #808791; font-weight: 600; white-space: nowrap; }
+.rail__v { font-size: 19px; line-height: 1.25; margin-top: 5px; color: #EDEFF2; }
+.rail__v small { font-size: 11px; color: #808791; }
+.rail__v--sm { font-size: 13px; padding: 4px 0 2px; }
+.rail__n { font-size: 11px; margin-top: 3px; display: flex; align-items: center; gap: 5px; color: #9BA2AD; white-space: nowrap; }
+.rail__n--warn { color: #E0A93E; }
+.rail__n--stop { color: #E4736B; }
+
+/* --- podział -------------------------------------------------------------- */
+.split { display: flex; flex: 1; }
+.split__main { flex: 1; min-width: 0; padding: 16px; }
+.split__aside { width: 328px; flex: 0 0 328px; border-left: 1px solid #262A31; background: #0B0C0F; padding: 16px; }
+
+.sect { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.sect h2 { font-size: 12px; font-weight: 600; margin: 0; }
+.sect .hint { font-size: 11px; color: #808791; }
+.sect .right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+
+table.tbl { width: 100%; border-collapse: collapse; }
+table.tbl th { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: #808791; font-weight: 600; text-align: left; padding: 6px 10px; border-bottom: 1px solid #333841; white-space: nowrap; }
+table.tbl td { padding: 0 10px; height: 34px; border-bottom: 1px solid #262A31; font-size: 12px; vertical-align: middle; color: #C9CFD8; }
+table.tbl tr:last-child td { border-bottom: 0; }
+table.tbl tr.is-focused td { background: #1A2035; color: #EDEFF2; }
+table.tbl tr.is-focused td:first-child { box-shadow: inset 2px 0 0 #7C9CFF; }
+th.r, td.r { text-align: right; }
+td.id { color: #7C9CFF; }
+.st { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; padding: 2px 8px 2px 7px; border-radius: 999px; font-size: 11px; }
+.st--ok { color: #46B784; background: #12261F; }
+.st--proc { color: #E0A93E; background: #2A2113; }
+.st--ref { color: #E4736B; background: #2C1A19; }
+.st--can { color: #8A9099; background: #1C1F24; }
+.tbl__foot { display: flex; align-items: center; gap: 10px; padding: 10px 10px 0; font-size: 11px; color: #808791; }
+.tbl__foot .right { margin-left: auto; display: flex; gap: 8px; align-items: center; }
+
+/* --- panele --------------------------------------------------------------- */
+.blk { border: 1px solid #262A31; border-radius: 6px; background: #16181C; margin-bottom: 16px; overflow: hidden; }
+.blk__h { display: flex; align-items: center; gap: 8px; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: #808791; font-weight: 600; padding: 9px 12px; border-bottom: 1px solid #262A31; }
+.blk__h .st { margin-left: auto; letter-spacing: 0; text-transform: none; }
+.kv { display: flex; margin: 0; padding: 6px 12px; font-size: 12px; border-bottom: 1px solid #1F2228; }
+.kv:last-of-type { border-bottom: 0; }
+.kv dt { color: #808791; width: 96px; flex: 0 0 96px; }
+.kv dd { margin: 0; color: #C9CFD8; }
+.strip { display: flex; gap: 9px; padding: 10px 12px; background: #2A2113; border-top: 1px solid #4A3A1B; }
+.strip .tri { color: #E0A93E; margin-top: 4px; }
+.strip b { display: block; font-size: 11px; color: #E0A93E; font-weight: 600; margin-bottom: 2px; }
+.strip p { margin: 0; font-size: 11px; color: #C0B69F; line-height: 1.45; }
+.strip--ok { background: #12261F; border-top-color: #1F4636; }
+.strip--ok b { color: #46B784; }
+.strip--ok .sq { color: #46B784; margin-top: 5px; }
+.strip--ok p { color: #A7BDB2; }
+
+table.rec { width: 100%; border-collapse: collapse; }
+table.rec th { font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: #808791; font-weight: 600; white-space: nowrap; padding: 7px 10px; text-align: right; border-bottom: 1px solid #262A31; }
+table.rec th:first-child { text-align: left; }
+table.rec td { padding: 6px 10px; font-size: 12px; text-align: right; border-bottom: 1px solid #1F2228; color: #EDEFF2; }
+table.rec td:first-child { text-align: left; color: #9BA2AD; white-space: nowrap; font-family: Inter, -apple-system, "Segoe UI", sans-serif; }
+table.rec tr:last-child td { border-bottom: 0; }
+
+/* --- ekran 2 -------------------------------------------------------------- */
+.cmp__top { display: flex; align-items: center; gap: 10px; padding: 12px 16px; border-bottom: 1px solid #262A31; background: #101114; }
+.cmp__top h2 { font-size: 15px; margin: 0; font-weight: 600; }
+.cmp__acts { margin-left: auto; display: flex; gap: 8px; }
+.cmp__body { display: flex; background: #101114; }
+.cmp__col { flex: 1; padding: 16px; }
+.cmp__col + .cmp__col { border-left: 1px solid #262A31; background: #0B0C0F; flex: 0 0 272px; }
+table.fun { width: 100%; border-collapse: collapse; }
+table.fun td { padding: 7px 0; font-size: 12px; border-bottom: 1px solid #1F2228; color: #9BA2AD; }
+table.fun td.r { text-align: right; color: #EDEFF2; }
+table.fun tr.total td { border-top: 1px solid #333841; border-bottom: 0; padding-top: 10px; font-size: 13px; color: #EDEFF2; }
+table.fun tr.total td.r { color: #7C9CFF; font-size: 15px; }
+.track { display: flex; height: 10px; border-radius: 5px; overflow: hidden; background: #1C1F24; margin: 14px 0 8px; }
+.track i.go { flex: 4; background: #7C9CFF; }
+.track i.out { flex: 2; background: repeating-linear-gradient(135deg, #333841 0 3px, #1C1F24 3px 6px); }
+.legend { display: flex; gap: 18px; font-size: 11px; color: #9BA2AD; }
+.legend i { width: 9px; height: 9px; border-radius: 2px; display: inline-block; margin-right: 6px; vertical-align: -1px; }
+.lock { display: flex; gap: 9px; margin-top: 16px; padding: 10px 12px; background: #2A2113; border: 1px solid #4A3A1B; border-radius: 6px; }
+.lock .tri { color: #E0A93E; margin-top: 4px; }
+.lock p { margin: 0; font-size: 11px; color: #C0B69F; line-height: 1.5; }
+.note { font-size: 11px; color: #808791; margin-top: 12px; line-height: 1.5; }
+.keys { display: flex; flex-direction: column; gap: 7px; margin-top: 14px; }
+.keys div { display: flex; align-items: center; gap: 8px; font-size: 11px; color: #808791; }
+.keys kbd { min-width: 20px; text-align: center; }
+</style>
+</head>
+<body>
+
+<header class="brief">
+  <div class="brief__tag">Kierunek D</div>
+  <h1>Noc</h1>
+  <p>Dla operatora, który domyka wysyłki wieczorem i pracuje głównie z klawiatury, przy jednym monitorze i przygaszonym świetle. Charakter narzędzia nocnego: ciemne powierzchnie rozdzielane jasnością zamiast cieni, monospace na każdej liczbie, skróty klawiszowe wypisane wprost na ekranie zamiast chowanych w menu. Od pozostałych różni się nie tylko motywem: to jedyny wariant, który zakłada, że ręka nie schodzi z klawiatury, więc nawigacja i wiersz tabeli mają widoczny stan zaznaczenia.</p>
+  <dl class="brief__meta">
+    <div><dt>Gęstość</dt><dd>wysoka, wiersz tabeli 34 px</dd></div>
+    <div><dt>Typografia</dt><dd>baza 13 px, wszystkie liczby monospace</dd></div>
+    <div><dt>Rejestr</dt><dd>skrótowy, ze skrótami klawiszowymi</dd></div>
+    <div><dt>Akcent</dt><dd>chłodny błękit #7C9CFF na grafitowym tle</dd></div>
+    <div><dt>Krawędzie</dt><dd>promień 6 px, zero cieni, warstwy przez jasność</dd></div>
+  </dl>
+</header>
+
+<div class="board">
+  <div class="board__label">Ekran 1 / Przegląd sklepu klienta</div>
+  <div class="scroller">
+  <div class="ap">
+
+    <nav class="side">
+      <div class="switcher">
+        <div class="switcher__btn">
+          <div class="switcher__mark">ST</div>
+          <div>
+            <div class="switcher__name">Sklep Testowy MidRev</div>
+            <div class="switcher__host mono">localhost:8091</div>
+          </div>
+          <div class="switcher__caret">&#9662;</div>
+        </div>
+      </div>
+      <div class="nav">
+        <a href="#" class="is-active">Przegląd<span class="kbdhint"><kbd>G</kbd> <kbd>P</kbd></span></a>
+        <a href="#">Sklepy<span class="count">1</span></a>
+        <a href="#">Profile<span class="count">6</span></a>
+        <a href="#">Zamówienia<span class="count">40</span></a>
+        <a href="#">Zgodność danych<span class="count">ok</span></a>
+        <div class="nav__group">Marketing</div>
+        <a href="#">Kampanie<span class="warnc"><i class="tri"></i>1 czeka</span></a>
+        <a href="#">Segmenty<span class="count">4</span></a>
+        <a href="#">Listy<span class="count">1</span></a>
+        <a href="#">Zgody i wykluczenia<span class="count">5</span></a>
+      </div>
+      <div class="side__foot">
+        <div class="av">A</div>
+        <div>Agata, operator</div>
+      </div>
+    </nav>
+
+    <div class="main">
+      <div class="top">
+        <div class="crumbs">Sklep Testowy MidRev / <b>Przegląd</b></div>
+        <div class="cmdbar">Skocz do sklepu, profilu, kampanii <kbd>&#8984; K</kbd></div>
+        <span class="btn">Import <kbd>I</kbd></span>
+        <span class="btn btn--primary">Nowa kampania <kbd>N</kbd></span>
+      </div>
+
+      <div class="flag">
+        <i class="tri" style="color:#E0A93E"></i>
+        <span class="flag__word">Czeka</span>
+        <span><b>Wrześniowa Wyprzedaż</b> czeka na akceptację klienta. Wysyłka zablokowana do momentu decyzji.</span>
+        <span class="btn">Otwórz <kbd>&#8629;</kbd></span>
+      </div>
+
+      <div class="rail">
+        <div class="rail__cell">
+          <div class="rail__k">Profile</div>
+          <div class="rail__v num">6</div>
+        </div>
+        <div class="rail__cell">
+          <div class="rail__k">Zamówienia</div>
+          <div class="rail__v num">40</div>
+        </div>
+        <div class="rail__cell">
+          <div class="rail__k">Przychód</div>
+          <div class="rail__v num">6061,00 <small>PLN</small></div>
+        </div>
+        <div class="rail__cell">
+          <div class="rail__k">Historia od</div>
+          <div class="rail__v rail__v--sm num">23 lip 2025</div>
+        </div>
+        <div class="rail__cell">
+          <div class="rail__k">Segmenty</div>
+          <div class="rail__v num">4</div>
+        </div>
+        <div class="rail__cell">
+          <div class="rail__k">Kampanie</div>
+          <div class="rail__v num">3</div>
+          <div class="rail__n rail__n--warn"><i class="tri"></i>1 czeka na akceptację</div>
+        </div>
+        <div class="rail__cell">
+          <div class="rail__k">Zgody na e-mail</div>
+          <div class="rail__v num">5</div>
+          <div class="rail__n rail__n--stop"><i class="ring"></i>1 wycofana</div>
+        </div>
+      </div>
+
+      <div class="split">
+        <div class="split__main">
+          <div class="sect">
+            <h2>Ostatnie zamówienia</h2>
+            <span class="hint">sortowanie po dacie malejąco</span>
+            <span class="right"><span class="btn btn--ghost">Filtry <kbd>F</kbd></span></span>
+          </div>
+          <table class="tbl">
+            <thead>
+              <tr>
+                <th style="width:60px">Nr</th>
+                <th>E-mail</th>
+                <th style="width:150px">Status</th>
+                <th class="r" style="width:120px">Kwota</th>
+                <th class="r" style="width:110px">Data</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="is-focused">
+                <td class="id num">#63</td>
+                <td>jan.lewandowski@example.test</td>
+                <td><span class="st st--proc"><i class="tri"></i>W realizacji</span></td>
+                <td class="r num">110,00</td>
+                <td class="r num">17 sie 2026</td>
+              </tr>
+              <tr>
+                <td class="id num">#62</td>
+                <td>maria.wisniewska@example.test</td>
+                <td><span class="st st--ok"><i class="sq"></i>Zrealizowane</span></td>
+                <td class="r num">414,00</td>
+                <td class="r num">07 sie 2026</td>
+              </tr>
+              <tr>
+                <td class="id num">#61</td>
+                <td>piotr.nowak@example.test</td>
+                <td><span class="st st--ok"><i class="sq"></i>Zrealizowane</span></td>
+                <td class="r num">205,00</td>
+                <td class="r num">28 lip 2026</td>
+              </tr>
+              <tr>
+                <td class="id num">#58</td>
+                <td>tomasz.zielinski@example.test</td>
+                <td><span class="st st--ref"><i class="ring"></i>Zwrócone</span></td>
+                <td class="r num">528,00</td>
+                <td class="r num">08 lip 2026</td>
+              </tr>
+              <tr>
+                <td class="id num">#57</td>
+                <td>ewa.dabrowska@example.test</td>
+                <td><span class="st st--can"><i class="dot"></i>Anulowane</span></td>
+                <td class="r num">159,00</td>
+                <td class="r num">28 cze 2026</td>
+              </tr>
+            </tbody>
+          </table>
+          <div class="tbl__foot">
+            <span class="mono">Widoczne 5 z 40 zamówień</span>
+            <span class="right"><kbd>&#8593;</kbd> <kbd>&#8595;</kbd> ruch po wierszach <kbd>&#8629;</kbd> otwórz</span>
+          </div>
+        </div>
+
+        <aside class="split__aside">
+          <div class="blk">
+            <div class="blk__h">Sklep <span class="st st--ok"><i class="sq"></i>Połączony</span></div>
+            <dl class="kv"><dt>Adres</dt><dd class="mono">localhost:8091</dd></dl>
+            <dl class="kv"><dt>Platforma</dt><dd>WooCommerce</dd></dl>
+            <dl class="kv"><dt>Zdarzenia</dt><dd>zamówienia, profile</dd></dl>
+            <div class="strip">
+              <i class="tri"></i>
+              <div>
+                <b>Brak zdarzenia porzuconego koszyka</b>
+                <p>Sklep go nie wysyła. Segment i przypomnienie o koszyku pozostają poza zasięgiem, dopóki tego nie podepniemy.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="blk">
+            <div class="blk__h">Ostatni import</div>
+            <table class="rec">
+              <thead>
+                <tr><th>Rekord</th><th>Zapowiedziano</th><th>Zapisano</th></tr>
+              </thead>
+              <tbody>
+                <tr><td>Zamówienia</td><td class="num">40</td><td class="num">40</td></tr>
+                <tr><td>Nowe profile</td><td class="num">6</td><td class="num">6</td></tr>
+              </tbody>
+            </table>
+            <div class="strip strip--ok">
+              <i class="sq"></i>
+              <div>
+                <b>Zgadza się, rozjazd 0</b>
+                <p>Zapowiedziano 40 zamówień i 6 nowych profili, zapisano 40 zamówień i 6 profili.</p>
+              </div>
+            </div>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </div>
+  </div>
+
+  <div class="board__label">Ekran 2 / Szczegół kampanii</div>
+  <div class="scroller">
+  <div class="ap ap--sm">
+    <div class="cmp__top">
+      <h2>Wrześniowa Wyprzedaż</h2>
+      <span class="st st--proc"><i class="tri"></i>Czeka na akceptację klienta</span>
+      <div class="cmp__acts">
+        <span class="btn">Wyślij test <kbd>T</kbd></span>
+        <span class="btn" aria-disabled="true">Wyślij kampanię</span>
+      </div>
+    </div>
+    <div class="cmp__body">
+      <div class="cmp__col">
+        <div class="sect"><h2>Odbiorcy</h2><span class="hint">stan na moment liczenia</span></div>
+        <table class="fun">
+          <tbody>
+            <tr><td>Kandydaci z segmentu</td><td class="r num">6</td></tr>
+            <tr><td>Wypisani i wykluczeni</td><td class="r num">&minus;2</td></tr>
+            <tr class="total"><td>Do wysyłki</td><td class="r num">4</td></tr>
+          </tbody>
+        </table>
+        <div class="track" role="img" aria-label="Cztery z sześciu kandydatów trafią do wysyłki">
+          <i class="go"></i><i class="out"></i>
+        </div>
+        <div class="legend">
+          <span class="mono"><i style="background:#7C9CFF"></i>Do wysyłki 4</span>
+          <span class="mono"><i style="background:repeating-linear-gradient(135deg,#333841 0 3px,#1C1F24 3px 6px)"></i>Odpada 2</span>
+        </div>
+        <div class="lock">
+          <i class="tri"></i>
+          <p>Wysyłka zablokowana. Klient nie zaakceptował jeszcze treści, więc przycisk wysyłki i skrót klawiszowy pozostają nieaktywne.</p>
+        </div>
+      </div>
+      <div class="cmp__col">
+        <div class="blk" style="margin:0">
+          <div class="blk__h">Kontekst</div>
+          <dl class="kv"><dt>Sklep</dt><dd>Sklep Testowy MidRev</dd></dl>
+          <dl class="kv"><dt>Profile</dt><dd class="num">6</dd></dl>
+          <dl class="kv"><dt>Zgody</dt><dd class="num">5, w tym 1 wycofana</dd></dl>
+          <dl class="kv"><dt>Segmenty</dt><dd class="num">4</dd></dl>
+        </div>
+        <div class="keys">
+          <div><kbd>T</kbd> wyślij test na własny adres</div>
+          <div><kbd>R</kbd> ponów prośbę o akceptację</div>
+          <div><kbd>&#8984; &#8629;</kbd> wyślij, aktywne po akceptacji</div>
+        </div>
+        <div class="note">Liczba odbiorców jest przeliczana ponownie tuż przed wysyłką. Jeśli w międzyczasie ktoś wycofa zgodę, kampania wyjdzie do mniejszej grupy.</div>
+      </div>
+    </div>
+  </div>
+  </div>
+</div>
+
+</body>
+</html>

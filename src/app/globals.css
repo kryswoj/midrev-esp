@@ -1,0 +1,177 @@
+@import "tailwindcss";
+
+/* ── System wizualny: kierunek „Noc" ──────────────────────────────────────────
+   Wybrany przez Krystiana z czterech wyrenderowanych wariantów (27.08.2026).
+   Wybór świadomie odblokowuje decyzję D4 z dziennika UX, która mówiła „bez trybu
+   ciemnego w fazie 1".
+
+   Zasady, na których stoi ten kierunek:
+   1. Warstwy rozdzielane JASNOŚCIĄ powierzchni, nie cieniem. W ciemnym interfejsie
+      cień nie ma kontrastu wobec tła, więc nie niesie informacji o wysokości.
+   2. Wszystkie liczby monospace z tabular-nums. Operator porównuje kwoty w pionie.
+   3. Tekst bazowy 13 px, etykiety 11 px wersalikami z trackingiem 0.08em.
+   4. Zero cieni w całym systemie. Promienie tylko dwa: 4 px klawisze, 6 px reszta.
+   ────────────────────────────────────────────────────────────────────────── */
+@theme {
+  --color-plotno: #08090b;
+  --color-app: #101114;
+  --color-panel: #0b0c0f;
+  --color-powierzchnia: #16181c;
+  --color-powierzchnia-2: #1c1f24;
+
+  --color-linia-0: #1f2228;
+  --color-linia: #262a31;
+  --color-linia-mocna: #333841;
+
+  --color-tekst: #edeff2;
+  --color-tekst-tabela: #c9cfd8;
+  --color-tekst-2: #9ba2ad;
+  --color-tekst-3: #808791;
+
+  --color-akcent: #7c9cff;
+  --color-akcent-tlo: #1a2035;
+  --color-akcent-ramka: #3c528f;
+
+  --color-ok: #46b784;        --color-ok-tlo: #12261f;      --color-ok-ramka: #1f4636;
+  --color-czeka: #e0a93e;     --color-czeka-tlo: #2a2113;   --color-czeka-ramka: #4a3a1b;
+  --color-blad: #e4736b;      --color-blad-tlo: #2c1a19;
+
+  --font-sans: var(--font-inter), -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+:root { color-scheme: dark; }
+
+html, body { background: var(--color-plotno); color: var(--color-tekst); }
+body {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.45;
+  font-weight: 400;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1 { font-size: 19px; line-height: 26px; font-weight: 600; letter-spacing: -0.015em; }
+h2 { font-size: 13px; line-height: 20px; font-weight: 600; }
+h3 { font-size: 13px; line-height: 20px; font-weight: 600; }
+
+/* Liczby monospace: kwoty i daty mają się zgadzać w pionie co do znaku */
+.liczba, .wielkosc, .wielkosc-hero, td.num, .tabela .num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.wielkosc { font-size: 19px; line-height: 24px; font-weight: 500; letter-spacing: -0.01em; }
+.wielkosc-hero { font-size: 26px; line-height: 32px; font-weight: 500; letter-spacing: -0.015em; }
+
+.etykieta {
+  font-size: 11px; line-height: 16px; font-weight: 500;
+  letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--color-tekst-3);
+}
+
+/* Karta to powierzchnia o stopień jaśniejsza od tła, obrysowana włosem. Bez cienia. */
+.karta {
+  background: var(--color-powierzchnia);
+  border: 1px solid var(--color-linia);
+  border-radius: 6px;
+}
+.karta-plaska { background: var(--color-powierzchnia-2); border-radius: 6px; }
+
+.przycisk {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  height: 26px; padding: 0 10px; border-radius: 6px;
+  font-size: 12px; font-weight: 500;
+  background: #2c3e75; color: #dce5ff; border: 1px solid var(--color-akcent-ramka);
+  cursor: pointer; transition: background 140ms ease;
+}
+.przycisk:hover { background: #35498a; }
+.przycisk[disabled] { opacity: 0.45; cursor: not-allowed; }
+.przycisk-wtorny {
+  background: var(--color-powierzchnia-2); color: var(--color-tekst-2);
+  border-color: var(--color-linia-mocna);
+}
+.przycisk-wtorny:hover { background: #23262d; color: var(--color-tekst); }
+
+.pole {
+  width: 100%; height: 26px; padding: 0 8px;
+  background: var(--color-powierzchnia); color: var(--color-tekst);
+  border: 1px solid var(--color-linia); border-radius: 6px;
+  font-size: 12px; font-family: inherit;
+}
+select.pole, textarea.pole { height: auto; min-height: 26px; padding: 4px 8px; }
+.pole::placeholder { color: var(--color-tekst-3); }
+.pole:focus-visible { outline: none; border-color: var(--color-akcent); box-shadow: 0 0 0 2px var(--color-akcent-tlo); }
+
+/* Klawisz: skróty wypisane wprost na ekranie, nie schowane w pomocy */
+.klawisz {
+  font-family: var(--font-mono); font-size: 10px; line-height: 16px;
+  padding: 1px 5px; border-radius: 4px;
+  border: 1px solid var(--color-linia-mocna); background: var(--color-powierzchnia-2);
+  color: var(--color-tekst-2);
+}
+
+/* Stan nigdy nie jest przekazywany samym kolorem (NFR33): kształt plus słowo */
+.plakietka {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; white-space: nowrap; color: var(--color-tekst-2);
+}
+.plakietka::before {
+  content: ""; width: 7px; height: 7px; flex: none;
+  background: currentColor;
+}
+.plakietka-ok { color: var(--color-ok); }
+.plakietka-ok::before { border-radius: 2px; }
+.plakietka-uwaga { color: var(--color-czeka); }
+.plakietka-uwaga::before { clip-path: polygon(50% 0, 100% 100%, 0 100%); }
+.plakietka-blad { color: var(--color-blad); }
+.plakietka-blad::before { border-radius: 999px; background: transparent; box-shadow: inset 0 0 0 2px currentColor; }
+
+table.tabela { width: 100%; border-collapse: collapse; }
+.tabela th {
+  height: 26px; padding: 0 10px; text-align: left;
+  font-size: 11px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--color-tekst-3);
+  border-bottom: 1px solid var(--color-linia);
+}
+.tabela td {
+  height: 30px; padding: 5px 10px;
+  font-size: 13px; color: var(--color-tekst-tabela);
+  border-bottom: 1px solid var(--color-linia-0);
+}
+.tabela tbody tr:last-child td { border-bottom: 0; }
+.tabela tbody tr { transition: background 120ms ease; }
+.tabela tbody tr:hover td { background: var(--color-powierzchnia-2); }
+.tabela tbody tr[aria-selected="true"] td { background: var(--color-akcent-tlo); }
+.tabela .num { text-align: right; }
+
+.nawigacja-pozycja {
+  display: flex; align-items: center; gap: 8px;
+  height: 26px; padding: 0 8px; border-radius: 6px;
+  font-size: 13px; color: var(--color-tekst-2);
+  transition: background 120ms ease, color 120ms ease;
+}
+.nawigacja-pozycja:hover { background: var(--color-powierzchnia); color: var(--color-tekst); }
+.nawigacja-pozycja[aria-current="page"] {
+  background: var(--color-powierzchnia-2); color: var(--color-tekst);
+}
+.nawigacja-pozycja svg { color: var(--color-tekst-3); flex: none; }
+.nawigacja-pozycja[aria-current="page"] svg { color: var(--color-akcent); }
+.nawigacja-licznik { margin-left: auto; font-family: var(--font-mono); font-size: 11px; color: var(--color-tekst-3); }
+
+a:focus-visible, button:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--color-akcent); outline-offset: 1px; border-radius: 4px;
+}
+
+/* Pasek stanu: kampania czekająca na decyzję klienta ma być widoczna od razu,
+   a nie dopiero po wejściu w zakładkę kampanii. */
+.pasek-stanu {
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 14px; font-size: 12px;
+  background: var(--color-czeka-tlo); border-bottom: 1px solid var(--color-czeka-ramka);
+  color: #f3e4c6;
+}
+
+.pusty-stan { display: flex; flex-direction: column; gap: 6px; padding: 24px 14px 28px; max-width: 46ch; }
+.pusty-stan p { color: var(--color-tekst-3); }
+
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }

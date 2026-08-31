@@ -2,3 +2,6 @@ node_modules/
 dist/
 .env
 coverage/
+sandbox/woo/.woo-credentials
+.next/
+.nvmrc

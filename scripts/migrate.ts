@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { getPool, closePool } from "../src/db.js";
+import { getPool, closePool } from "../src/adapters/db/pool";
 
 const MIGRATIONS_DIR = join(import.meta.dirname, "..", "migrations");
 

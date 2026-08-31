@@ -1,16 +1,25 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { getPool, closePool } from "../src/db.js";
+import { getPool, closePool } from "../src/adapters/db/pool";
 
 // Integration test against the local sandbox (docker compose up -d).
 // This is the executable spec for Epik A2 (CDP core) from
 // clients/midrev/research/wlasny-esp/PLAN-SAAS-ARCHITEKTURA-2026-08-27.md.
 
 describe("CDP core: tenants -> profiles -> events", () => {
+  // Testy sprzątają WYŁĄCZNIE po sobie. Globalne "delete from tenants" kasowało dane
+  // wszystkich innych plików testowych i dane demonstracyjne w sandboxie, przez co panel
+  // pokazywał 404 dla klienta, który przed chwilą istniał. Kaskada kluczy obcych sprząta
+  // profile, zdarzenia, sklepy i zadania należące do tych tenantów.
+  const PREFIKS = "CDP ";
+
   beforeAll(async () => {
     const pool = getPool();
-    await pool.query("delete from events");
-    await pool.query("delete from profiles");
-    await pool.query("delete from tenants");
+    await pool.query("delete from tenants where name like $1", [PREFIKS + "%"]);
+  });
+
+  afterAll(async () => {
+    const pool = getPool();
+    await pool.query("delete from tenants where name like $1", [PREFIKS + "%"]);
   });
 
   afterAll(async () => {
@@ -22,7 +31,7 @@ describe("CDP core: tenants -> profiles -> events", () => {
 
     const tenant = await pool.query(
       "insert into tenants (name) values ($1) returning id",
-      ["Sklep Testowy"],
+      [PREFIKS + "Sklep Testowy"],
     );
     const tenantId = tenant.rows[0].id;
 
@@ -33,8 +42,10 @@ describe("CDP core: tenants -> profiles -> events", () => {
     const profileId = profile.rows[0].id;
 
     await pool.query(
-      "insert into events (tenant_id, profile_id, event_type, payload) values ($1, $2, $3, $4)",
-      [tenantId, profileId, "order_placed", JSON.stringify({ total: 12900 })],
+      // occurred_at jest teraz obowiazkowe (AD-10): baza nie podstawi daty importu
+      `insert into events (tenant_id, profile_id, event_type, payload, occurred_at)
+       values ($1, $2, $3, $4, $5)`,
+      [tenantId, profileId, "order_placed", JSON.stringify({ total: 12900 }), "2026-01-15T10:00:00Z"],
     );
 
     const events = await pool.query(
@@ -52,11 +63,11 @@ describe("CDP core: tenants -> profiles -> events", () => {
 
     const tenantA = await pool.query(
       "insert into tenants (name) values ($1) returning id",
-      ["Tenant A"],
+      [PREFIKS + "Tenant A"],
     );
     const tenantB = await pool.query(
       "insert into tenants (name) values ($1) returning id",
-      ["Tenant B"],
+      [PREFIKS + "Tenant B"],
     );
     const profileInTenantA = await pool.query(
       "insert into profiles (tenant_id, email) values ($1, $2) returning id",
@@ -66,7 +77,8 @@ describe("CDP core: tenants -> profiles -> events", () => {
     // event zgłoszony pod tenant_id B, ale wskazujący profil należący do tenanta A
     await expect(
       pool.query(
-        "insert into events (tenant_id, profile_id, event_type) values ($1, $2, $3)",
+        `insert into events (tenant_id, profile_id, event_type, occurred_at)
+         values ($1, $2, $3, '2026-02-01T09:30:00Z')`,
         [tenantB.rows[0].id, profileInTenantA.rows[0].id, "order_placed"],
       ),
     ).rejects.toThrow();
@@ -76,7 +88,7 @@ describe("CDP core: tenants -> profiles -> events", () => {
     const pool = getPool();
     const tenant = await pool.query(
       "insert into tenants (name) values ($1) returning id",
-      ["Sklep Testowy Case"],
+      [PREFIKS + "Sklep Testowy Case"],
     );
     const tenantId = tenant.rows[0].id;
 
@@ -97,7 +109,7 @@ describe("CDP core: tenants -> profiles -> events", () => {
     const pool = getPool();
     const tenant = await pool.query(
       "insert into tenants (name) values ($1) returning id",
-      ["Sklep Testowy Anon"],
+      [PREFIKS + "Sklep Testowy Anon"],
     );
     const tenantId = tenant.rows[0].id;
 
@@ -121,7 +133,7 @@ describe("CDP core: tenants -> profiles -> events", () => {
     const pool = getPool();
     const tenant = await pool.query(
       "insert into tenants (name) values ($1) returning id",
-      ["Sklep Testowy Delete"],
+      [PREFIKS + "Sklep Testowy Delete"],
     );
     const tenantId = tenant.rows[0].id;
     const profile = await pool.query(
@@ -129,7 +141,8 @@ describe("CDP core: tenants -> profiles -> events", () => {
       [tenantId, "do-usuniecia@example.com"],
     );
     const event = await pool.query(
-      "insert into events (tenant_id, profile_id, event_type) values ($1, $2, $3) returning id",
+      `insert into events (tenant_id, profile_id, event_type, occurred_at)
+       values ($1, $2, $3, '2026-02-01T09:30:00Z') returning id`,
       [tenantId, profile.rows[0].id, "order_placed"],
     );
 
@@ -147,7 +160,7 @@ describe("CDP core: tenants -> profiles -> events", () => {
     const pool = getPool();
     const tenant = await pool.query(
       "insert into tenants (name) values ($1) returning id",
-      ["Sklep Testowy 2"],
+      [PREFIKS + "Sklep Testowy 2"],
     );
     const tenantId = tenant.rows[0].id;
 

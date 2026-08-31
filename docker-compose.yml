@@ -1,6 +1,6 @@
 services:
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_USER: midrev
       POSTGRES_PASSWORD: midrev
@@ -8,7 +8,10 @@ services:
     ports:
       - "127.0.0.1:5433:5432"
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - pgdata18:/var/lib/postgresql   # PG18 zmienil punkt montowania: katalog danych ladzie w podkatalogu
 
+# pgdata (Postgres 16) zostaje nietknięty na wypadek potrzeby powrotu.
+# Nowy wolumen, bo 18 nie czyta katalogu danych szesnastki.
 volumes:
   pgdata:
+  pgdata18:
