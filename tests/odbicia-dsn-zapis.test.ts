@@ -1,12 +1,16 @@
+import { randomUUID } from "node:crypto";
 import { createServer, type Server, type Socket } from "node:net";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { closePool, getPool } from "../src/adapters/db/pool";
 import { Sekret } from "../src/adapters/crypto";
 import { KlientImap } from "../src/adapters/email/imap";
 import { hashAdresu } from "../src/adapters/hash-adresu";
-import { anonimizujOdbicia, eksportujOdbicia, pobierzOdbicia, pozostaleDaneOdbic, przetworzRaport } from "../src/usecases/wysylka/odbicia";
+import { anonimizujOdbicia, eksportujOdbicia, pobierzOdbicia, pozostaleDaneOdbic, przetworzRaport, przytnijDateRaportu } from "../src/usecases/wysylka/odbicia";
 import { wskaznikiReputacji } from "../src/usecases/wysylka/zaangazowanie";
-import { zapiszSkrzynke, odczytajSkrzynke, testujSkrzynke, zaladujSkrzynke } from "../src/usecases/wysylka-konfiguracja/skrzynka-zwrotna";
+import { zapiszSkrzynke, odczytajSkrzynke, testujSkrzynke, zaladujSkrzynke, zapiszKursorSkrzynki, zapiszPrzebiegSkrzynki } from "../src/usecases/wysylka-konfiguracja/skrzynka-zwrotna";
+import { config } from "../src/config";
+import { HANDLERY_ODBICIA, zaplanujOdbicia } from "../src/jobs/handlery-odbicia";
+import type { Zadanie } from "../src/jobs/kolejka";
 import {
   gmailTwardeOdbicie,
   microsoftTwardeOdbicie,
@@ -30,6 +34,10 @@ interface MailNaSerwerze {
   uid: number;
   surowy: string;
   seen: boolean;
+  /** serwer nie wydaje tej wiadomości (limit sesji, [UNAVAILABLE]): FETCH kończy się NO */
+  zepsuty?: boolean;
+  /** serwer odmawia oznaczenia jako przeczytanej: STORE kończy się NO */
+  storeNie?: boolean;
 }
 
 /** Minimalny serwer IMAP na potrzeby testu (bez TLS; klient dopuszcza to tylko dla hosta deweloperskiego). */
@@ -77,6 +85,10 @@ function falszywyImap(skrzynka: MailNaSerwerze[], opcje: { uidvalidity: number; 
           s.write(`${tag} OK Fetch completed.\r\n`);
           return;
         }
+        if (w.zepsuty) {
+          s.write(`${tag} NO [UNAVAILABLE] Temporary server failure, try again later.\r\n`);
+          return;
+        }
         const bajty = Buffer.from(w.surowy, "utf8");
         const czesc = bajty.subarray(0, Number(fetch[2]));
         s.write(Buffer.concat([
@@ -89,6 +101,10 @@ function falszywyImap(skrzynka: MailNaSerwerze[], opcje: { uidvalidity: number; 
       const store = /^UID STORE (\d+) \+FLAGS\.SILENT \(\\Seen\)$/i.exec(komenda);
       if (store) {
         const w = skrzynka.find((x) => x.uid === Number(store[1]));
+        if (w?.storeNie) {
+          s.write(`${tag} NO [CANNOT] Store failed\r\n`);
+          return;
+        }
         if (w) w.seen = true;
         s.write(`${tag} OK Store completed.\r\n`);
         return;
@@ -198,7 +214,7 @@ describe("Odbicia ze skrzynki zwrotnej: zapis do bazy", () => {
 
   afterAll(async () => {
     const pool = getPool();
-    const adresy = ["dsn-nieistnieje@gmail.com", "nikt@firma-klienta.pl", "ktos@yahoo.com", "zly@stary-hosting.pl", "po-adresie@example.test"];
+    const adresy = ["dsn-nieistnieje@gmail.com", "nikt@firma-klienta.pl", "ktos@yahoo.com", "zly@stary-hosting.pl", "po-adresie@example.test", "wolny@serwer-lezy.pl", "przyszlosc@example.test", "po-trujacej@example.test", "nul-w-temacie@example.test", "store-nie@example.test", "qmail-4xx@stary-hosting.pl"];
     // także zaślepki zanonimizowanych adresów: kasowanie tylko po email zostawiało je w bazie
     // i każdy następny przebieg padał na „globalne = 0”
     await pool.query("delete from suppressions where email = any($1) or email_hash = any($2)", [adresy, adresy.map(hashAdresu)]);
@@ -291,9 +307,24 @@ describe("Odbicia ze skrzynki zwrotnej: zapis do bazy", () => {
     expect(lokalne.rowCount).toBe(0);
   });
 
-  it("Postfix opóźnienie 4.4.1: miękkie odbicie bez wykluczenia", async () => {
+  it("Postfix opóźnienie 4.4.1: tylko rejestr (wynik 'opoznienie'), BEZ zdarzenia i bez zmiany stanu wiadomości", async () => {
     const { wyniki } = await przetworzRaport(tenantId, postfixOpoznienie(msgid.opoznienie));
-    expect(wyniki[0]).toMatchObject({ wynik: "zapisane", typZdarzenia: "bounced", klasa: "soft", kodSmtp: "4.4.1" });
+    expect(wyniki[0]).toMatchObject({ wynik: "opoznienie", typZdarzenia: null, klasa: null, kodSmtp: "4.4.1", messageId: messageId.opoznienie, dopasowanie: "message_id" });
+    expect((await zdarzenia(messageId.opoznienie)).map((e) => e.event_type)).toEqual(["sent"]);
+    const stan = await getPool().query("select current_state from messages where id = $1", [messageId.opoznienie]);
+    expect(stan.rows[0].current_state).toBe("sent");
+  });
+
+  it("najpierw opóźnienie, potem finalne 5.1.1: dokładnie jedno bounced/hard z wykluczeniem (triaż A #3)", async () => {
+    // drugi raport o opóźnieniu (serwer ponawia) — dalej nic
+    await przetworzRaport(tenantId, postfixOpoznienie(msgid.opoznienie));
+    const { wyniki } = await przetworzRaport(tenantId, gmailTwardeOdbicie(msgid.opoznienie, "wolny@serwer-lezy.pl"));
+    expect(wyniki[0]).toMatchObject({ wynik: "zapisane", typZdarzenia: "bounced", klasa: "hard", kodSmtp: "5.1.1" });
+    const odbicia = (await zdarzenia(messageId.opoznienie)).filter((e) => e.event_type === "bounced");
+    expect(odbicia).toHaveLength(1);
+    expect(odbicia[0]).toMatchObject({ bounce_class: "hard", add_exclusion: true, counts_to_rate: true });
+    const lokalne = await getPool().query("select 1 from tenant_suppressions where tenant_id = $1 and email = 'wolny@serwer-lezy.pl'", [tenantId]);
+    expect(lokalne.rowCount).toBe(1);
   });
 
   it("Yahoo ARF: skarga wyklucza adres i wchodzi do wskaźnika skarg", async () => {
@@ -363,11 +394,65 @@ describe("Odbicia ze skrzynki zwrotnej: zapis do bazy", () => {
     expect(r.wyslane).toBe(10);
     expect(r.mianownikOdbic).toBe(10);
     expect(r.mianownikSkarg).toBe(10);
-    // twarde liczące się do wskaźnika: gmail, microsoft, qmail, ofiara, rodo = 5
-    expect(r.odbiciaTwarde).toBe(5);
-    expect(r.wskaznikOdbicTwardych).toBeCloseTo(5 / 10, 6);
+    // twarde liczące się do wskaźnika: gmail, microsoft, qmail, ofiara, rodo, opóźnienie
+    // zakończone finalnym 5.1.1 = 6 (samo opóźnienie nie liczy się ani jako twarde, ani miękkie)
+    expect(r.odbiciaTwarde).toBe(6);
+    expect(r.wskaznikOdbicTwardych).toBeCloseTo(6 / 10, 6);
     expect(r.skargi).toBe(1);
     expect(r.wskaznikSkarg).toBeCloseTo(1 / 10, 6);
+  });
+
+  it("data raportu z przyszłości (> now + 1 h) przycinana do chwili odczytu; przeszłość nietknięta (triaż A, P3)", async () => {
+    const teraz = new Date("2026-09-25T10:00:00Z");
+    expect(przytnijDateRaportu(new Date("2030-01-01T00:00:00Z"), teraz)).toEqual(teraz);
+    expect(przytnijDateRaportu(new Date("2026-09-25T10:59:00Z"), teraz)?.toISOString()).toBe("2026-09-25T10:59:00.000Z");
+    expect(przytnijDateRaportu(new Date("2026-06-01T00:00:00Z"), teraz)?.toISOString()).toBe("2026-06-01T00:00:00.000Z");
+    expect(przytnijDateRaportu(null, teraz)).toBeNull();
+
+    await wiadomosc("przyszlosc", "przyszlosc@example.test");
+    const raport = microsoftTwardeOdbicie(msgid.przyszlosc, "przyszlosc@example.test").replace(/^Date: .*$/m, "Date: Tue, 01 Jan 2030 08:00:00 +0000");
+    const przed = Date.now();
+    const { wyniki } = await przetworzRaport(tenantId, raport);
+    const po = Date.now();
+    expect(wyniki[0]).toMatchObject({ wynik: "zapisane", typZdarzenia: "bounced" });
+    const odbicie = (await zdarzenia(messageId.przyszlosc)).find((e) => e.event_type === "bounced");
+    const kiedy = new Date(odbicie!.occurred_at).getTime();
+    expect(kiedy).toBeGreaterThanOrEqual(przed - 1000);
+    expect(kiedy).toBeLessThanOrEqual(po + 1000);
+    // sprzątanie: ta wiadomość nie wchodzi do liczników testów niżej
+    await getPool().query("delete from messages where id = $1", [messageId.przyszlosc]);
+  });
+
+  it("heurystyka z 4xx (qmail „I've given up”) to raport KOŃCOWY, nie opóźnienie: zapisane jako odbicie (review A2 #6)", async () => {
+    await wiadomosc("qmail4", "qmail-4xx@stary-hosting.pl");
+    const raport = qmailBezDsn(msgid.qmail4, "qmail-4xx@stary-hosting.pl").replace("(#5.1.1)", "(#4.4.7)");
+    const { wyniki } = await przetworzRaport(tenantId, raport);
+    expect(wyniki[0]).toMatchObject({ rodzaj: "heurystyka", wynik: "zapisane", typZdarzenia: "bounced", kodSmtp: "4.4.7" });
+    expect((await zdarzenia(messageId.qmail4)).filter((e) => e.event_type === "bounced")).toHaveLength(1);
+    await getPool().query("delete from messages where id = $1", [messageId.qmail4]);
+  });
+
+  it("mianownik wskaźnika przechodzi na 'delivered' dopiero przy połowie potwierdzeń (triaż A #4)", async () => {
+    const pool = getPool();
+    for (const n of ["pod1", "pod2", "pod3"]) await wiadomosc(n, `${n}@podstawa.example.test`, { tenant: obcyTenantId });
+    const dostarcz = (n: string) =>
+      pool.query("insert into message_events (tenant_id, message_id, event_type, occurred_at) values ($1, $2, 'delivered', now() - interval '30 minutes')", [obcyTenantId, messageId[n]]);
+    await dostarcz("pod1");
+    // jedno potwierdzenie na trzy przekazane: garść DSN o sukcesie nie przestawia podstawy
+    const a = await wskaznikiReputacji(obcyTenantId, 24);
+    expect(a).toMatchObject({ wyslane: 3, dostarczone: 1, podstawa: "sent", mianownikOdbic: 3, mianownikSkarg: 3 });
+    await dostarcz("pod2");
+    const b = await wskaznikiReputacji(obcyTenantId, 24);
+    // mianownik odbić nie spada poniżej przekazanych: max(3, 2 + 0) = 3 (review A2 #7)
+    expect(b).toMatchObject({ wyslane: 3, dostarczone: 2, podstawa: "delivered", mianownikOdbic: 3, mianownikSkarg: 2 });
+    await dostarcz("pod3");
+    await pool.query(
+      `insert into message_events (tenant_id, message_id, event_type, occurred_at, bounce_class, bounce_category, counts_to_rate, add_exclusion)
+       values ($1, $2, 'bounced', now() - interval '20 minutes', 'hard', 'invalid_address', true, false)`,
+      [obcyTenantId, messageId.pod1],
+    );
+    const c = await wskaznikiReputacji(obcyTenantId, 24);
+    expect(c).toMatchObject({ wyslane: 3, dostarczone: 3, odbiciaTwarde: 1, podstawa: "delivered", mianownikOdbic: 4 });
   });
 
   describe("prawdziwy klient IMAP na fałszywym serwerze", () => {
@@ -537,5 +622,123 @@ describe("Odbicia ze skrzynki zwrotnej: zapis do bazy", () => {
       expect(test.ok).toBe(false);
       expect(JSON.stringify(test)).not.toContain(HASLO);
     }, 15_000);
+
+    it("błąd SESJI przy pobraniu przerywa przebieg bez przesuwania kursora; trująca wiadomość dostaje 'blad', reszta idzie (review A2 #4, triaż A #7)", async () => {
+      const pool = getPool();
+      await wiadomosc("po_trujacej", "po-trujacej@example.test");
+      await wiadomosc("nul", "nul-w-temacie@example.test");
+      skrzynka.push(
+        // serwer chwilowo nie wydaje wiadomości (FETCH → NO [UNAVAILABLE]): sprawa sesji
+        { uid: 6, surowy: odpowiedzCzlowieka(msgid.czlowiek), seen: false, zepsuty: true },
+        // raport, którego baza nie przyjmie w rejestrze: bajt NUL w temacie
+        { uid: 7, surowy: microsoftTwardeOdbicie(msgid.nul, "nul-w-temacie@example.test").replace(/^Subject: (.*)$/m, "Subject: $1 \u0000zepsuty"), seen: false },
+        { uid: 8, surowy: microsoftTwardeOdbicie(msgid.po_trujacej, "po-trujacej@example.test"), seen: false },
+      );
+      const kursory: [number, number][] = [];
+      const zapiszKursor = async (uv: number, uid: number) => {
+        kursory.push([uv, uid]);
+      };
+      const rejestr = async () =>
+        (await pool.query(
+          "select imap_uid, kind, outcome, subject, recipient from bounce_reports where tenant_id = $1 and imap_uidvalidity = 4242 and imap_uid in (6, 7, 8) order by imap_uid",
+          [tenantId],
+        )).rows;
+
+      const k = klient();
+      await expect(pobierzOdbicia(tenantId, k, { uidvalidity: 4242, ostatniUid: 5 }, { zapiszKursor })).rejects.toThrow(/UNAVAILABLE/);
+      await k.zamknij();
+      // nic nie oznaczone jako błąd i kursor nie minął niczego
+      expect(kursory).toEqual([]);
+      expect(await rejestr()).toEqual([]);
+
+      // serwer znów wydaje wiadomość: przebieg od tego samego kursora
+      skrzynka.find((w) => w.uid === 6)!.zepsuty = false;
+      const k2 = klient();
+      const p = await pobierzOdbicia(tenantId, k2, { uidvalidity: 4242, ostatniUid: 5 }, { zapiszKursor });
+      await k2.zamknij();
+      expect(p.bledy).toBe(1);
+      expect(p.zapisane).toBe(1);
+      expect(p.nieOdbicia).toBe(1);
+      expect(p.ostatniUid).toBe(8);
+      // kursor przyrostowy: po każdej wiadomości, także po trującej
+      expect(kursory).toEqual([[4242, 6], [4242, 7], [4242, 8]]);
+      expect(await rejestr()).toMatchObject([
+        { imap_uid: "6", kind: "nie_odbicie", outcome: "nie_odbicie" },
+        { imap_uid: "7", kind: "dsn", outcome: "blad", subject: null, recipient: null },
+        { imap_uid: "8", kind: "dsn", outcome: "zapisane" },
+      ]);
+      expect((await zdarzenia(messageId.po_trujacej)).find((e) => e.event_type === "bounced")).toBeTruthy();
+      // trująca zostaje nieprzeczytana (do obejrzenia przez człowieka), dobra oznaczona
+      expect(skrzynka.filter((w) => w.uid >= 6).map((w) => w.seen)).toEqual([false, false, true]);
+      // następny przebieg od kursora nie wraca do trującej
+      const k3 = klient();
+      const p3 = await pobierzOdbicia(tenantId, k3, { uidvalidity: 4242, ostatniUid: 8 });
+      await k3.zamknij();
+      expect(p3).toMatchObject({ przejrzane: 0, bledy: 0 });
+    });
+
+    it("odmowa STORE po zapisie nie robi z raportu błędu: zapisane 1, błędy 0, wiadomość nieprzeczytana (review A2 #5)", async () => {
+      await wiadomosc("store", "store-nie@example.test");
+      skrzynka.push({ uid: 9, surowy: microsoftTwardeOdbicie(msgid.store, "store-nie@example.test"), seen: false, storeNie: true });
+      const k = klient();
+      const p = await pobierzOdbicia(tenantId, k, { uidvalidity: 4242, ostatniUid: 8 });
+      await k.zamknij();
+      expect(p).toMatchObject({ przejrzane: 1, zapisane: 1, bledy: 0, ostatniUid: 9 });
+      const { rows } = await getPool().query("select outcome from bounce_reports where tenant_id = $1 and imap_uidvalidity = 4242 and imap_uid = 9", [tenantId]);
+      expect(rows[0].outcome).toBe("zapisane");
+      expect(skrzynka.find((w) => w.uid === 9)!.seen).toBe(false);
+    });
+
+    it("kursor w bazie tylko rośnie przy tej samej UIDVALIDITY (greatest), a nowa UIDVALIDITY go zastępuje", async () => {
+      const pool = getPool();
+      const kursor = async () =>
+        (await pool.query("select bounce_uidvalidity::int as uv, bounce_last_uid::int as uid from tenant_smtp_configs where tenant_id = $1", [tenantId])).rows[0];
+      await zapiszKursorSkrzynki(tenantId, 4242, 10);
+      expect(await kursor()).toEqual({ uv: 4242, uid: 10 });
+      // spóźniony zapis ze starszego przebiegu nie cofa kursora
+      await zapiszKursorSkrzynki(tenantId, 4242, 7);
+      expect(await kursor()).toEqual({ uv: 4242, uid: 10 });
+      await zapiszPrzebiegSkrzynki(tenantId, { uidvalidity: 4242, ostatniUid: 3, blad: null });
+      expect(await kursor()).toEqual({ uv: 4242, uid: 10 });
+      // skrzynka odtworzona: nowy kursor w całości
+      await zapiszKursorSkrzynki(tenantId, 9999, 2);
+      expect(await kursor()).toEqual({ uv: 9999, uid: 2 });
+    });
+
+    it("złe hasło w tiku: skrzynka wypada z harmonogramu, alert idzie RAZ, nie co 5 minut (triaż A #6)", async () => {
+      const pool = getPool();
+      // fałszywy serwer jako host deweloperski tylko na czas testu (ta sama lista co w .env)
+      const dev = config().SMTP_HOSTY_DEWELOPERSKIE as string[];
+      dev.push(`127.0.0.1:${port}`);
+      const alerty: string[] = [];
+      const szpieg = vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => {
+        alerty.push(a.map(String).join(" "));
+      });
+      try {
+        expect(await zapiszSkrzynke(tenantId, { host: "127.0.0.1", port: String(port), bezpieczenstwo: "none", uzytkownik: "sklep@perf.example.test", noweHaslo: "zle-haslo-XYZ", skrzynka: "INBOX" })).toEqual({ ok: true });
+        // hasło zmienione u dostawcy PO udanym teście: w bazie skrzynka dalej „sprawdzona"
+        await pool.query("update tenant_smtp_configs set bounce_connection_verified_at = now() where tenant_id = $1", [tenantId]);
+        await pool.query("delete from jobs where tenant_id = $1 and kind = 'odbicia'", [tenantId]);
+        const zadanie = { id: randomUUID(), token: "", tenant_id: tenantId, kind: "odbicia", payload: {}, attempts: 1, max_attempts: 5 } as unknown as Zadanie;
+
+        await HANDLERY_ODBICIA.odbicia(zadanie);
+        const po1 = (await pool.query("select bounce_connection_verified_at, bounce_last_error, bounce_last_test_error from tenant_smtp_configs where tenant_id = $1", [tenantId])).rows[0];
+        expect(po1.bounce_connection_verified_at).toBeNull();
+        expect(po1.bounce_last_error).toMatch(/odrzucił login lub hasło/);
+        expect(po1.bounce_last_test_error).toMatch(/odrzucił login lub hasło/);
+        // drugi tik (job, który zdążył wejść do kolejki) nie alarmuje drugi raz
+        await HANDLERY_ODBICIA.odbicia(zadanie);
+        const alertySkrzynki = alerty.filter((l) => l.includes("[alert]") && l.includes("skrzynka zwrotna tenanta") && l.includes(tenantId));
+        expect(alertySkrzynki).toHaveLength(1);
+        expect(alertySkrzynki[0]).not.toContain("zle-haslo-XYZ");
+        // harmonogram już jej nie planuje
+        await zaplanujOdbicia();
+        const joby = await pool.query("select 1 from jobs where tenant_id = $1 and kind = 'odbicia'", [tenantId]);
+        expect(joby.rowCount).toBe(0);
+      } finally {
+        szpieg.mockRestore();
+        dev.splice(dev.indexOf(`127.0.0.1:${port}`), 1);
+      }
+    });
   });
 });

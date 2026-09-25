@@ -1,7 +1,12 @@
 import { getPool } from "../adapters/db/pool";
 import { BladImap } from "../adapters/email/imap";
 import { pobierzOdbicia } from "../usecases/wysylka/odbicia";
-import { zaladujSkrzynke, zapiszPrzebiegSkrzynki } from "../usecases/wysylka-konfiguracja/skrzynka-zwrotna";
+import {
+  wylaczSkrzynkePoBledzie,
+  zaladujSkrzynke,
+  zapiszKursorSkrzynki,
+  zapiszPrzebiegSkrzynki,
+} from "../usecases/wysylka-konfiguracja/skrzynka-zwrotna";
 import { wyslijAlert } from "./alerty";
 import { dodajZadanie, type Zadanie } from "./kolejka";
 
@@ -28,11 +33,13 @@ export const HANDLERY_ODBICIA: Record<string, (z: Zadanie) => Promise<void>> = {
       return;
     }
     try {
-      const p = await pobierzOdbicia(z.tenant_id, s.klient, s.kursor);
+      const p = await pobierzOdbicia(z.tenant_id, s.klient, s.kursor, {
+        zapiszKursor: (uidvalidity, ostatniUid) => zapiszKursorSkrzynki(z.tenant_id, uidvalidity, ostatniUid),
+      });
       await zapiszPrzebiegSkrzynki(z.tenant_id, { uidvalidity: p.uidvalidity, ostatniUid: p.ostatniUid, blad: null });
       if (p.przejrzane > 0) {
         console.log(
-          `[odbicia] tenant ${z.tenant_id}: przejrzane ${p.przejrzane}, zapisane ${p.zapisane}, bez wiadomości ${p.bezWiadomosci}, nie-odbicia ${p.nieOdbicia}, pominięte ${p.pominiete}${p.zostalo ? ", w skrzynce zostało więcej" : ""}`,
+          `[odbicia] tenant ${z.tenant_id}: przejrzane ${p.przejrzane}, zapisane ${p.zapisane}, bez wiadomości ${p.bezWiadomosci}, nie-odbicia ${p.nieOdbicia}, pominięte ${p.pominiete}, błędy ${p.bledy}${p.zostalo ? ", w skrzynce zostało więcej" : ""}`,
         );
       }
       if (p.zostalo) {
@@ -45,8 +52,14 @@ export const HANDLERY_ODBICIA: Record<string, (z: Zadanie) => Promise<void>> = {
       const opis = blad instanceof BladImap ? blad.message : `Odczyt skrzynki nie powiódł się: ${String((blad as Error)?.message ?? blad).replace(/[\r\n]+/g, " ").slice(0, 300)}`;
       await zapiszPrzebiegSkrzynki(z.tenant_id, { blad: opis });
       if (blad instanceof BladImap && (blad.kod === "logowanie" || blad.kod === "tls" || blad.kod === "host")) {
-        // konfiguracja, nie sieć: ponawianie nic nie da, człowiek musi poprawić dane
-        await wyslijAlert(`skrzynka zwrotna tenanta ${z.tenant_id} (${s.host}:${s.port}) nie działa: ${opis}`);
+        // Konfiguracja, nie sieć: ponawianie nic nie da, człowiek musi poprawić dane.
+        // Skrzynka wypada z harmonogramu do udanego testu, a alert idzie RAZ — tylko
+        // z przebiegu, który ją wyłączył (dotąd szedł co 5 minut przy złym haśle).
+        if (await wylaczSkrzynkePoBledzie(z.tenant_id, s.wersja, opis)) {
+          await wyslijAlert(
+            `skrzynka zwrotna tenanta ${z.tenant_id} (${s.host}:${s.port}) nie działa i została wyłączona z odczytu do ponownego testu: ${opis}`,
+          );
+        }
         return;
       }
       throw blad;
@@ -56,11 +69,14 @@ export const HANDLERY_ODBICIA: Record<string, (z: Zadanie) => Promise<void>> = {
   },
 };
 
-/** Tik planujący: po jednym jobie na tenanta ze skonfigurowaną, sprawdzoną skrzynką. */
+/** Tik planujący: po jednym jobie na tenanta ze skonfigurowaną, SPRAWDZONĄ skrzynką. */
 export async function zaplanujOdbicia(): Promise<number> {
   const { rows } = await getPool().query<{ tenant_id: string }>(
     `select c.tenant_id from tenant_smtp_configs c
       where c.bounce_imap_host is not null and c.bounce_imap_password_encrypted is not null
+        -- niesprawdzona albo wyłączona po błędzie konfiguracji: nie planujemy (bez tego
+        -- tik co 5 minut kolejkował job, który od razu kończył się tym samym błędem)
+        and c.bounce_connection_verified_at is not null
         and not exists (
           select 1 from jobs j
            where j.tenant_id = c.tenant_id and j.kind = 'odbicia' and j.status in ('pending', 'running')

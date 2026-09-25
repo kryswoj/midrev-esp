@@ -31,7 +31,13 @@ export interface Nadawca {
 }
 
 export type WyborWysylki =
-  | { rodzaj: "domyslny" | "serwer_klienta"; dostawca: DostawcaWysylki; nadawca: Nadawca }
+  | {
+      rodzaj: "domyslny" | "serwer_klienta";
+      dostawca: DostawcaWysylki;
+      nadawca: Nadawca;
+      /** `updated_at` konfiguracji SMTP (tekst z bazy), z którą wybrano serwer klienta */
+      wersjaSerwera?: string;
+    }
   | { rodzaj: "blokada"; powod: string };
 
 /** Po tylu godzinach wynik weryfikacji DNS uznajemy za przeterminowany. */
@@ -118,7 +124,7 @@ export async function wybierzWysylke(
   // Wstrzyknięty dostawca (testy) zastępuje transport, ale nie zasady: nadawca i FR45
   // są te same co w produkcji.
   if (opcje.dostawca) {
-    return { rodzaj: "serwer_klienta", dostawca: opcje.dostawca, nadawca: nadawcaSerwera(serwer) };
+    return { rodzaj: "serwer_klienta", dostawca: opcje.dostawca, nadawca: nadawcaSerwera(serwer), wersjaSerwera: serwer.wersja };
   }
 
   // Test połączenia PRZED zajęciem partii: zły login albo leżący serwer ma zatrzymać
@@ -144,7 +150,7 @@ export async function wybierzWysylke(
       return { rodzaj: "blokada", powod: `Serwer SMTP ${serwer.host}:${serwer.port} nie przyjmuje połączenia: ${test.komunikat}` };
     }
   }
-  return { rodzaj: "serwer_klienta", dostawca: serwer.adapter, nadawca: nadawcaSerwera(serwer) };
+  return { rodzaj: "serwer_klienta", dostawca: serwer.adapter, nadawca: nadawcaSerwera(serwer), wersjaSerwera: serwer.wersja };
 }
 
 function nadawcaSerwera(serwer: { od: string; odNazwa: string; odpowiedzDo: string | null }): Nadawca {

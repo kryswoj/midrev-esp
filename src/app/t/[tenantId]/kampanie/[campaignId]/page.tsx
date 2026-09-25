@@ -26,6 +26,7 @@ import { PrzyciskKopiuj } from "./kopiuj";
 import { Komunikat, kampaniaKreatora, RamaKreatora } from "./kreator";
 import { listaKontrolnaKampanii, type PunktListy } from "../../../../../usecases/tresc/lista-kontrolna";
 import { zlozWiadomosc } from "../../../../../usecases/wysylka/renderuj";
+import { naPoleCzasuPolskiego } from "../../../../../usecases/wysylka/strefa";
 
 export const dynamic = "force-dynamic";
 
@@ -389,7 +390,7 @@ export default async function Kampania({
                         <label className="block">
                           <span className="etykieta mb-1.5 block">albo zaplanuj na (czas polski)</span>
                           <div className="grid gap-2">
-                            <input type="datetime-local" name="kiedy" defaultValue={naPoleDatyICzasu(kampania.scheduled_at)} className="pole disabled:opacity-50" disabled={niespelnione.length > 0 && !kampania.scheduled_at} aria-label="Termin wysyłki" />
+                            <input type="datetime-local" name="kiedy" defaultValue={naPoleCzasuPolskiego(kampania.scheduled_at)} className="pole disabled:opacity-50" disabled={niespelnione.length > 0 && !kampania.scheduled_at} aria-label="Termin wysyłki" />
                             <button className="przycisk przycisk-wtorny w-full" type="submit" disabled={niespelnione.length > 0 && !kampania.scheduled_at}>
                               {kampania.scheduled_at ? "Zmień albo zdejmij plan" : kampania.status === "approved" ? "Zaplanuj" : "Zaplanuj po akceptacji"}
                             </button>

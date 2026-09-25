@@ -297,9 +297,10 @@ describe("lista kontrolna (B4)", () => {
     expect(bledy.domena).toMatch(/sklep\.pl: część rekordów niepoprawna/);
   });
 
-  it("HREF wielkimi literami albo ze spacjami wokół „=” też nie jest przepisywany przez silnik", () => {
-    expect(linkiDoSledzenia('<a HREF="https://sklep.pl">x</a>')).toEqual([]);
-    expect(linkiDoSledzenia('<a href = "https://sklep.pl">x</a>')).toEqual([]);
+  it("HREF wielkimi literami albo ze spacjami wokół „=” silnik przepisuje, więc liczy się jako śledzony", () => {
+    // ta sama reguła co przepiszLinki (renderuj.ts): regex bez względu na wielkość liter i spacje
+    expect(linkiDoSledzenia('<a HREF="https://sklep.pl">x</a>')).toEqual(["https://sklep.pl"]);
+    expect(linkiDoSledzenia('<a href = "https://sklep.pl">x</a>')).toEqual(["https://sklep.pl"]);
   });
 
   it("<script> w treści (kampania sprzed edytora) blokuje punkt „Treść”", () => {
@@ -307,9 +308,10 @@ describe("lista kontrolna (B4)", () => {
     expect(p.find((x) => x.klucz === "tresc")?.stan).toBe("blad");
   });
 
-  it("href z innego atrybutu albo w pojedynczym cudzysłowie (silnik go nie przepisze) nie jest linkiem śledzonym", () => {
+  it("href schowany w innym atrybucie, komentarzu albo w nie-znaczniku nie jest linkiem; pojedynczy cudzysłów jest", () => {
     expect(linkiDoSledzenia(`<a title=' href="https://shop.example/"'>Sklep</a>`)).toEqual([]);
-    expect(linkiDoSledzenia(`<!-- href="https://shop.example/" --><a href='https://shop.example/'>Sklep</a>`)).toEqual([]);
+    // komentarz się nie liczy, prawdziwy <a> w pojedynczym cudzysłowie silnik przepisuje
+    expect(linkiDoSledzenia(`<!-- href="https://shop.example/" --><a href='https://shop.example/'>Sklep</a>`)).toEqual(["https://shop.example/"]);
     expect(linkiDoSledzenia(`<a\u00a0href="https://shop.example/">x</a>`)).toEqual([]);
   });
 
@@ -320,7 +322,7 @@ describe("lista kontrolna (B4)", () => {
 
   it("link to tylko to, co przepisze silnik (mailto i względne się nie liczą)", () => {
     expect(linkiDoSledzenia('<a href="mailto:a@b.pl">m</a><a href="/x">r</a>')).toEqual([]);
-    expect(linkiDoSledzenia(`<a href='https://s.pl'>pojedynczy cudzysłów</a>`)).toEqual([]);
+    expect(linkiDoSledzenia(`<a href='https://s.pl'>pojedynczy cudzysłów</a>`)).toEqual(["https://s.pl"]);
   });
 
   it("uwagi z renderu nie blokują, ale są widoczne", () => {

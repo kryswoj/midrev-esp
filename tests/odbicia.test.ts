@@ -348,7 +348,11 @@ describe("Klasyfikacja odbić od końca do końca (A2)", () => {
     // supresja dostawcy + odrzucona treść + odmowa przy handoffie
     expect(r.odrzuconePrzedWysylka).toBe(3);
     expect(r.skargi).toBe(1);
-    expect(r.wskaznikOdbicTwardych).toBeCloseTo(1 / 6, 6);
+    // mianownik odbić przy podstawie delivered: max(przekazane, dostarczone + twarde)
+    // (review A2 #7) — nie spada poniżej liczby wiadomości przekazanych serwerowi
+    expect(r.podstawa).toBe("delivered");
+    expect(r.mianownikOdbic).toBe(Math.max(r.wyslane, 6));
+    expect(r.wskaznikOdbicTwardych).toBeCloseTo(1 / Math.max(r.wyslane, 6), 6);
     expect(r.wskaznikSkarg).toBeCloseTo(1 / 5, 6);
     // odbicie sprzed kwartału jest w bazie, ale POZA oknem raportu
     const szerokie = await wskaznikiReputacji(tenantId, 24 * 365);

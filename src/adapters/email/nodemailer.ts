@@ -44,11 +44,21 @@ export type WynikTestu =
   | { ok: true; cel: CelPolaczenia }
   | { ok: false; kod: string; komunikat: string };
 
-/** Jeden adres, bez CRLF i bez listy: `to` z przecinkiem wysłałby maila do kilku osób. */
-function sprawdzAdres(adres: string): string {
+/**
+ * Jeden adres, bez CRLF i bez listy: `to` z przecinkiem wysłałby maila do kilku osób.
+ * Kształt błędu zależy od tego, CZYJ to adres (review A2 #9): zły nadawca albo Reply-To
+ * to konfiguracja sklepu (ENADAWCA — partia staje, nic nie wyszło), zły odbiorca to
+ * trwała odmowa tej jednej wiadomości (`dropped`), a nie „nieznany" kończący się `held`.
+ */
+function sprawdzAdres(adres: string, czyj: "nadawca" | "odbiorca"): string {
   const czysty = adres.trim();
   if (!czysty || /[\r\n<>,;"\x00-\x1f\s]/.test(czysty) || czysty.split("@").length !== 2) {
-    throw new Error("SMTP: adres odrzucony jako niebezpieczny lub niepoprawny");
+    if (czyj === "nadawca") throw bladNadawcy("adres nadawcy albo odpowiedzi odrzucony jako niebezpieczny lub niepoprawny");
+    // kształt odpowiedzi 5xx (klasyfikacja jak odmowy serwera przy RCPT TO), kod własny:
+    // silnik nie robi z NASZEJ walidacji dowodu do wykluczenia GLOBALNEGO
+    const e = new Error("SMTP: adres odbiorcy odrzucony przed wysyłką jako niepoprawny, dostano: 553 5.1.3 niepoprawna składnia adresu odbiorcy") as Error & { code?: string };
+    e.code = "EADRES_ODBIORCY";
+    throw e;
   }
   return czysty;
 }
@@ -112,29 +122,78 @@ export function opisBleduSmtp(blad: unknown, cel?: { host: string; port: number 
 }
 
 /**
- * Błąd wysyłki w kształcie, który rozumie `klasaBledu` w wyslij-kampanie.ts (ten plik
- * nie zmienia tamtej klasyfikacji, tylko mówi jej językiem):
- *   - odmowa połączenia -> `code` z listy socketu (ECONNREFUSED/...) => przejściowy,
+ * Błąd wysyłki w kształcie, który rozumie `klasaBledu` w wyslij-kampanie.ts:
+ *   - odmowa nawiązania TCP (`connect ECONNREFUSED …` przy CONN) -> `code` z listy
+ *     socketu => przejściowy,
+ *   - błąd ETAPU NADAWCY -> `code: "ENADAWCA"` => partia staje, wiadomości wracają do
+ *     kolejki bez zużycia prób (triaż A, P1). Etap nadawcy to wszystko PRZED pierwszym
+ *     RCPT TO: rozwiązanie hosta, TLS/STARTTLS, powitanie, EHLO/HELO, AUTH (np. 535),
+ *     MAIL FROM (np. 421/432 u Google i M365 przy limicie nadawcy), zniszczone
+ *     połączenie zgłoszone przez API przed rozpoczęciem wysyłki. Żaden z nich nie mówi
+ *     nic o odbiorcy, a do DATA nie doszło, więc mail na pewno nie wyszedł.
+ *     Świadomie POZA tą klasą: EMESSAGE (rozmiar wiadomości — sprawa tej jednej
+ *     wiadomości; jako błąd nadawcy zablokowałaby kolejkę sklepu na zawsze).
  *   - odpowiedź serwera przy RCPT TO / DATA -> "dostano: NNN ..." => 4xx przejściowy,
  *     5xx trwały i klasyfikacja odbicia z kodu,
- *   - wszystko inne (logowanie, TLS, odmowa przy MAIL FROM, timeout) -> bez kodu
- *     odpowiedzi => "nieznany", wiadomość zostaje w sending i rozstrzyga ją rekoncyliacja.
- *     Świadomie: odmowa logowania albo nadawcy to problem KONFIGURACJI serwera, a nie
- *     adresu odbiorcy. Przepuszczenie "535 5.7.8" jako trwałej odmowy wykluczyłoby
- *     odbiorcę za błąd w haśle klienta.
+ *   - wszystko inne (zerwane połączenie, timeout gniazda w trakcie rozmowy) -> bez kodu
+ *     => "nieznany", wiadomość zostaje w sending i rozstrzyga ją rekoncyliacja.
+ *     Przepuszczenie "535 5.7.8" jako trwałej odmowy wykluczyłoby odbiorcę za błąd
+ *     w haśle klienta, a jako „nieznany" wysłałoby całą partię do held.
  */
-function bladWysylki(blad: unknown): Error {
+function czyBladNadawcy(b: BladNodemailera, tresc: string): boolean {
+  const komenda = String(b.command ?? "").toUpperCase();
+  if (b.code === "EMESSAGE") return false;
+  if (b.code === "EAUTH" || b.code === "ETLS" || b.code === "EDNS") return true;
+  if (/^(AUTH|EHLO|HELO|LHLO|STARTTLS|MAIL)\b/.test(komenda)) return true;
+  // API: nodemailer tak oznacza błędy zgłoszone przed rozmową o tej wiadomości
+  // (brak danych logowania, połączenie zniszczone przed startem wysyłki)
+  if (komenda === "API" && (b.code === "ECONNECTION" || b.code === "EAUTH")) return true;
+  // TCP nie zestawione albo serwer nie przywitał się w czasie: rozmowy nie było
+  if (komenda === "CONN" && b.code === "ETIMEDOUT" && /^(Connection timeout|Greeting never received)$/.test(tresc)) return true;
+  // Dławienie w powitaniu (review A2 #1): „421 4.7.0 Too many connections", „421 4.3.2
+  // Service not available" u Google i M365. nodemailer 10 (smtp-connection
+  // _actionGreeting) zgłasza każde powitanie inne niż 220 jako EPROTOCOL/CONN
+  // „Invalid greeting" — dalej niż do powitania rozmowa nie doszła.
+  if (komenda === "CONN" && b.code === "EPROTOCOL" && /^Invalid greeting\b/.test(tresc)) return true;
+  if (!b.code && !b.command) {
+    // Pula (smtp-pool, maxRequeues 0): serwer zamknął TCP, zanim się przywitał.
+    // smtp-connection._onClose zamyka BEZ błędu wyłącznie w stanie oczekiwania na
+    // powitanie (albo po QUIT, gdy wiadomość jest już rozliczona); zamknięcie w każdym
+    // innym stanie, w tym po DATA, daje ECONNECTION/CONN „Connection closed unexpectedly",
+    // które pula oddaje jako błąd i ten komunikat się wtedy nie pojawia.
+    if (/^Reached maximum number of retries after connection was closed$/.test(tresc)) return true;
+    // pool-resource.connect: zamknięcie przed zalogowaniem, jeszcze bez żadnej wiadomości
+    if (/^Unexpected socket close$/.test(tresc)) return true;
+  }
+  return false;
+}
+
+function bladNadawcy(tresc: string): Error {
+  const e = new Error(`SMTP: błąd nadawcy: ${bezNowychLinii(tresc).slice(0, 400)}`) as Error & { code?: string };
+  e.code = "ENADAWCA";
+  return e;
+}
+
+export function bladWysylki(blad: unknown): Error {
+  if (blad instanceof BladHostaSmtp) return bladNadawcy(blad.message);
   const b = (blad ?? {}) as BladNodemailera & { errno?: number; syscall?: string };
   const tresc = String(b.message ?? blad);
-  const socket = tresc.match(/\b(ECONNREFUSED|EHOSTUNREACH|ENETUNREACH)\b/);
+  // Tylko komunikat odmowy zestawienia TCP od Node (`connect ECONNREFUSED 1.2.3.4:25`).
+  // Bez kotwicy regex łapał też kod błędu w dowolnym miejscu komunikatu gniazda (CONN
+  // to także błąd gniazda PO kropce kończącej DATA), a tam mail mógł już wyjść.
+  // Kod gniazda zostaje (ECONNREFUSED/…); silnik traktuje go jak błąd nadawcy: serwer
+  // leży, nic nie wyszło, a ta sama odmowa spotka każdą wiadomość partii.
+  const socket = tresc.match(/^connect (ECONNREFUSED|EHOSTUNREACH|ENETUNREACH)\b/);
   if (b.command === "CONN" && socket) {
     const e = new Error(`SMTP: ${bezNowychLinii(tresc)}`) as Error & { code?: string };
     e.code = socket[1];
     return e;
   }
   const komenda = String(b.command ?? "").toUpperCase();
-  // TYLKO odpowiedź na RCPT TO albo DATA mówi coś o odbiorcy/treści. Odpowiedź bez znanej
-  // komendy (albo przy AUTH/MAIL FROM) to sprawa konfiguracji serwera — idzie jako „nieznany".
+  // opis z odpowiedzią serwera (tam bywa jedyna wskazówka, np. „535 5.7.8"); hasła
+  // w nim nie ma, bo serwer SMTP go nie odsyła
+  if (czyBladNadawcy(b, tresc)) return bladNadawcy(opisBleduSmtp(blad).komunikat);
+  // TYLKO odpowiedź na RCPT TO albo DATA mówi coś o odbiorcy/treści.
   if (b.responseCode && b.response && (komenda.startsWith("RCPT") || komenda.startsWith("DATA"))) {
     return new Error(`SMTP: odmowa przy ${komenda}, dostano: ${bezNowychLinii(b.response)}`);
   }
@@ -176,12 +235,18 @@ export class AdapterNodemailer implements DostawcaWysylki {
       ...(pula
         ? {
             pool: true,
-            // dwa równoległe połączenia: więcej nie przyspiesza przy limitach dostawców
-            // skrzynek, a jedno robi z pętli wysyłki ścisłą kolejkę
-            maxConnections: 2,
+            // jedno połączenie: pętla wysyłki i tak podaje wiadomości po jednej (stan
+            // każdej przechodzi przez bazę przed i po `sendMail`), więc drugie połączenie
+            // niczego nie przyspiesza, a przy limitach dostawców skrzynek tylko szkodzi
+            maxConnections: 1,
             // po stu wiadomościach połączenie jest odnawiane (część serwerów zamyka
             // sesję po N wiadomościach bez ostrzeżenia)
             maxMessages: 100,
+            // Pula NIE ponawia sama (triaż A, P2): domyślnie wiadomość z połączenia, które
+            // padło, wraca do kolejki puli i idzie drugi raz innym połączeniem — także gdy
+            // pierwsze padło już po kropce kończącej DATA. Ponawianie jest wyłącznie
+            // nasze, z naszą idempotencją (stan wiadomości w bazie, rekoncyliacja).
+            maxRequeues: 0,
           }
         : {}),
       // łączymy się z SPRAWDZONYM adresem IP; nazwa idzie tylko do SNI i certyfikatu
@@ -245,9 +310,9 @@ export class AdapterNodemailer implements DostawcaWysylki {
   }
 
   async #nadaj(w: Omit<Wiadomosc, "adresWypisania"> & { adresWypisania?: string }): Promise<WynikWysylki> {
-    const od = sprawdzAdres(w.od);
-    const doAdres = sprawdzAdres(w.do);
-    const odpowiedzDo = w.odpowiedzDo ? sprawdzAdres(w.odpowiedzDo) : undefined;
+    const od = sprawdzAdres(w.od, "nadawca");
+    const odpowiedzDo = w.odpowiedzDo ? sprawdzAdres(w.odpowiedzDo, "nadawca") : undefined;
+    const doAdres = sprawdzAdres(w.do, "odbiorca");
     let cel: CelPolaczenia;
     try {
       cel = await this.#rozwiaz();

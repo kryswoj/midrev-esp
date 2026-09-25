@@ -1,5 +1,6 @@
 import { getPool } from "../../adapters/db/pool";
 import { wyslijAlert } from "../../jobs/alerty";
+import { dodajZadanie } from "../../jobs/kolejka";
 import { wskaznikiReputacji, type WskaznikiReputacji } from "./zaangazowanie";
 
 /**
@@ -197,27 +198,45 @@ export async function sprawdzProgiReputacji(tenantId: string): Promise<WynikProg
  * wskaźnik spada sam z upływem okna 24 h, więc automat wznawiałby wysyłkę dokładnie wtedy,
  * gdy problem przestał być widoczny — a nie wtedy, gdy ktoś go naprawił.
  *
- * Zwraca kampanie, które w chwili wznowienia stały w 'sending' — job wysyłki domknął się
- * po napotkaniu wstrzymania, więc bez ponownego wepchnięcia do kolejki zostałyby w tym
- * stanie na zawsze.
+ * Kampanie, które w chwili wznowienia stały w 'sending' z wiadomościami w kolejce, dostają
+ * nowy job wysyłki — ich job domknął się po napotkaniu wstrzymania, więc bez tego
+ * zostałyby w tym stanie na zawsze. Zdjęcie wstrzymania i wpis jobów idą w JEDNEJ
+ * transakcji (triaż A, P2 #8), tym samym wzorcem co dispatcher i wznowienie kampanii:
+ * awaria między jednym a drugim zostawiała sklep „wznowiony" z kampaniami bez joba,
+ * a drugie kliknięcie już nic nie robiło (wstrzymania nie było).
  */
 export async function wznowWysylkeTenanta(
   tenantId: string,
 ): Promise<{ wznowiony: boolean; doWznowienia: string[] }> {
-  const pool = getPool();
-  const { rowCount } = await pool.query(
-    `update tenants set sending_paused_at = null, sending_pause_reason = null
-      where id = $1 and sending_paused_at is not null`,
-    [tenantId],
-  );
-  if (!rowCount) return { wznowiony: false, doWznowienia: [] };
-
-  const { rows } = await pool.query(
-    `select distinct c.id from campaigns c
-       join messages m on m.tenant_id = c.tenant_id and m.source_type = 'campaign'
-                      and m.source_id = c.id and m.current_state = 'queued'
-      where c.tenant_id = $1 and c.status = 'sending'`,
-    [tenantId],
-  );
-  return { wznowiony: true, doWznowienia: rows.map((r) => r.id as string) };
+  const klient = await getPool().connect();
+  try {
+    await klient.query("begin");
+    const { rowCount } = await klient.query(
+      `update tenants set sending_paused_at = null, sending_pause_reason = null
+        where id = $1 and sending_paused_at is not null`,
+      [tenantId],
+    );
+    if (!rowCount) {
+      await klient.query("rollback");
+      return { wznowiony: false, doWznowienia: [] };
+    }
+    const { rows } = await klient.query(
+      `select distinct c.id from campaigns c
+         join messages m on m.tenant_id = c.tenant_id and m.source_type = 'campaign'
+                        and m.source_id = c.id and m.current_state = 'queued'
+        where c.tenant_id = $1 and c.status = 'sending'`,
+      [tenantId],
+    );
+    const doWznowienia = rows.map((r) => r.id as string);
+    for (const campaignId of doWznowienia) {
+      await dodajZadanie(tenantId, "wyslij_kampanie", { campaignId }, { przez: klient });
+    }
+    await klient.query("commit");
+    return { wznowiony: true, doWznowienia };
+  } catch (blad) {
+    await klient.query("rollback").catch(() => {});
+    throw blad;
+  } finally {
+    klient.release();
+  }
 }

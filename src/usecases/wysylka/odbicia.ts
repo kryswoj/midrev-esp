@@ -1,6 +1,6 @@
 import type { Pool, PoolClient } from "pg";
 import { getPool } from "../../adapters/db/pool";
-import type { SkrzynkaZwrotna } from "../../adapters/email/imap";
+import { BladImap, type SkrzynkaZwrotna } from "../../adapters/email/imap";
 import { parsujRaportZwrotny, type RaportZwrotny } from "../../domain/email/dsn";
 import { zapiszZgloszenieDostawcy, type WynikZgloszenia } from "./zdarzenia-dostawcy";
 
@@ -26,7 +26,7 @@ import { zapiszZgloszenieDostawcy, type WynikZgloszenia } from "./zdarzenia-dost
 
 export interface WynikRaportu {
   rodzaj: RaportZwrotny["rodzaj"];
-  /** 'zapisane' | 'brak_wiadomosci' | 'pominiete' | 'nie_odbicie' | 'brak_daty' */
+  /** 'zapisane' | 'brak_wiadomosci' | 'pominiete' | 'nie_odbicie' | 'brak_daty' | 'opoznienie' | 'blad' */
   wynik: string;
   adres: string | null;
   messageIdOryginalu: string | null;
@@ -40,6 +40,20 @@ export interface WynikRaportu {
 }
 
 const OKNO_DOPASOWANIA_PO_ADRESIE_DNI = 30;
+
+/** Ile raport może „wyprzedzać" nasz zegar (rozjazd zegarów MTA), zanim uznamy datę za bzdurę. */
+const TOLERANCJA_PRZYSZLOSCI_MS = 60 * 60_000;
+
+/**
+ * Data raportu ZE ŹRÓDŁA, ale nie z przyszłości (triaż A, P3): nagłówek Date ustawia
+ * nadawca raportu, a skrzynka zwrotna jest publiczna. Zdarzenie datowane na 2030 rok
+ * wisiałoby w oknie wskaźników reputacji latami. Data dalej niż godzinę przed nami
+ * jest przycinana do chwili odczytu; data z przeszłości zostaje nietknięta.
+ */
+export function przytnijDateRaportu(kiedy: Date | null, teraz = new Date()): Date | null {
+  if (!kiedy) return null;
+  return kiedy.getTime() > teraz.getTime() + TOLERANCJA_PRZYSZLOSCI_MS ? teraz : kiedy;
+}
 
 async function dopasuj(
   tenantId: string,
@@ -89,6 +103,7 @@ export async function przetworzRaport(
   opcje: { dataZapasowa?: Date | null } = {},
 ): Promise<{ raport: RaportZwrotny; wyniki: WynikRaportu[] }> {
   const raport = parsujRaportZwrotny(surowy);
+  const kiedy = przytnijDateRaportu(raport.kiedy ?? opcje.dataZapasowa ?? null);
   const baza = (o: Partial<WynikRaportu>): WynikRaportu => ({
     rodzaj: raport.rodzaj,
     wynik: "pominiete",
@@ -99,14 +114,13 @@ export async function przetworzRaport(
     typZdarzenia: null,
     klasa: null,
     kodSmtp: null,
-    kiedy: raport.kiedy ?? opcje.dataZapasowa ?? null,
+    kiedy,
     temat: raport.temat,
     ...o,
   });
 
   if (raport.rodzaj === "nie_odbicie") return { raport, wyniki: [baza({ wynik: "nie_odbicie" })] };
 
-  const kiedy = raport.kiedy ?? opcje.dataZapasowa ?? null;
   const wyniki: WynikRaportu[] = [];
   for (const o of raport.odbiorcy) {
     if (!kiedy) {
@@ -134,6 +148,19 @@ export async function przetworzRaport(
     // dowodzi tożsamości wiadomości (brak Message-ID = dopasowanie po samym adresie, albo
     // heurystyka bez DSN), nie ma prawa wykluczyć adresu całej platformie. Wykluczenie
     // sklepowe zostaje: jest widoczne w rejestrze raportów i odwracalne z panelu.
+    // Opóźnienie (Action: delayed, 4.x.x) to NIE jest wynik dostarczenia: serwer dalej
+    // próbuje i za godzinę albo trzy dni przyśle raport końcowy. Zapis `bounced` byłby
+    // stanem terminalnym (ranga 3), a zdarzenie jest unikalne per (message_id, typ), więc
+    // późniejsze finalne 5.1.1 przepadłoby w konflikcie i adres nie zostałby wykluczony
+    // (triaż A, P2 #3). Opóźnienie idzie wyłącznie do rejestru raportów.
+    // Tylko prawdziwy DSN z jawnym `Action: delayed` (review A2 #6). Heurystyka nadaje
+    // „delayed" każdemu 4xx, a ostateczne raporty qmaila/Exima („giving up", „retry
+    // timeout exceeded") niosą właśnie 4xx — te idą dalej jako odbicie.
+    if (raport.rodzaj === "dsn" && o.akcja === "delayed") {
+      wyniki.push(baza({ adres: o.adres, wynik: "opoznienie", messageId: dop.messageId, dopasowanie: dop.jak, kodSmtp: o.status ?? null, kiedy }));
+      continue;
+    }
+
     const zaufany = dop.jak === "message_id" && raport.pewnosc === "wysoka";
     const opcjeZapisu = { wykluczenieGlobalne: zaufany };
     let zapis: WynikZgloszenia;
@@ -184,6 +211,8 @@ export interface PodsumowanieOdbic {
   bezWiadomosci: number;
   nieOdbicia: number;
   pominiete: number;
+  /** wiadomości pominięte po błędzie (wpis `blad` w rejestrze), przebieg poszedł dalej */
+  bledy: number;
   ostatniUid: number;
   /** true, gdy w skrzynce zostało więcej niż limit na przebieg */
   zostalo: boolean;
@@ -202,7 +231,15 @@ export async function pobierzOdbicia(
   tenantId: string,
   skrzynka: SkrzynkaZwrotna,
   kursor: { uidvalidity: number | null; ostatniUid: number | null },
-  opcje: { maksNaPrzebieg?: number } = {},
+  opcje: {
+    maksNaPrzebieg?: number;
+    /**
+     * Kursor PRZYROSTOWY (triaż A, P2 #7): wołane po każdej obsłużonej wiadomości.
+     * Przebieg przerwany w połowie (timeout, restart workera) nie zaczyna wtedy od
+     * początku partii, a trująca wiadomość nie trzyma kursora w miejscu.
+     */
+    zapiszKursor?: (uidvalidity: number, ostatniUid: number) => Promise<void>;
+  } = {},
 ): Promise<PodsumowanieOdbic> {
   const pool = getPool();
   const maks = opcje.maksNaPrzebieg ?? MAKS_NA_PRZEBIEG;
@@ -219,6 +256,7 @@ export async function pobierzOdbicia(
     bezWiadomosci: 0,
     nieOdbicia: 0,
     pominiete: 0,
+    bledy: 0,
     ostatniUid: od,
     zostalo: uidy.length > maks,
   };
@@ -226,21 +264,48 @@ export async function pobierzOdbicia(
   for (const uid of doPrzejrzenia) {
     // druga warstwa idempotencji: raport już przetworzony (crash przed STORE \Seen)
     const { rows: juz } = await pool.query(
-      "select kind from bounce_reports where tenant_id = $1 and imap_uidvalidity = $2 and imap_uid = $3",
+      "select kind, outcome from bounce_reports where tenant_id = $1 and imap_uidvalidity = $2 and imap_uid = $3",
       [tenantId, uidvalidity, uid],
     );
     if (juz[0]) {
-      if (juz[0].kind !== "nie_odbicie") await skrzynka.oznaczPrzeczytane(uid);
-      p.ostatniUid = Math.max(p.ostatniUid, uid);
-      continue;
+      if (juz[0].kind !== "nie_odbicie" && juz[0].outcome !== "blad") await skrzynka.oznaczPrzeczytane(uid);
+    } else {
+      await przetworzJedna(tenantId, skrzynka, uidvalidity, uid, p);
     }
-    const mail = await skrzynka.pobierz(uid);
-    if (!mail) {
-      p.ostatniUid = Math.max(p.ostatniUid, uid);
-      continue;
-    }
-    p.przejrzane++;
+    p.ostatniUid = Math.max(p.ostatniUid, uid);
+    await opcje.zapiszKursor?.(uidvalidity, p.ostatniUid);
+  }
+  return p;
+}
+
+/**
+ * Jedna wiadomość ze skrzynki.
+ *
+ * Granica „wadliwej wiadomości" (review A2 #4): jako `blad` w rejestrze kończą się
+ * WYŁĄCZNIE wyjątki z przetworzenia i zapisu (zepsuty MIME, dane, których baza nie
+ * przyjmie, np. bajt NUL). Błąd pobrania z serwera (`skrzynka.pobierz`, każdy BladImap)
+ * dotyczy SESJI — „NO [LIMIT]", „[UNAVAILABLE]", limit transferu Gmaila — i przerywa
+ * przebieg BEZ przesuwania kursora za tę wiadomość: inaczej do 200 poprawnych DSN
+ * dostawało `blad`, kursor je mijał i twarde odbicia nie trafiały do wykluczeń.
+ * Wiadomość z błędem zostaje nieprzeczytana, żeby człowiek mógł ją obejrzeć.
+ */
+async function przetworzJedna(
+  tenantId: string,
+  skrzynka: SkrzynkaZwrotna,
+  uidvalidity: number,
+  uid: number,
+  p: PodsumowanieOdbic,
+): Promise<void> {
+  const pool = getPool();
+  // poza try: błąd pobrania przerywa przebieg (sesja, nie wiadomość)
+  const mail = await skrzynka.pobierz(uid);
+  if (!mail) return;
+  p.przejrzane++;
+  let rodzaj: RaportZwrotny["rodzaj"] | null = null;
+  let oznaczyc = false;
+  try {
     const { raport, wyniki } = await przetworzRaport(tenantId, mail.surowy, { dataZapasowa: mail.dataSerwera });
+    rodzaj = raport.rodzaj;
     const glowny = wyniki[0];
     await pool.query(
       `insert into bounce_reports
@@ -253,7 +318,7 @@ export async function pobierzOdbicia(
         glowny.adres, raport.rodzaj, glowny.wynik, glowny.typZdarzenia, glowny.klasa, glowny.kodSmtp,
         raport.temat.slice(0, 500),
         // data ZE ŹRÓDŁA; gdy raport nie ma daty — INTERNALDATE serwera; zapis wymaga jakiejś
-        glowny.kiedy ?? mail.dataSerwera ?? new Date(),
+        glowny.kiedy ?? przytnijDateRaportu(mail.dataSerwera) ?? new Date(),
       ],
     );
     for (const w of wyniki) {
@@ -262,10 +327,33 @@ export async function pobierzOdbicia(
       else if (w.wynik === "nie_odbicie") p.nieOdbicia++;
       else p.pominiete++;
     }
-    if (raport.rodzaj !== "nie_odbicie") await skrzynka.oznaczPrzeczytane(uid);
-    p.ostatniUid = Math.max(p.ostatniUid, uid);
+    oznaczyc = raport.rodzaj !== "nie_odbicie";
+  } catch (blad) {
+    p.bledy++;
+    const opis = String((blad as Error)?.message ?? blad).replace(/[\r\n\x00]+/g, " ").slice(0, 300);
+    console.error(`[odbicia] tenant ${tenantId}: wiadomość UID ${uid} (UIDVALIDITY ${uidvalidity}) pominięta po błędzie: ${opis}`);
+    // Wpis bez tematu i adresu: to one bywają przyczyną (np. bajt NUL, którego Postgres
+    // nie przyjmie w tekście). Rodzaj z parsera, gdy do niego doszło.
+    await pool.query(
+      `insert into bounce_reports (tenant_id, imap_uidvalidity, imap_uid, kind, outcome, received_at)
+       values ($1, $2, $3, $4, 'blad', $5)
+       on conflict (tenant_id, imap_uidvalidity, imap_uid) do nothing`,
+      [tenantId, uidvalidity, uid, rodzaj ?? "nie_odbicie", przytnijDateRaportu(mail.dataSerwera) ?? new Date()],
+    );
+    return;
   }
-  return p;
+  // STORE osobno (review A2 #5): raport jest już zapisany i policzony, więc odmowa
+  // oznaczenia nie może zamienić go w „błąd". Zerwana sesja przerywa przebieg (następne
+  // pobranie i tak by padło); odmowa samego STORE zostawia wiadomość nieprzeczytaną —
+  // przy ponownym przejściu rejestr (UIDVALIDITY+UID) pozwoli ją oznaczyć bez ponownego zapisu.
+  if (oznaczyc) {
+    try {
+      await skrzynka.oznaczPrzeczytane(uid);
+    } catch (blad) {
+      if (blad instanceof BladImap && (blad.kod === "polaczenie" || blad.kod === "timeout")) throw blad;
+      console.warn(`[odbicia] tenant ${tenantId}: UID ${uid} zapisany, ale serwer nie oznaczył go jako przeczytany: ${String((blad as Error)?.message ?? blad).slice(0, 200)}`);
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

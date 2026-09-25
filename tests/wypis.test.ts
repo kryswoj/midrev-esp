@@ -72,6 +72,18 @@ describe("Wypis: GET pokazuje, POST wypisuje", () => {
     expect(w[0].reason).toContain("List-Unsubscribe");
   });
 
+  it("POST one-click BEZ nagłówka content-type (część klientów pocztowych) też wypisuje", async () => {
+    // body jako bajty: NextRequest nie dopisuje wtedy content-type (przy stringu dodałby text/plain)
+    const zadanie = new NextRequest(url, { method: "POST", body: new TextEncoder().encode("List-Unsubscribe=One-Click") });
+    expect(zadanie.headers.get("content-type")).toBeNull();
+    const odp = await POST(zadanie, ctx);
+    expect(odp.status).toBe(200);
+    expect(await odp.text()).toBe("OK");
+    const w = await wpisy();
+    expect(w).toHaveLength(2);
+    expect(w[1]).toMatchObject({ action: "suppressed", actor: "odbiorca" });
+  });
+
   it("POST z przycisku (potwierdzam=tak) wypisuje i pokazuje potwierdzenie ze sklepem", async () => {
     const odp = await POST(
       new NextRequest(url, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: "potwierdzam=tak" }),
@@ -81,7 +93,7 @@ describe("Wypis: GET pokazuje, POST wypisuje", () => {
     const html = await odp.text();
     expect(html).toContain("Wypisano");
     expect(html).toContain("WYP Sklep &lt;Zażółć&gt; &amp; Spółka");
-    expect(await wpisy()).toHaveLength(2);
+    expect(await wpisy()).toHaveLength(3);
   });
 
   it("nieznany albo śmieciowy token: 404 ze stroną (GET/POST z przycisku) albo gołym 404 (one-click)", async () => {

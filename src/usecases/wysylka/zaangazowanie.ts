@@ -255,7 +255,11 @@ export interface WskaznikiReputacji {
    *     Wtedy podstawą jest liczba wiadomości PRZEKAZANYCH serwerowi (`sent`), która
    *     zawiera te odbite — to ta sama definicja co „bounce rate = odbicia / wysłane"
    *     u Postmarka i Mailguna.
-   * Wybór jest automatyczny: choć jedno `delivered` w oknie = ścieżka z potwierdzeniami.
+   * Wybór jest automatyczny: `delivered` dopiero, gdy potwierdzeń jest co najmniej połowa
+   * przekazanych (triaż A, P2 #4). Dotąd wystarczało jedno: przy własnym SMTP garść DSN
+   * o sukcesie (NOTIFY=SUCCESS, część serwerów odsyła je sama) przerzucała mianownik
+   * z tysięcy przekazanych na kilka dostarczonych i wskaźnik odbić skakał o rzędy
+   * wielkości — fałszywe wstrzymanie sklepu.
    */
   podstawa: "delivered" | "sent";
   mianownikOdbic: number;
@@ -292,8 +296,12 @@ export async function wskaznikiReputacji(
     [tenantId, oknoGodzin],
   );
   const w = rows[0];
-  const podstawa: WskaznikiReputacji["podstawa"] = w.dostarczone > 0 ? "delivered" : "sent";
-  const mianownikOdbic = podstawa === "delivered" ? w.dostarczone + w.twarde : w.wyslane;
+  const podstawa: WskaznikiReputacji["podstawa"] =
+    w.dostarczone > 0 && w.dostarczone * 2 >= w.wyslane ? "delivered" : "sent";
+  // Przy podstawie `delivered` mianownik nie może spaść PONIŻEJ przekazanych (review A2
+  // #7): przy połowie potwierdzeń (dostarczone + twarde) bywa o połowę mniejsze niż
+  // wysłane, co podwaja wskaźnik i wstrzymuje sklep bez powodu.
+  const mianownikOdbic = podstawa === "delivered" ? Math.max(w.wyslane, w.dostarczone + w.twarde) : w.wyslane;
   const mianownikSkarg = podstawa === "delivered" ? w.dostarczone : w.wyslane;
   return {
     wyslane: w.wyslane,

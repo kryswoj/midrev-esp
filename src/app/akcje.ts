@@ -606,15 +606,11 @@ export async function wznowWysylkeSklepuAkcja(formularz: FormData) {
   const { tenantId } = await wymaganyTenant(formularz.get("tenantId"));
   const wrocDo = String(formularz.get("wrocDo") ?? `/t/${tenantId}/kampanie`);
   const { wznowWysylkeTenanta } = await import("../usecases/wysylka/reputacja");
-  const { dodajZadanie } = await import("../jobs/kolejka");
+  // Zdjęcie wstrzymania i nowe joby kampanii idą w jednej transakcji w use-case
+  // (wznowWysylkeTenanta) — bez tego wznowienie mogło zostawić kampanie bez joba.
   const wynik = await wznowWysylkeTenanta(tenantId);
   if (!wynik.wznowiony) {
     redirect(`${wrocDo}?blad=${encodeURIComponent("Wysyłka tego sklepu nie była wstrzymana")}`);
-  }
-  // Kampanie, których job zakończył się na wstrzymaniu, same z siebie nie ruszą —
-  // job już się domknął. Bez tego wznowienie byłoby zdjęciem blokady i niczym więcej.
-  for (const campaignId of wynik.doWznowienia) {
-    await dodajZadanie(tenantId, "wyslij_kampanie", { campaignId });
   }
   revalidatePath(wrocDo);
   redirect(

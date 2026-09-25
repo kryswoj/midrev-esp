@@ -200,7 +200,7 @@ const PUSTE = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input
 interface StanSkanu {
   /** adresy z prawdziwych <a href> w widocznej części dokumentu */
   linki: string[];
-  /** linki, które silnik przepisze na śledzone: widoczne <a> z href="http(s)://…" w PODWÓJNYM cudzysłowie */
+  /** linki, które silnik przepisze na śledzone: widoczne <a> z href na http(s), zapisy jak w przepiszLinki */
   sledzone: string[];
   /** elementy otwarte na końcu (bez pustych), od najbardziej zewnętrznego */
   stos: string[];
@@ -390,9 +390,12 @@ function skanuj(html: string, znaczniki?: ZnacznikZrodlowy[]): StanSkanu {
       const href = z.atrybuty.find((a) => a.nazwa === "href");
       if (href) {
         linki.push(href.wartosc);
-        // silnik przepisuje dokładnie zapis `href="http(s)://…"` — inne formy (HREF, spacje
-        // wokół „=”, pojedynczy cudzysłów) zostają nieprzepisane
-        if (/^href="https?:\/\/[^"]+"$/.test(href.zrodlo)) sledzone.push(href.wartosc);
+        // Ten sam zapis, który przepisuje silnik (`przepiszLinki` w usecases/wysylka/renderuj.ts):
+        // href bez względu na wielkość liter, spacje wokół „=”, podwójny, pojedynczy albo
+        // brak cudzysłowu, schemat http(s) bez względu na wielkość liter. Dotąd lista
+        // kontrolna uznawała za śledzony tylko `href="http(s)://…"` i pokazywała „brak
+        // śledzonych linków" przy mailu, w którym silnik i tak je przepisze.
+        if (/^href\s*=\s*(?:"https?:\/\/[^"]*"|'https?:\/\/[^']*'|https?:\/\/[^\s>"']+)$/i.test(href.zrodlo)) sledzone.push(href.wartosc);
       }
     }
     // samozamknięcie (<template/>) parser ignoruje dla elementów niepustych; details i dialog
@@ -531,7 +534,7 @@ export function prawdziweLinki(html: string): string[] {
 
 /**
  * Widoczne linki, które `przepiszLinki` silnika na pewno przepisze: prawdziwe `<a>` z atrybutem
- * `href="http(s)://…"` w podwójnym cudzysłowie (silnik łapie dokładnie ten zapis).
+ * href na adres http(s) — w tych samych zapisach, które łapie regex silnika.
  */
 export function linkiSledzone(html: string): string[] {
   return skanuj(html).sledzone;

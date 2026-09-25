@@ -9,7 +9,10 @@ import { zapiszZdarzenie } from "./wyslij-kampanie";
  * wiadomość przechodzi w 'held' (stan nieznany u dostawcy) i idzie alert do człowieka,
  * który wyjaśnia sprawę po idempotencyKey / Message-ID u dostawcy.
  *
- * Zegarem jest claimed_at (moment zajęcia ostatniej partii), nie occurred_at zdarzenia
+ * Zegarem jest claimed_at — dla wiadomości w 'sending' to moment przejścia W TĘ próbę
+ * (wyslijPartie odświeża go per wiadomość w tx1, triaż A #2), nie moment zajęcia całej
+ * partii: inaczej wolny SMTP i partia 100 robiły z ostatnich wiadomości „zawieszone"
+ * w trakcie wysyłki. Nie occurred_at zdarzenia
  * 'sending': zdarzenie jest unikalne per (message_id, event_type) i przy ponowieniu po
  * błędzie przejściowym nie odświeża się, więc kłamałoby o wieku bieżącej próby.
  */

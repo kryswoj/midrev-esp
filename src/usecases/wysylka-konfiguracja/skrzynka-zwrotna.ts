@@ -280,16 +280,51 @@ export async function zapiszPrzebiegSkrzynki(
   tenantId: string,
   wynik: { uidvalidity?: number; ostatniUid?: number; blad: string | null },
 ): Promise<void> {
-  // kursor podawany tylko po udanym przebiegu (pobierzOdbicia liczy go od poprzedniego,
-  // więc nigdy nie cofa); po błędzie zostaje stary i następny tik czyta od tego miejsca
   await getPool().query(
     `update tenant_smtp_configs
-        set bounce_last_checked_at = now(), bounce_last_error = $2,
-            bounce_uidvalidity = coalesce($3::bigint, bounce_uidvalidity),
-            bounce_last_uid = coalesce($4::bigint, bounce_last_uid)
+        set bounce_last_checked_at = now(), bounce_last_error = $2
       where tenant_id = $1`,
-    [tenantId, wynik.blad, wynik.uidvalidity ?? null, wynik.ostatniUid ?? null],
+    [tenantId, wynik.blad],
   );
+  if (wynik.uidvalidity != null && wynik.ostatniUid != null) {
+    await zapiszKursorSkrzynki(tenantId, wynik.uidvalidity, wynik.ostatniUid);
+  }
+}
+
+/**
+ * Kursor IMAP zapisywany przyrostowo, po każdej wiadomości (triaż A, P2 #7). Przy tej
+ * samej UIDVALIDITY kursor tylko rośnie (`greatest`): dwa równoległe przebiegi albo
+ * spóźniony zapis ze starszego przebiegu nie cofną go i nie każą czytać raportów drugi
+ * raz. Przy innej UIDVALIDITY (skrzynka odtworzona) nowy kursor zastępuje stary w całości.
+ */
+export async function zapiszKursorSkrzynki(tenantId: string, uidvalidity: number, ostatniUid: number): Promise<void> {
+  await getPool().query(
+    `update tenant_smtp_configs
+        set bounce_last_uid = case
+              when bounce_uidvalidity = $2::bigint then greatest(coalesce(bounce_last_uid, 0), $3::bigint)
+              else $3::bigint end,
+            bounce_uidvalidity = $2::bigint
+      where tenant_id = $1`,
+    [tenantId, uidvalidity, ostatniUid],
+  );
+}
+
+/**
+ * Skrzynka z błędem KONFIGURACJI (złe hasło, certyfikat, host) wypada z harmonogramu:
+ * `bounce_connection_verified_at = null`, jak po zmianie ustawień. Wraca po udanym
+ * „Testuj skrzynkę". Zwraca true WYŁĄCZNIE przebiegowi, który ją wyłączył — dzięki temu
+ * alert idzie raz, a nie co 5 minut z każdego tiku (triaż A, P2 #6). Warunek na wersję
+ * konfiguracji: błąd starej konfiguracji nie może wyłączyć nowej, zapisanej w trakcie.
+ */
+export async function wylaczSkrzynkePoBledzie(tenantId: string, wersja: string, blad: string): Promise<boolean> {
+  const { rowCount } = await getPool().query(
+    `update tenant_smtp_configs
+        set bounce_connection_verified_at = null, bounce_last_test_error = $3
+      where tenant_id = $1 and coalesce(bounce_updated_at, updated_at)::text = $2
+        and bounce_connection_verified_at is not null`,
+    [tenantId, wersja, blad],
+  );
+  return (rowCount ?? 0) > 0;
 }
 
 export interface RaportWPanelu {

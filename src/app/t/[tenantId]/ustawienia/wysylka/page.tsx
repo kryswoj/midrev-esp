@@ -296,6 +296,8 @@ const NAZWY_WYNIKU: Record<string, string> = {
   pominiete: "pominięte",
   brak_daty: "bez daty",
   nie_jest_skarga: "nie jest skargą",
+  opoznienie: "opóźnienie (serwer ponawia)",
+  blad: "błąd odczytu",
 };
 const NAZWY_KLASY: Record<string, string> = { hard: "twarde", soft: "miękkie", undetermined: "nieustalone" };
 

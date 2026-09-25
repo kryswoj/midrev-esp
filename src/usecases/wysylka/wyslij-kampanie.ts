@@ -9,6 +9,7 @@ import { tokenOtwarcia, zlozWiadomosc } from "./renderuj";
 import { politykaSledzenia } from "./zgody";
 import { policzOdbiorcow } from "../policz-odbiorcow";
 import { adresNadawcyTenanta, wybierzWysylke } from "../wysylka-konfiguracja/nadawca";
+import { wyslijAlert } from "../../jobs/alerty";
 
 /**
  * Rangi stanów wiadomości (AD-22). Projekcja current_state na messages jest aktualizowana
@@ -183,7 +184,7 @@ async function domenaWysylkowa(tenantId: string, adresOd: string): Promise<strin
  * Tokeny powstają w Node (CSPRNG), nie w bazie: `gen_random_bytes` wymaga pgcrypto, a
  * hash pixela i tak liczymy tutaj. Do bazy idą jako tablice do `unnest`.
  */
-export async function zbudujWiadomosciKampanii(tenantId: string, campaignId: string) {
+export async function zbudujWiadomosciKampanii(tenantId: string, campaignId: string, opcje: { porcja?: number } = {}) {
   const pool = getPool();
   const { rows: kampanie } = await pool.query(
     `select c.name, c.subject, c.content, t.name as nazwa_sklepu
@@ -223,75 +224,87 @@ export async function zbudujWiadomosciKampanii(tenantId: string, campaignId: str
   const bezKlikZOtw = szablon(false, true);
   const bezKlikBezOtw = szablon(false, false);
 
-  const ids = odbiorcy.doceloweIds;
-  const clickTokeny = ids.map(() => token());
-  const unsubTokeny = ids.map(() => token());
-  const pixelTokeny = clickTokeny.map((t) => tokenOtwarcia(t));
+  // Porcjami po PORCJA_BUDOWY odbiorców (triaż A, P3): jedno zapytanie na 50 tys.
+  // odbiorców to cztery tablice po 50 tys. elementów w parametrach i jedna długa
+  // transakcja trzymająca blokady. Każda porcja jest sama w sobie idempotentna (ON
+  // CONFLICT), więc awaria w połowie zostawia część wiadomości, a ponowienie dokłada resztę.
+  let utworzone = 0;
+  const porcja = Math.max(1, Math.floor(opcje.porcja ?? PORCJA_BUDOWY));
+  for (let od = 0; od < odbiorcy.doceloweIds.length; od += porcja) {
+    const ids = odbiorcy.doceloweIds.slice(od, od + porcja);
+    const clickTokeny = ids.map(() => token());
+    const unsubTokeny = ids.map(() => token());
+    const pixelTokeny = clickTokeny.map((t) => tokenOtwarcia(t));
 
-  const wynik = await pool.query(
-    `with polityka as (
-       select $12::text as otwarcia, $13::text as klikniecia
-     ),
-     odbiorca as (
-       select d.profile_id, d.click_token, d.unsub_token, d.pixel_token, p.email
-         from unnest($3::uuid[], $4::text[], $5::text[], $6::text[])
-                as d(profile_id, click_token, unsub_token, pixel_token)
-         join profiles p on p.tenant_id = $1 and p.id = d.profile_id
-        where p.email is not null
-     ),
-     wpisy as (
-       -- ostatni wpis w rejestrze per kanał (AD-16): occurred_at, potem recorded_at
-       select o.profile_id,
-              (select (c.state = 'granted' and (c.valid_until is null or c.valid_until > now()))
-                 from consents c
-                where c.tenant_id = $1 and c.profile_id = o.profile_id and c.channel = 'email_open_tracking'
-                order by c.occurred_at desc, c.recorded_at desc limit 1) as otwarcia_wpis,
-              (select (c.state = 'granted' and (c.valid_until is null or c.valid_until > now()))
-                 from consents c
-                where c.tenant_id = $1 and c.profile_id = o.profile_id and c.channel = 'email_click_tracking'
-                order by c.occurred_at desc, c.recorded_at desc limit 1) as klikniecia_wpis
-         from odbiorca o
-     ),
-     zgody as (
-       -- ta sama reguła co zgodyNaSledzenie: 'wymaga_zgody' = tylko jawna ważna zgoda,
-       -- 'dozwolone' = blokuje wyłącznie jawny wpis, który nie uprawnia
-       select w.profile_id,
-              case when pl.otwarcia is null then false
-                   when pl.otwarcia = 'wymaga_zgody' then coalesce(w.otwarcia_wpis, false)
-                   else coalesce(w.otwarcia_wpis, true) end as otwarcia,
-              case when pl.klikniecia is null then false
-                   when pl.klikniecia = 'wymaga_zgody' then coalesce(w.klikniecia_wpis, false)
-                   else coalesce(w.klikniecia_wpis, true) end as klikniecia
-         from wpisy w cross join polityka pl
-     )
-     insert into messages (tenant_id, profile_id, source_type, source_id, email, subject,
-                           body_html, click_token, unsubscribe_token, links,
-                           sending_domain_id, open_tracking_allowed, click_tracking_allowed)
-     select $1, o.profile_id, 'campaign', $2, o.email, $7,
-            replace(replace(replace(
-              case when z.klikniecia and z.otwarcia then $8
-                   when z.klikniecia then $9
-                   when z.otwarcia then $10
-                   else $11 end,
-              $14, o.pixel_token), $15, o.click_token), $16, o.unsub_token),
-            o.click_token, o.unsub_token,
-            case when z.klikniecia then $17::jsonb else '[]'::jsonb end,
-            $18, z.otwarcia, z.klikniecia
-       from odbiorca o join zgody z on z.profile_id = o.profile_id
-     on conflict (tenant_id, source_type, source_id, profile_id) do nothing`,
-    [
-      tenantId, campaignId, ids, clickTokeny, unsubTokeny, pixelTokeny,
-      kampania.subject,
-      zKlikZOtw.html, zKlikBezOtw.html, bezKlikZOtw.html, bezKlikBezOtw.html,
-      polityka?.otwarcia ?? null, polityka?.klikniecia ?? null,
-      // kolejność podmian: NAJPIERW pixel (hash znacznika kliku), potem klik, potem wypis —
-      // inaczej podmiana kliku zniszczyłaby hash, który go zawiera w formie skrótu
-      znacznikPixel, znacznikKlik, znacznikWypis,
-      JSON.stringify(zKlikZOtw.linki), sendingDomainId,
-    ],
-  );
-  return { utworzone: wynik.rowCount ?? 0, kandydatow: ids.length };
+    const wynik = await pool.query(
+      `with polityka as (
+         select $12::text as otwarcia, $13::text as klikniecia
+       ),
+       odbiorca as (
+         select d.profile_id, d.click_token, d.unsub_token, d.pixel_token, p.email
+           from unnest($3::uuid[], $4::text[], $5::text[], $6::text[])
+                  as d(profile_id, click_token, unsub_token, pixel_token)
+           join profiles p on p.tenant_id = $1 and p.id = d.profile_id
+          where p.email is not null
+       ),
+       wpisy as (
+         -- ostatni wpis w rejestrze per kanał (AD-16): occurred_at, potem recorded_at
+         select o.profile_id,
+                (select (c.state = 'granted' and (c.valid_until is null or c.valid_until > now()))
+                   from consents c
+                  where c.tenant_id = $1 and c.profile_id = o.profile_id and c.channel = 'email_open_tracking'
+                  order by c.occurred_at desc, c.recorded_at desc limit 1) as otwarcia_wpis,
+                (select (c.state = 'granted' and (c.valid_until is null or c.valid_until > now()))
+                   from consents c
+                  where c.tenant_id = $1 and c.profile_id = o.profile_id and c.channel = 'email_click_tracking'
+                  order by c.occurred_at desc, c.recorded_at desc limit 1) as klikniecia_wpis
+           from odbiorca o
+       ),
+       zgody as (
+         -- ta sama reguła co zgodyNaSledzenie: 'wymaga_zgody' = tylko jawna ważna zgoda,
+         -- 'dozwolone' = blokuje wyłącznie jawny wpis, który nie uprawnia
+         select w.profile_id,
+                case when pl.otwarcia is null then false
+                     when pl.otwarcia = 'wymaga_zgody' then coalesce(w.otwarcia_wpis, false)
+                     else coalesce(w.otwarcia_wpis, true) end as otwarcia,
+                case when pl.klikniecia is null then false
+                     when pl.klikniecia = 'wymaga_zgody' then coalesce(w.klikniecia_wpis, false)
+                     else coalesce(w.klikniecia_wpis, true) end as klikniecia
+           from wpisy w cross join polityka pl
+       )
+       insert into messages (tenant_id, profile_id, source_type, source_id, email, subject,
+                             body_html, click_token, unsubscribe_token, links,
+                             sending_domain_id, open_tracking_allowed, click_tracking_allowed)
+       select $1, o.profile_id, 'campaign', $2, o.email, $7,
+              replace(replace(replace(
+                case when z.klikniecia and z.otwarcia then $8
+                     when z.klikniecia then $9
+                     when z.otwarcia then $10
+                     else $11 end,
+                $14, o.pixel_token), $15, o.click_token), $16, o.unsub_token),
+              o.click_token, o.unsub_token,
+              case when z.klikniecia then $17::jsonb else '[]'::jsonb end,
+              $18, z.otwarcia, z.klikniecia
+         from odbiorca o join zgody z on z.profile_id = o.profile_id
+       on conflict (tenant_id, source_type, source_id, profile_id) do nothing`,
+      [
+        tenantId, campaignId, ids, clickTokeny, unsubTokeny, pixelTokeny,
+        kampania.subject,
+        zKlikZOtw.html, zKlikBezOtw.html, bezKlikZOtw.html, bezKlikBezOtw.html,
+        polityka?.otwarcia ?? null, polityka?.klikniecia ?? null,
+        // kolejność podmian: NAJPIERW pixel (hash znacznika kliku), potem klik, potem wypis —
+        // inaczej podmiana kliku zniszczyłaby hash, który go zawiera w formie skrótu
+        znacznikPixel, znacznikKlik, znacznikWypis,
+        JSON.stringify(zKlikZOtw.linki), sendingDomainId,
+      ],
+    );
+    utworzone += wynik.rowCount ?? 0;
+  }
+  return { utworzone, kandydatow: odbiorcy.doceloweIds.length };
 }
+
+/** Ilu odbiorców na jedno zapytanie budowy wiadomości. */
+export const PORCJA_BUDOWY = 1000;
 
 /**
  * Ile miejsc z limitu dobowego tenant już ZAREZERWOWAŁ dzisiaj (FR52).
@@ -312,18 +325,25 @@ const MAX_PROB_WIADOMOSCI = 5;
 
 /**
  * Klasyfikacja błędu dostawcy wg tego, co WIADOMO o losie wiadomości:
- *   przejsciowy — dostawca NA PEWNO nie przyjął: odmowa nawiązania połączenia
- *     (nic nie wyszło) albo jawna odpowiedź SMTP 4xx (RFC 5321: odmowa tymczasowa,
+ *   przejsciowy — dostawca NA PEWNO nie przyjął: jawna odpowiedź SMTP 4xx (RFC 5321: odmowa tymczasowa,
  *     także po DATA oznacza nieprzyjęcie) -> bezpieczny powrót do queued.
  *   trwaly — jawna odpowiedź SMTP 5xx: dostawca odmówił na stałe -> failed.
  *   nieznany — zerwane połączenie, timeout (ECONNRESET/EPIPE/ETIMEDOUT): mogły zajść
  *     już PO kropce kończącej DATA, więc mail mógł wyjść. Wiadomość zostaje w sending
  *     i rozstrzyga ją rekoncyliacja (held + alert), nie ślepe ponowienie (NFR15).
  */
-function klasaBledu(blad: unknown): "przejsciowy" | "trwaly" | "nieznany" {
+function klasaBledu(blad: unknown): "przejsciowy" | "trwaly" | "nieznany" | "nadawca" {
   const kod = (blad as { code?: unknown })?.code;
+  // Błąd ETAPU NADAWCY (triaż A, P1): logowanie, TLS, EHLO, MAIL FROM, błąd API dostawcy.
+  // Do rozmowy o odbiorcy nie doszło, więc mail NA PEWNO nie wyszedł, a ten sam błąd
+  // spotka każdą następną wiadomość partii. Adapter oznacza go kodem `ENADAWCA`.
+  if (kod === "ENADAWCA") return "nadawca";
+  // Odmowa ZESTAWIENIA połączenia (serwer leży, DNS nie zna hosta): do serwera nic nie
+  // poszło, a ta sama odmowa spotka każdą wiadomość partii. Dotąd był to „przejściowy"
+  // z attempts++ na każdej wiadomości — po pięciu przebiegach cała kolejka szła w failed
+  // (review A2). Teraz jak błąd nadawcy: partia wraca do kolejki bez zużycia prób.
   if (typeof kod === "string" && ["ECONNREFUSED", "EHOSTUNREACH", "ENETUNREACH", "ENOTFOUND"].includes(kod)) {
-    return "przejsciowy";
+    return "nadawca";
   }
   const tresc = blad instanceof Error ? blad.message : String(blad);
   const odpowiedz = tresc.match(/dostano: (\d)\d\d/);
@@ -441,6 +461,9 @@ export async function wyslijPartie(
     };
   }
   const { dostawca, nadawca } = wybor;
+  // wersja konfiguracji SMTP, z którą ruszyła partia: błąd nadawcy unieważnia wynik testu
+  // TYLKO tej wersji (spóźniony błąd starej konfiguracji nie nadpisze testu nowej)
+  const wersjaSerwera = wybor.wersjaSerwera ?? null;
 
   // Zajęcie partii tym samym wzorcem co kolejka: atomowy UPDATE przez SKIP LOCKED.
   // Bez tego dwa workery pracujące naraz wybrałyby te same wiadomości w stanie queued
@@ -489,6 +512,7 @@ export async function wyslijPartie(
   let odmowy = 0;
   let bledy = 0;
   let powodZatrzymania: PowodZatrzymania = null;
+  let powodOpis: string | null = null;
 
   try {
   for (let i = 0; i < doWyslania.length; i++) {
@@ -497,6 +521,7 @@ export async function wyslijPartie(
     let wolnoWysylac = false;
     let limitOdmowil = false;
     let utracona = false;
+    let dzienRezerwacji: string | null = null;
     try {
       await klient.query("begin");
       // Potwierdzenie własności pod blokadą wiersza: stan musi być 'claimed' I token
@@ -531,13 +556,24 @@ export async function wyslijPartie(
             `insert into tenant_send_usage (tenant_id, day, used) values ($1, current_date, 1)
              on conflict (tenant_id, day) do update set used = tenant_send_usage.used + 1
              where tenant_send_usage.used + 1 <= $2
-             returning used`,
+             returning used, day::text as dzien`,
             [tenantId, limitDobowy],
           );
           if (!rezerwacja.rowCount) {
             limitOdmowil = true;
           } else {
+            dzienRezerwacji = rezerwacja.rows[0].dzien;
             await zapiszZdarzenie(klient, tenantId, wiadomosc.id, "sending", { kiedy: "teraz" });
+            // Zegar TEJ próby (triaż A, P2 #2): rekoncyliacja liczy kwadrans od claimed_at.
+            // Wspólny znacznik partii starzał się przez całą partię — przy stu
+            // wiadomościach i wolnym SMTP ostatnie przechodziły w sending z claimed_at
+            // sprzed kwadransa i rekoncyliacja brała je za zawieszone W TRAKCIE wysyłki.
+            // Odświeżamy tylko tę jedną wiadomość; reszta partii zachowuje token partii,
+            // po którym działa zbiorczy requeue niżej.
+            await klient.query(
+              "update messages set claimed_at = now() where tenant_id = $1 and id = $2",
+              [tenantId, wiadomosc.id],
+            );
             wolnoWysylac = true;
           }
         }
@@ -594,6 +630,21 @@ export async function wyslijPartie(
         console.error(`[wysylka] wiadomość ${wiadomosc.id}: wynik u dostawcy nieznany, zostaje w sending: ${opisBledu}`);
         continue;
       }
+      if (klasa === "nadawca") {
+        await zatrzymajPartiePoBledzieNadawcy({
+          tenantId,
+          biezaca: wiadomosc.id,
+          pozostale: doWyslania.slice(i + 1).map((w) => w.id),
+          tokenPartii: wiadomosc.claim_token,
+          dzienRezerwacji,
+          wersjaSerwera,
+          opisBledu,
+        });
+        console.warn(`[wysylka] tenant ${tenantId}: błąd nadawcy, partia wraca do kolejki: ${opisBledu}`);
+        powodZatrzymania = "blokada_nadawcy";
+        powodOpis = opisBledu;
+        break;
+      }
       const k3 = await pool.connect();
       try {
         await k3.query("begin");
@@ -642,6 +693,9 @@ export async function wyslijPartie(
             kiedy: "teraz",
             payload: { blad: opisBledu },
             klasyfikacja,
+            // adres odrzucony przez NASZĄ walidację składni (review A2 #9): wykluczenie
+            // w sklepie tak, globalne nie — nie ma na to dowodu od serwera odbiorcy
+            wykluczenieGlobalne: (blad as { code?: unknown })?.code !== "EADRES_ODBIORCY",
           });
           await k3.query("commit");
         }
@@ -703,5 +757,97 @@ export async function wyslijPartie(
     await dostawca.zamknij?.();
   }
 
-  return { wyslane, odmowy, bledy, powodZatrzymania, powodOpis: null };
+  return { wyslane, odmowy, bledy, powodZatrzymania, powodOpis };
+}
+
+/**
+ * Błąd nadawcy w środku partii (triaż A, P1; review A2). Wszystko w JEDNEJ transakcji,
+ * żeby partia nie została w połowie cofnięta:
+ *   1. bieżąca wiadomość wraca z `sending` do `queued` BEZ `attempts++` — nie wyszła,
+ *      a próby liczą się odbiorcy, nie awarii konfiguracji. Osłona stanu pod blokadą:
+ *      jeśli rekoncyliacja albo webhook zdążyły ją rozstrzygnąć, nie ruszamy jej;
+ *   2. TYLKO gdy to cofnięcie faktycznie zaszło: zwrot jej miejsca w limicie dobowym
+ *      (`used - 1` dla dnia rezerwacji). Mail na pewno nie wyszedł, a bez zwrotu każdy
+ *      tik przy np. MAIL FROM 421 zjadał miejsce — limit 500 znikał po kilku godzinach
+ *      awarii i po naprawie sklep stał do północy;
+ *   3. reszta zajętej partii wraca do `queued` po TOKENIE partii (claimed_at), więc nie
+ *      cofniemy świeżych claimów innego workera, który przejął je po odzyskaniu zombie;
+ *   4. unieważniamy pamięć podręczną testu połączenia (`last_tested_at = null`) — z
+ *      warunkiem na wersję konfiguracji, z którą ruszyła partia — żeby następna partia
+ *      zaczęła od `verify()` i przy dalej złym haśle stanęła PRZED zajęciem czegokolwiek;
+ *   5. dławik alertu (tenants.sender_block_alert_at): alert krytyczny raz na godzinę
+ *      albo od razu po zmianie konfiguracji SMTP. Wysyłany PO commicie — to efekt uboczny,
+ *      a nie część transakcji. Bez alertu kolejka sklepu stawała po cichu.
+ */
+async function zatrzymajPartiePoBledzieNadawcy(a: {
+  tenantId: string;
+  biezaca: string;
+  pozostale: string[];
+  tokenPartii: string;
+  dzienRezerwacji: string | null;
+  wersjaSerwera: string | null;
+  opisBledu: string;
+}) {
+  const { tenantId, biezaca, pozostale, tokenPartii, dzienRezerwacji, wersjaSerwera, opisBledu } = a;
+  const klient = await getPool().connect();
+  let alertowac = false;
+  try {
+    await klient.query("begin");
+    const { rows: stan } = await klient.query(
+      "select current_state from messages where tenant_id = $1 and id = $2 for update",
+      [tenantId, biezaca],
+    );
+    if (stan[0]?.current_state === "sending") {
+      // kontrolowane cofnięcie projekcji jak przy błędzie przejściowym, tylko bez próby
+      const cofniecie = await klient.query(
+        `update messages set current_state = 'queued', current_rank = 0, claimed_at = null
+          where tenant_id = $1 and id = $2 and current_state = 'sending'`,
+        [tenantId, biezaca],
+      );
+      if (cofniecie.rowCount && dzienRezerwacji) {
+        await klient.query(
+          `update tenant_send_usage set used = used - 1
+            where tenant_id = $1 and day = $2::date and used > 0`,
+          [tenantId, dzienRezerwacji],
+        );
+      }
+    }
+    if (pozostale.length) {
+      await klient.query(
+        `update messages set current_state = 'queued', claimed_at = null
+          where tenant_id = $1 and id = any($2) and current_state = 'claimed'
+            and claimed_at = $3::timestamptz`,
+        [tenantId, pozostale, tokenPartii],
+      );
+    }
+    if (wersjaSerwera) {
+      await klient.query(
+        `update tenant_smtp_configs set last_tested_at = null, last_test_error = $2
+          where tenant_id = $1 and updated_at = $3::timestamptz`,
+        [tenantId, opisBledu.slice(0, 1000), wersjaSerwera],
+      );
+    }
+    const dlawik = await klient.query(
+      `update tenants t set sender_block_alert_at = now()
+        where t.id = $1
+          and (t.sender_block_alert_at is null
+               or t.sender_block_alert_at < now() - interval '1 hour'
+               or t.sender_block_alert_at < (select c.updated_at from tenant_smtp_configs c where c.tenant_id = t.id))`,
+      [tenantId],
+    );
+    alertowac = Boolean(dlawik.rowCount);
+    await klient.query("commit");
+  } catch (blad) {
+    await klient.query("rollback").catch(() => {});
+    throw blad;
+  } finally {
+    klient.release();
+  }
+  if (alertowac) {
+    await wyslijAlert(
+      `wysyłka sklepu STOI: serwer nadawcy odmawia (${opisBledu.slice(0, 400)}). Wiadomości czekają w kolejce ` +
+        `bez zużycia prób i ruszą same po naprawie. Sprawdź Ustawienia → Wysyłka i domeny → „Testuj połączenie”.`,
+      { poziom: "krytyczny", tenantId },
+    );
+  }
 }
