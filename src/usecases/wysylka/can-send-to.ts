@@ -1,4 +1,5 @@
 import type pg from "pg";
+import { hashAdresu } from "../../adapters/hash-adresu";
 
 export type PowodOdmowy =
   | "brak_adresu"
@@ -21,12 +22,25 @@ export interface WynikBramki {
  *
  * Kolejność sprawdzeń jest celowa: wykluczenia globalne najpierw, bo chronią reputację
  * całej platformy, a nie jednego sklepu.
+ *
+ * Wykluczenie globalne trafia ALBO po adresie, ALBO po kluczowanym haszu adresu
+ * (migracja 0022): po anonimizacji RODO wpis traci adres, a blokada ma przeżyć powrót
+ * tej samej osoby z nową zgodą - odbity adres odbije znowu, a skarżący zgłosi znowu.
  */
 export async function canSendTo(
   klient: pg.PoolClient | pg.Pool,
   tenantId: string,
   profileId: string,
 ): Promise<WynikBramki> {
+  // hasz liczy aplikacja (klucz pochodny od SECRETS_KEY nie ma czego szukać w SQL),
+  // więc adres czytamy pierwszym zapytaniem; profil bez adresu kończy się od razu
+  const { rows: profile } = await klient.query<{ email: string | null }>(
+    "select email from profiles where tenant_id = $1 and id = $2",
+    [tenantId, profileId],
+  );
+  if (!profile[0] || !profile[0].email) return { wolno: false, powod: "brak_adresu" };
+  const hash = hashAdresu(profile[0].email);
+
   const { rows } = await klient.query(
     `with profil as (
        select id, lower(btrim(email)) as klucz, email
@@ -34,7 +48,8 @@ export async function canSendTo(
      )
      select
        p.email is null as brak_adresu,
-       exists (select 1 from suppressions s where lower(btrim(s.email)) = p.klucz) as globalne,
+       exists (select 1 from suppressions s
+                where lower(btrim(s.email)) = p.klucz or s.email_hash = $3) as globalne,
        coalesce((
          select ts.action = 'suppressed' from tenant_suppressions ts
           where ts.tenant_id = $1 and lower(btrim(ts.email)) = p.klucz
@@ -46,7 +61,7 @@ export async function canSendTo(
           order by c.occurred_at desc limit 1
        ), 'brak') <> 'granted' as bez_zgody
      from profil p`,
-    [tenantId, profileId],
+    [tenantId, profileId, hash],
   );
 
   const w = rows[0];

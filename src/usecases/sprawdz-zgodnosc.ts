@@ -17,6 +17,13 @@ export interface WynikZgodnosci {
  * Ekran zgodności (FR14, NFR5). Webhooki padają po cichu i nikt tego nie zauważa,
  * dopóki ktoś nie porówna liczb. Stan "nieustalone" jest osobno od "rozjazd", bo
  * niedostępny sklep to nie to samo co brakujące dane.
+ *
+ * Granica okresu to PEŁNA DOBA GMT (północ), ta sama po obu stronach: Woo filtruje
+ * `after` po dacie utworzenia, my po `occurred_at` (= date_created_gmt), więc chwilowe
+ * "teraz minus 30 dni" dawało po obu stronach inny zbiór na krawędzi okna (review #6).
+ * `roznica > 0` = w sklepie więcej niż w bazie (BRAKUJĄ dane, to jest awaria);
+ * `roznica < 0` = w bazie więcej (zamówienia skasowane w sklepie zostają u nas - nie
+ * subskrybujemy `order.deleted`), to informacja, nie alarm.
  */
 export async function sprawdzZgodnosc(
   tenantId: string,
@@ -24,6 +31,7 @@ export async function sprawdzZgodnosc(
   dniWstecz = 30,
 ): Promise<WynikZgodnosci> {
   const okresOd = new Date(Date.now() - dniWstecz * 24 * 3600 * 1000);
+  okresOd.setUTCHours(0, 0, 0, 0);
   const { rows } = await getPool().query<{ ile: number }>(
     `select count(*)::int as ile from orders
       where tenant_id = $1 and store_id = $2 and occurred_at >= $3`,

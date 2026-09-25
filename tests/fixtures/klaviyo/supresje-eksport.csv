@@ -1,0 +1,8 @@
+Email,Reason,Timestamp
+ewa.wisniewska@example.test,UNSUBSCRIBED,2024-06-01 08:00:00
+tomasz.wojcik@example.test,USER_SUPPRESSED,2024-05-05 05:05:05
+skarga@example.test,SPAM_COMPLAINT,2024-07-07 07:07:07
+odbicie@example.test,HARD_BOUNCE,2024-08-08 08:08:08
+zly@example.test,INVALID_EMAIL,
+katarzyna.dabrowska@example.test,unsubscribed,2024-09-09 09:09:09
+bez-malpy,UNSUBSCRIBED,2024-01-01 00:00:00

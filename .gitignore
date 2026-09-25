@@ -5,3 +5,6 @@ coverage/
 sandbox/woo/.woo-credentials
 .next/
 .nvmrc
+
+# pliki importu CSV (dane osobowe), nigdy do repo
+var/

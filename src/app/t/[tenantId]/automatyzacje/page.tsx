@@ -1,19 +1,21 @@
-import { TRIGGERY, journeyeTenanta } from "../../../../usecases/automatyzacje/journeye";
+import Link from "next/link";
+import { ChevronRight } from "lucide-react";
+import { getPool } from "../../../../adapters/db/pool";
+import { odmien } from "../../../../domain/liczebniki";
+import { zGroszy } from "../../../../domain/kwoty";
+import { BIBLIOTEKA, STATUSY, TRIGGERY, automatyzacjeTenanta } from "../../../../usecases/automatyzacje/journeye";
+import { przychodPrzegladu } from "../../../../usecases/raport-przegladu";
 import { wymaganyTenant } from "../../../autoryzacja";
+import { Badge, Button, Card, CardHeader, EmptyState, Icon, ResponsiveTable, Table, TBody, Td, Th, THead, type NazwaIkony } from "../../../ui";
 import { Komunikat, Naglowek } from "../naglowek";
-import { przelaczAutomatyzacjeAkcja, utworzZSzablonuAkcja } from "./akcje";
-import { FormularzAutomatyzacji } from "./formularz-automatyzacji";
+import { utworzZBibliotekiAkcja } from "./akcje";
+import { NowaAutomatyzacja } from "./nowa-automatyzacja";
 
 export const dynamic = "force-dynamic";
 
 export const metadata = { title: "Automatyzacje" };
 
-function opiszOpoznienie(minuty: number): string {
-  if (minuty === 0) return "od razu";
-  if (minuty % 1440 === 0) return `po ${minuty / 1440} dn.`;
-  if (minuty % 60 === 0) return `po ${minuty / 60} godz.`;
-  return `po ${minuty} min`;
-}
+const IKONY_SZABLONOW: Record<string, NazwaIkony> = { powitanie: "wiadomosc", po_zakupie: "zamowienie", win_back: "odbiorcy" };
 
 export default async function Automatyzacje({
   params,
@@ -22,107 +24,140 @@ export default async function Automatyzacje({
   params: Promise<{ tenantId: string }>;
   searchParams: Promise<{ ok?: string; blad?: string }>;
 }) {
-  const { tenantId } = await params;
+  const { tenantId: zadany } = await params;
   const { ok, blad } = await searchParams;
   // tenantId pochodzi z URL, czyli od klienta: bez sprawdzenia wobec sesji (AD-21)
-  // sam adres ujawnialby automatyzacje cudzego tenanta. Strona weryfikuje sama,
-  // wspolna bramka - patrz src/app/autoryzacja.ts.
-  await wymaganyTenant(tenantId);
-  const journeye = await journeyeTenanta(tenantId);
+  // sam adres ujawnialby automatyzacje cudzego tenanta.
+  const { tenantId } = await wymaganyTenant(zadany);
+  const [{ lista, przebiegAt }, przeglad, listy] = await Promise.all([
+    automatyzacjeTenanta(tenantId),
+    przychodPrzegladu(tenantId),
+    getPool().query("select id, name from lists where tenant_id = $1 order by name", [tenantId]).then((r) => r.rows as { id: string; name: string }[]),
+  ]);
+  const wToku = lista.reduce((s, f) => s + f.wToku, 0);
 
   return (
     <>
       <Naglowek
         tytul="Automatyzacje"
-        opis="Automatyzacja reaguje na zdarzenie (zapis z popupu, złożone zamówienie) i wysyła jeden mail na profil, przez te same bramki zgód i wykluczeń co kampanie. Włączenie działa od tej chwili w przód: nikt nie dostanie powitania za zapis sprzed dwóch dni. Wysłane liczymy z faktycznych wysyłek, nie z planu."
+        opis="Automatyzacja to graf: wyzwalacz, opóźnienia, warunki i maile na kanwie. Osoba wchodzi raz, idzie krok po kroku i wychodzi, gdy kupi albo wypisze się ze zgód. Każdy mail przechodzi przez te same bramki zgód i wykluczeń co kampanie. Włączenie działa od tej chwili w przód. Wysłane liczymy z faktycznych wysyłek, przychód z ostatniego przebiegu atrybucji."
+        akcja={<Button href="#nowa-automatyzacja"><Icon name="dodaj" size={16} />Nowa automatyzacja</Button>}
       />
       <Komunikat ok={ok} blad={blad} />
 
-      <div className="grid gap-6 p-4 lg:grid-cols-[1fr_320px]">
-        <section className="karta overflow-x-auto">
-          <table className="tabela">
-            <thead>
-              <tr>
-                <th>Automatyzacja</th>
-                <th>Wyzwalacz</th>
-                <th>Opóźnienie</th>
-                <th className="text-right">Wysłane</th>
-                <th className="text-right">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {journeye.map((j) => (
-                <tr key={j.id}>
-                  <td>
-                    <span className="font-medium">{j.name}</span>
-                    <span className="mt-0.5 block text-xs text-[var(--color-tekst-2)]">{j.subject}</span>
-                  </td>
-                  <td className="text-[var(--color-tekst-2)]">
-                    {TRIGGERY[j.trigger_event] ?? j.trigger_event}
-                  </td>
-                  <td className="text-[var(--color-tekst-2)]">{opiszOpoznienie(j.delay_minutes)}</td>
-                  <td className="text-right">
-                    <span className="wielkosc text-lg">{j.wyslane}</span>
-                  </td>
-                  <td className="text-right">
-                    <form action={przelaczAutomatyzacjeAkcja} className="inline-flex items-center gap-2">
-                      <input type="hidden" name="tenantId" value={tenantId} />
-                      <input type="hidden" name="journeyId" value={j.id} />
-                      {/* stan docelowy, nie komenda "przelacz": podwojny submit nie odwraca decyzji */}
-                      <input type="hidden" name="docelowa" value={j.active ? "0" : "1"} />
-                      <span className={`plakietka ${j.active ? "plakietka-ok" : ""}`}>
-                        {j.active ? "włączona" : "wyłączona"}
-                      </span>
-                      <button className="przycisk przycisk-wtorny" type="submit">
-                        {j.active ? "Wyłącz" : "Włącz"}
-                      </button>
-                    </form>
-                  </td>
-                </tr>
-              ))}
-              {journeye.length === 0 ? (
-                <tr>
-                  <td colSpan={5} className="text-[var(--color-tekst-2)]">
-                    Nie ma jeszcze żadnej automatyzacji. Zacznij od gotowego szablonu obok.
-                  </td>
-                </tr>
-              ) : null}
-            </tbody>
-          </table>
-        </section>
+      <div className="tresc-strony">
+        <Card>
+          <CardHeader
+            title="Wszystkie automatyzacje"
+            description={przebiegAt ? "Przychód z ostatniego zakończonego przeliczenia atrybucji." : "Przychód pojawi się po pierwszym przeliczeniu atrybucji."}
+            action={<span className="text-[13px] text-[var(--color-tekst-3)]">{lista.length} łącznie · {odmien(wToku, "osoba", "osoby", "osób")} w toku</span>}
+          />
+          {lista.length === 0 ? (
+            <EmptyState
+              icon="automatyzacja"
+              title="Nie ma jeszcze żadnej automatyzacji"
+              description="Zacznij od gotowca z biblioteki poniżej albo zbuduj własną od zera. Powstanie jako szkic, więc nic nie wyjdzie przed sprawdzeniem treści."
+            />
+          ) : (
+            <ResponsiveTable
+              table={
+                <Table className="min-w-[920px]">
+                  <THead>
+                    <tr>
+                      <Th>Automatyzacja</Th>
+                      <Th>Status</Th>
+                      <Th>Wyzwalacz</Th>
+                      <Th num>W toku</Th>
+                      <Th num>Wysłane</Th>
+                      <Th num>Przychód</Th>
+                      <Th aria-label="Akcja" />
+                    </tr>
+                  </THead>
+                  <TBody>
+                    {lista.map((f) => {
+                      const stan = STATUSY[f.status];
+                      return (
+                        <tr key={f.id} className="wiersz-link">
+                          <Td>
+                            <Link href={`/t/${tenantId}/automatyzacje/${f.id}/edytor`} className="wiersz-link-cel">{f.name}</Link>
+                            <div className="mt-1 flex items-center gap-1.5 text-[12px] text-[var(--color-tekst-3)]">
+                              <Icon name="wiadomosc" size={13} />
+                              {odmien(f.emaili, "wiadomość", "wiadomości", "wiadomości")}
+                              {f.status !== "szkic" && f.niepublikowane ? <span className="text-[var(--color-czeka)]">· szkic różni się od wersji włączonej</span> : null}
+                            </div>
+                          </Td>
+                          <Td><Badge ton={stan.ton}>{stan.etykieta}</Badge></Td>
+                          <Td className="text-[var(--color-tekst-2)]">{f.zdarzenie ? TRIGGERY[f.zdarzenie] ?? f.zdarzenie : "—"}</Td>
+                          <Td num className="font-medium">{f.wToku}</Td>
+                          <Td num className="font-medium">{f.wyslane}</Td>
+                          <Td num className="font-medium">
+                            {f.przychod ? zGroszy(f.przychod.przychodMinor, przeglad.waluta) : "—"}
+                            {f.przychod && f.przychod.zamowien ? <span className="mt-0.5 block text-[12px] font-normal text-[var(--color-tekst-3)]">{odmien(f.przychod.zamowien, "zamówienie", "zamówienia", "zamówień")}</span> : null}
+                          </Td>
+                          <Td className="text-right">
+                            <ChevronRight size={16} className="inline text-[var(--color-tekst-3)]" aria-hidden="true" />
+                          </Td>
+                        </tr>
+                      );
+                    })}
+                  </TBody>
+                </Table>
+              }
+              mobile={
+                <div>
+                  {lista.map((f) => {
+                    const stan = STATUSY[f.status];
+                    return (
+                      <Link key={f.id} href={`/t/${tenantId}/automatyzacje/${f.id}/edytor`} className="lista-mobilna-element">
+                        <div className="lista-mobilna-wiersz">
+                          <div className="min-w-0">
+                            <div className="lista-mobilna-tytul">{f.name}</div>
+                            <div className="lista-mobilna-meta">{f.zdarzenie ? TRIGGERY[f.zdarzenie] ?? f.zdarzenie : "—"} · {f.wToku} w toku · {f.wyslane} wysłane</div>
+                          </div>
+                          <div className="lista-mobilna-wartosc">{f.przychod ? zGroszy(f.przychod.przychodMinor, przeglad.waluta) : "—"}</div>
+                        </div>
+                        <div className="mt-3"><Badge ton={stan.ton}>{stan.etykieta}</Badge></div>
+                      </Link>
+                    );
+                  })}
+                </div>
+              }
+            />
+          )}
+        </Card>
 
-        <section className="space-y-4">
-          <div className="karta p-4">
-            <h2 className="mb-1 text-sm font-semibold">Zacznij od szablonu</h2>
-            <p className="mb-3 text-xs text-[var(--color-tekst-2)]">
-              Gotowy temat i treść po polsku. Link w treści prowadzi do podłączonego sklepu.
-            </p>
-            <div className="space-y-2">
-              <form action={utworzZSzablonuAkcja}>
+        <Card>
+          <CardHeader title="Biblioteka gotowych automatyzacji" description="Gotowe grafy z treściami po polsku. Linki w mailach prowadzą do podłączonego sklepu. Powstają jako szkic do przejrzenia na kanwie." />
+          <div className="grid gap-4 p-6 max-md:p-4 md:grid-cols-3">
+            {BIBLIOTEKA.map((s) => (
+              <form key={s.klucz} action={utworzZBibliotekiAkcja} className="karta-plaska flex flex-col items-start p-5 transition-colors hover:border-[var(--color-akcent-ramka)]">
                 <input type="hidden" name="tenantId" value={tenantId} />
-                <input type="hidden" name="szablon" value="welcome" />
-                <button className="przycisk przycisk-wtorny w-full justify-center" type="submit">
-                  Utwórz z szablonu: Powitanie po zapisie
-                </button>
+                <input type="hidden" name="szablon" value={s.klucz} />
+                <span className="mb-4 grid h-9 w-9 place-items-center rounded-full border border-[var(--color-akcent-ramka)] bg-[var(--color-akcent-tlo)] text-[var(--color-akcent)]">
+                  <Icon name={IKONY_SZABLONOW[s.klucz] ?? "automatyzacja"} size={18} />
+                </span>
+                <h3 className="text-[15px] font-semibold">{s.name}</h3>
+                <p className="mt-1 text-[13px] leading-5 text-[var(--color-tekst-2)]">{s.opis}</p>
+                <ol className="mt-4 flex flex-wrap items-center gap-1 text-[12px] text-[var(--color-tekst-2)]">
+                  {s.kroki.map((k, i) => (
+                    <li key={k} className="flex items-center gap-1">
+                      <span className="rounded-md border border-[var(--color-linia)] bg-white px-1.5 py-0.5">{k}</span>
+                      {i < s.kroki.length - 1 ? <span aria-hidden="true" className="text-[var(--color-tekst-3)]">→</span> : null}
+                    </li>
+                  ))}
+                </ol>
+                <div className="mt-auto flex items-center gap-2 pt-5 text-[13px] text-[var(--color-tekst-3)]"><Icon name="automatyzacja" size={14} />Wyzwalacz: {TRIGGERY[s.zdarzenie]}</div>
+                <button className="przycisk przycisk-wtorny przycisk-maly mt-4" type="submit">Użyj szablonu</button>
               </form>
-              <form action={utworzZSzablonuAkcja}>
-                <input type="hidden" name="tenantId" value={tenantId} />
-                <input type="hidden" name="szablon" value="postpurchase" />
-                <button className="przycisk przycisk-wtorny w-full justify-center" type="submit">
-                  Utwórz z szablonu: Podziękowanie po zakupie
-                </button>
-              </form>
-            </div>
+            ))}
           </div>
+          <div className="karta-stopka">Porzuconego koszyka tu nie ma: sklep nie wysyła jeszcze zdarzenia „koszyk porzucony”, a automatyzacja bez zdarzenia byłaby atrapą.</div>
+        </Card>
 
-          <div className="karta p-4">
-            <h2 className="mb-1 text-sm font-semibold">Nowa automatyzacja</h2>
-            <p className="mb-4 text-xs text-[var(--color-tekst-2)]">
-              Powstaje wyłączona. Włączysz ją przełącznikiem, gdy treść będzie gotowa.
-            </p>
-            <FormularzAutomatyzacji tenantId={tenantId} triggery={TRIGGERY} />
-          </div>
-        </section>
+        <Card id="nowa-automatyzacja" className="scroll-mt-4">
+          <CardHeader title="Nowa automatyzacja" description="Nazwa i wyzwalacz. Kroki, maile i warunki dodasz na kanwie." />
+          <div className="max-w-[808px] p-6 max-md:p-4"><NowaAutomatyzacja tenantId={tenantId} triggery={TRIGGERY} listy={listy} /></div>
+        </Card>
       </div>
     </>
   );

@@ -131,6 +131,50 @@ describe("Silnik wysyłki", () => {
     expect(rows[0].body_html).toMatch(/\/u\/[A-Za-z0-9_-]+/);
   });
 
+  it("A3: wysłana wiadomość zapisuje dostawcę i moment przekazania, a brakujących pól nie zmyśla", async () => {
+    const pool = getPool();
+    const { rows } = await pool.query(
+      `select provider, ip_pool, sending_ip, sending_domain_id, handed_off_at
+         from messages where tenant_id = $1 and source_type = 'campaign' and source_id = $2`,
+      [tenantId, campaignId],
+    );
+    expect(rows[0].provider).toBe("atrapa");
+    // atrapa nie podaje puli ani IP — kolumny zostają PUSTE zamiast dostać wartość zastępczą,
+    // bo przy pierwszym problemie z dostarczalnością zmyślone IP jest gorsze niż żadne
+    expect(rows[0].ip_pool).toBeNull();
+    expect(rows[0].sending_ip).toBeNull();
+    // tenant testowy nie ma wiersza w sending_domains, więc powiązania też nie ma
+    expect(rows[0].sending_domain_id).toBeNull();
+    expect(rows[0].handed_off_at).not.toBeNull();
+  });
+
+  it("A2: zdarzenie o pozytywnym wyniku nie niesie żadnej klasyfikacji odbicia", async () => {
+    const { rows } = await getPool().query(
+      `select e.bounce_class, e.add_exclusion, e.counts_to_rate, e.occurred_at, e.recorded_at
+         from message_events e join messages m on m.id = e.message_id
+        where m.tenant_id = $1 and m.source_id = $2 and e.event_type = 'sent'`,
+      [tenantId, campaignId],
+    );
+    expect(rows[0].bounce_class).toBeNull();
+    expect(rows[0].add_exclusion).toBeNull();
+    expect(rows[0].counts_to_rate).toBeNull();
+    // przejście stanu dostaje datę z zegara BAZY, tego samego, po którym liczy się doba
+    expect(rows[0].occurred_at).not.toBeNull();
+    expect(rows[0].recorded_at).not.toBeNull();
+  });
+
+  it("A5: bez ustawień tenanta śledzenie zostaje włączone, a decyzja ląduje na wiadomości", async () => {
+    const { rows } = await getPool().query(
+      `select open_tracking_allowed, click_tracking_allowed from messages
+        where tenant_id = $1 and source_type = 'campaign' and source_id = $2`,
+      [tenantId, campaignId],
+    );
+    // domyślna polityka 'dozwolone' nie zmienia dotychczasowego zachowania; zmiana
+    // domyślnej odpowiedzi jest świadomą decyzją tenanta, nie efektem migracji
+    expect(rows[0].open_tracking_allowed).toBe(true);
+    expect(rows[0].click_tracking_allowed).toBe(true);
+  });
+
   it("wypisanie między budową a wysyłką zatrzymuje wiadomość w bramce (AD-25)", async () => {
     const pool = getPool();
     // nowa kampania do tych samych odbiorców
@@ -209,6 +253,41 @@ describe("Silnik wysyłki", () => {
     );
     const przebieg2 = await przeliczAtrybucje(tenantId);
     expect(przebieg2.przypisanych).toBe(1);
+  });
+
+  it("dwa workery w tej samej chwili nie wysyłają tej samej wiadomości dwa razy", async () => {
+    const pool = getPool();
+    // dziesięć wiadomości bez profilu (ścieżka testowa: bramka canSendTo nie ma czego
+    // sprawdzać), żeby badać WYŁĄCZNIE zajmowanie partii przez SKIP LOCKED
+    await pool.query(
+      `insert into messages (tenant_id, profile_id, source_type, source_id, email, subject,
+                             body_html, click_token, unsubscribe_token)
+       select $1, null, 'test', gen_random_uuid(), 'wys-wyscig@example.test', 'Wyścig', '<p>x</p>',
+              gen_random_uuid()::text, gen_random_uuid()::text
+         from generate_series(1, 10)`,
+      [tenantId],
+    );
+
+    // JEDNA atrapa dla obu przebiegów: dowodem nie jest suma zwróconych liczników,
+    // tylko lista adresów, które faktycznie poszły do dostawcy
+    const dostawca = new DostawcaAtrapa();
+    const [a, b] = await Promise.all([
+      wyslijPartie(tenantId, { dostawca, limit: 10 }),
+      wyslijPartie(tenantId, { dostawca, limit: 10 }),
+    ]);
+    expect(a.wyslane + b.wyslane).toBe(10);
+    expect(dostawca.wyslane.length).toBe(10);
+
+    const { rows } = await pool.query(
+      `select m.current_state, count(*)::int as ile,
+              count(distinct e.id)::int as zdarzen_sent
+         from messages m
+         left join message_events e on e.message_id = m.id and e.event_type = 'sent'
+        where m.tenant_id = $1 and m.email = 'wys-wyscig@example.test'
+        group by m.current_state`,
+      [tenantId],
+    );
+    expect(rows).toEqual([{ current_state: "sent", ile: 10, zdarzen_sent: 10 }]);
   });
 
   it("limit dobowy zatrzymuje wysyłkę zanim poleci (FR52)", async () => {

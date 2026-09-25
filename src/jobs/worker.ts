@@ -1,12 +1,18 @@
 import { randomBytes } from "node:crypto";
 import { getPool } from "../adapters/db/pool";
+import { config } from "../config";
 import { przeliczAtrybucje } from "../usecases/przelicz-atrybucje";
 import { przetworzZdarzenie } from "../usecases/przetworz-zdarzenie";
 import { wyslijPartie, zbudujWiadomosciKampanii } from "../usecases/wysylka/wyslij-kampanie";
 import { rekoncyliacjaWysylki } from "../usecases/wysylka/rekoncyliacja";
+import { sprawdzProgiReputacji } from "../usecases/wysylka/reputacja";
+import { domknijOdwolane, wypchnijZaplanowane } from "../usecases/wysylka/sterowanie";
 import { wyslijAlert } from "./alerty";
 import { dodajZadanie, domknijZadanie, odlozZadanie, odswiezHeartbeat, zajmijZadanie, type Zadanie } from "./kolejka";
 import { HANDLERY_AUTOMATYZACJI } from "./handlery-automatyzacje";
+import { HANDLERY_CYKLICZNE, zarejestrujCykliczne } from "./handlery-cykliczne";
+import { HANDLERY_ODBICIA, ODSTEP_ODBIC_MS, zaplanujOdbicia } from "./handlery-odbicia";
+import { HANDLERY_IMPORTU } from "./handlery-import";
 
 /**
  * Worker: jedna pętla, zajmowanie pojedynczo przez SKIP LOCKED, każdy handler idempotentny
@@ -15,15 +21,43 @@ import { HANDLERY_AUTOMATYZACJI } from "./handlery-automatyzacje";
  */
 const workerId = `worker-${randomBytes(4).toString("hex")}`;
 
+/** Status kampanii czytany z bazy, nie z pamięci joba: przycisk w panelu działa natychmiast. */
+async function statusKampanii(tenantId: string, campaignId: string): Promise<string | null> {
+  const { rows } = await getPool().query(
+    "select status from campaigns where tenant_id = $1 and id = $2",
+    [tenantId, campaignId],
+  );
+  return rows[0]?.status ?? null;
+}
+
 const HANDLERY: Record<string, (z: Zadanie) => Promise<void>> = {
   ...HANDLERY_AUTOMATYZACJI,
+  ...HANDLERY_CYKLICZNE,
+  ...HANDLERY_ODBICIA,
+  ...HANDLERY_IMPORTU,
   async wyslij_kampanie(z) {
     const campaignId = String(z.payload.campaignId);
+    // Kampania mogła zostać wstrzymana albo odwołana MIĘDZY wrzuceniem joba a jego
+    // podjęciem (job czeka w kolejce, a przycisk działa natychmiast). Budowa wiadomości
+    // dla odwołanej kampanii utworzyłaby wiersze, które zaraz trzeba by domykać.
+    const stanStartowy = await statusKampanii(z.tenant_id, campaignId);
+    if (stanStartowy !== "sending") {
+      console.log(`[${workerId}] kampania ${campaignId}: job pominięty, status ${stanStartowy ?? "brak kampanii"}`);
+      return;
+    }
     await zbudujWiadomosciKampanii(z.tenant_id, campaignId);
     let wynik;
     do {
-      wynik = await wyslijPartie(z.tenant_id, { limit: 25 });
+      wynik = await wyslijPartie(z.tenant_id, { limit: config().WYSYLKA_ROZMIAR_PARTII });
       console.log(`[${workerId}] kampania ${campaignId}: wysłane ${wynik.wyslane}, odmowy ${wynik.odmowy}, błędy ${wynik.bledy}`);
+      if (wynik.powodZatrzymania === "wstrzymanie_tenanta") {
+        // Wysyłka CAŁEGO tenanta wstrzymana (B5). To nie jest błąd joba: ponawianie
+        // niczego nie naprawi, a wyczerpane próby wysłałyby drugi alert o tej samej
+        // sprawie. Kampania zostaje w 'sending' — bo to prawda o jej stanie — a nowy
+        // job wchodzi w chwili ręcznego wznowienia wysyłki sklepu.
+        console.warn(`[${workerId}] kampania ${campaignId}: wysyłka sklepu wstrzymana (${wynik.powodOpis ?? "bez powodu"}), job kończy się`);
+        return;
+      }
       if (wynik.powodZatrzymania === "limit_dobowy") {
         // Limit dobowy NIE jest błędem: ten job domyka się normalnie, a kampanię
         // przejmuje NOWY job z run_after na początku następnej doby wg zegara bazy
@@ -34,6 +68,26 @@ const HANDLERY: Record<string, (z: Zadanie) => Promise<void>> = {
         );
         await dodajZadanie(z.tenant_id, "wyslij_kampanie", { campaignId }, { opoznienieSek: rows[0].sek });
         console.log(`[${workerId}] kampania ${campaignId}: limit dobowy, nowy job wznowi wysyłkę za ${rows[0].sek}s`);
+        return;
+      }
+
+      if (wynik.wyslane > 0) {
+        // B5: progi reputacji sprawdzane po KAŻDEJ partii, która coś przekazała dostawcy.
+        // Kampania sypiąca odbiciami ma stanąć po jednej partii (WYSYLKA_ROZMIAR_PARTII,
+        // domyślnie 100), a nie po dziesięciu tysiącach — dlatego tutaj, a nie tylko
+        // w cyklicznym jobie.
+        const progi = await sprawdzProgiReputacji(z.tenant_id);
+        if (progi.wstrzymany) {
+          console.warn(`[${workerId}] kampania ${campaignId}: progi reputacji przekroczone (${progi.powod ?? "-"}), wysyłka sklepu wstrzymana`);
+          return;
+        }
+      }
+
+      // B2: status kampanii sprawdzany MIĘDZY partiami. W środku partii nie wolno:
+      // wiadomość już zajęta zostałaby w stanie 'claimed' bez nikogo, kto ją domknie.
+      const status = await statusKampanii(z.tenant_id, campaignId);
+      if (status !== "sending") {
+        console.log(`[${workerId}] kampania ${campaignId}: wysyłka zatrzymana między partiami, status ${status ?? "brak kampanii"}`);
         return;
       }
     } while (wynik.wyslane > 0 || wynik.odmowy > 0);
@@ -71,6 +125,15 @@ const HANDLERY: Record<string, (z: Zadanie) => Promise<void>> = {
         throw new Error(`kampania ${campaignId}: wiadomości wciąż w drodze, domknięcie odłożone`);
       }
       // inny status (sent z wcześniejszego podejścia, cancelled) — nic do zrobienia
+    }
+  },
+  async reputacja(z) {
+    // Skargi i odbicia przychodzą webhookami DŁUGO po tym, jak wysyłka się skończyła —
+    // wtedy żadna pętla wysyłki już nie chodzi i nie ma czego przerywać. Ten job jest
+    // jedynym miejscem, które to wyłapie.
+    const wynik = await sprawdzProgiReputacji(z.tenant_id);
+    if (wynik.wstrzymanyTeraz) {
+      console.warn(`[${workerId}] tenant ${z.tenant_id}: wysyłka wstrzymana automatycznie — ${wynik.powod}`);
     }
   },
   async rekoncyliacja(z) {
@@ -149,10 +212,44 @@ setInterval(() => tikAutomatyzacji().catch((b) => console.error(`[${workerId}] t
 // przechodzą w 'held' i idzie alert — bez tego odbiorca po cichu wypadał z wysyłki.
 async function zaplanujRekoncyliacje() {
   const { rows } = await getPool().query("select id from tenants");
-  for (const t of rows) await dodajZadanie(t.id, "rekoncyliacja", {});
+  for (const t of rows) {
+    await dodajZadanie(t.id, "rekoncyliacja", {});
+    // B5: kontrola progów reputacji w tym samym rytmie. Osobny job, nie doklejka do
+    // rekoncyliacji: awaria jednego nie może zabrać drugiego, a oba mają własny licznik prób.
+    await dodajZadanie(t.id, "reputacja", {});
+  }
 }
 await zaplanujRekoncyliacje().catch((b) => console.error(`[${workerId}] rekoncyliacja (start):`, b));
 setInterval(() => zaplanujRekoncyliacje().catch((b) => console.error(`[${workerId}] rekoncyliacja:`, b)), 900_000);
+
+// Skrzynka zwrotna (odbicia i skargi przez IMAP) co 5 minut per tenant, który ją ma
+// skonfigurowaną (audyt 24.09, #3). Bez tego przy własnym SMTP klienta twarde odbicia
+// nigdy nie trafiały do wykluczeń, a progi reputacji liczyły na pustym mianowniku.
+await zaplanujOdbicia().catch((b) => console.error(`[${workerId}] odbicia (start):`, b));
+setInterval(() => zaplanujOdbicia().catch((b) => console.error(`[${workerId}] odbicia:`, b)), ODSTEP_ODBIC_MS);
+
+// B1: dispatcher zaplanowanych kampanii, co minutę. Do tej pory `scheduled_at` czytał
+// wyłącznie panel, więc plan wysyłki był napisem na ekranie. Dwa workery robiące ten tik
+// naraz są bezpieczne: start kampanii to jeden atomowy UPDATE ze statusu 'approved',
+// a wpis do kolejki idzie w tej samej transakcji (patrz wypchnijZaplanowane).
+async function tikHarmonogramu() {
+  const wynik = await wypchnijZaplanowane();
+  for (const u of wynik.uruchomione) {
+    console.log(`[${workerId}] harmonogram: kampania ${u.campaignId} (tenant ${u.tenantId}) weszła w wysyłkę o zaplanowanej porze`);
+  }
+  if (wynik.przeterminowane) {
+    console.warn(`[${workerId}] harmonogram: ${wynik.przeterminowane} planów przeterminowanych, alert wysłany`);
+  }
+  const domkniete = await domknijOdwolane();
+  if (domkniete) {
+    console.log(`[${workerId}] harmonogram: domknięto ${domkniete} wiadomości z kolejek odwołanych kampanii`);
+  }
+}
+await tikHarmonogramu().catch((b) => console.error(`[${workerId}] harmonogram (start):`, b));
+setInterval(() => tikHarmonogramu().catch((b) => console.error(`[${workerId}] harmonogram:`, b)), 60_000);
+
+// Joby cykliczne agenta danych (import, sprzątanie): rejestracja tików w tym procesie.
+zarejestrujCykliczne({ workerId });
 
 // prosta pętla: pracuj póki są zadania, śpij 2s gdy pusto
 // eslint-disable-next-line no-constant-condition

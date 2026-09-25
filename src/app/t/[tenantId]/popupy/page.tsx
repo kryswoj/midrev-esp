@@ -1,13 +1,16 @@
 import { config } from "../../../../config";
 import { wymaganyTenant } from "../../../autoryzacja";
 import { popupyTenanta } from "../../../../usecases/popupy/zarzadzaj";
+import { Badge, Button, Card, CardBody, CardHeader, EmptyState, Icon, MobileList, MobileListItem, Table, TBody, Td, Th, THead } from "../../../ui";
 import { Komunikat, Naglowek } from "../naglowek";
 import { przelaczPopupAkcja } from "./akcje";
 import { FormularzPopupu } from "./formularz-popupu";
 
 export const dynamic = "force-dynamic";
 
-export const metadata = { title: "Popupy" };
+// Nazwa ekranu poszła za nawigacją: „Formularze zapisu". „Popup" zostaje wyłącznie
+// tam, gdzie mówimy o tym, jak to wygląda na stronie sklepu.
+export const metadata = { title: "Formularze zapisu" };
 
 export default async function Popupy({
   params,
@@ -29,86 +32,124 @@ export default async function Popupy({
   return (
     <>
       <Naglowek
-        tytul="Popupy"
-        opis="Popup zbiera adresy e-mail bezpośrednio na stronie sklepu: sklep wkleja jeden tag script, a każdy zapis tworzy profil, zgodę ze źródłem popup i zdarzenie. Na stronie pokazywany jest najnowszy WŁĄCZONY popup, więc zmiana treści to nowy popup i przełączenie, a nie edycja tego, który już wisi."
+        tytul="Formularze zapisu"
+        opis="Formularz zapisu zbiera adresy e-mail bezpośrednio na stronie sklepu: sklep wkleja jeden tag script, a każdy zapis tworzy profil, zgodę ze źródłem popup i zdarzenie. Na stronie pokazywany jest najnowszy włączony formularz, więc zmiana treści to nowy formularz i przełączenie, a nie edycja tego, który już wisi."
       />
       <Komunikat ok={ok} blad={blad} />
 
-      <div className="grid gap-6 p-4 lg:grid-cols-[1fr_320px]">
-        <div className="space-y-6">
-          <section className="karta overflow-x-auto">
-            <table className="tabela">
-              <thead>
+      <div className="tresc-strony">
+        <Card>
+          <CardHeader
+            title="Formularze"
+            description="Formularze opublikowane i przygotowywane do uruchomienia w sklepie."
+            action={popupy.length > 0 ? <Button href="#nowy-formularz" size="sm" className="max-sm:hidden"><Icon name="dodaj" size={16} />Nowy formularz</Button> : undefined}
+          />
+          {popupy.length === 0 ? (
+            <EmptyState
+              icon="formularz"
+              title="Nie ma jeszcze formularza zapisu"
+              description="Utwórz pierwszy formularz. Powstanie wyłączony, więc nic nie pojawi się w sklepie bez Twojej decyzji."
+              action={<Button href="#nowy-formularz">Utwórz formularz</Button>}
+            />
+          ) : (
+            <>
+            <div className="hidden md:block"><Table>
+              <THead>
                 <tr>
-                  <th>Popup</th>
-                  <th>Status</th>
-                  <th className="text-right">Zapisy</th>
-                  <th className="text-right"></th>
+                  <Th>Formularz</Th>
+                  <Th>Reguła wyświetlania</Th>
+                  <Th num>Zapisy</Th>
+                  <Th>Status</Th>
+                  <Th aria-label="Akcja" />
                 </tr>
-              </thead>
-              <tbody>
+              </THead>
+              <TBody>
                 {popupy.map((p) => (
                   <tr key={p.id}>
-                    <td>
-                      <div className="font-medium">{p.name}</div>
-                      <div className="text-[12px] text-[var(--color-tekst-3)]">
-                        {p.headline}
-                        {p.discount_code ? ` · kod ${p.discount_code}` : ""}
-                        {` · po ${p.rules?.delay_seconds ?? 0} s`}
-                      </div>
-                    </td>
-                    <td>
+                    <Td>
+                      <div className="font-semibold">{p.name}</div>
+                      <div className="tekst-meta mt-0.5">{p.headline}</div>
+                    </Td>
+                    <Td className="text-[var(--color-tekst-2)]">
+                      Po {p.rules?.delay_seconds ?? 0} s
+                      {p.discount_code ? (
+                        <span className="tekst-meta mt-0.5 block">
+                          Kod <code className="font-mono">{p.discount_code}</code>
+                        </span>
+                      ) : null}
+                    </Td>
+                    <Td num className="font-semibold">{p.zgloszen}</Td>
+                    <Td>
+                      {/* kształt plus słowo (NFR33): pełny kwadrat = zbiera zapisy,
+                          pusty = nie wisi na stronie */}
                       {p.active ? (
-                        <span className="plakietka plakietka-ok">włączony</span>
+                        <Badge ton="ok">włączony</Badge>
                       ) : (
-                        <span className="plakietka">wyłączony</span>
+                        <Badge ton="szkic">wyłączony</Badge>
                       )}
-                    </td>
-                    <td className="text-right">
-                      <span className="wielkosc text-lg">{p.zgloszen}</span>
-                    </td>
-                    <td className="text-right">
+                    </Td>
+                    <Td className="text-right">
                       <form action={przelaczPopupAkcja}>
                         <input type="hidden" name="tenantId" value={tenantId} />
                         <input type="hidden" name="popupId" value={p.id} />
                         <input type="hidden" name="wlacz" value={p.active ? "0" : "1"} />
-                        <button className="przycisk przycisk-wtorny" type="submit">
-                          {p.active ? "Wyłącz" : "Włącz"}
-                        </button>
+                        <Button variant="secondary" size="sm" type="submit">{p.active ? "Wyłącz" : "Włącz"}</Button>
                       </form>
-                    </td>
+                    </Td>
                   </tr>
                 ))}
-                {popupy.length === 0 ? (
-                  <tr>
-                    <td colSpan={4} className="text-[var(--color-tekst-3)]">
-                      Nie ma jeszcze żadnego popupu.
-                    </td>
-                  </tr>
-                ) : null}
-              </tbody>
-            </table>
-          </section>
+              </TBody>
+            </Table></div>
+            <MobileList>
+              {popupy.map((p) => (
+                <MobileListItem key={`${p.id}-mobile`}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="truncate font-semibold">{p.name}</div>
+                      <div className="mt-0.5 line-clamp-2 text-[13px] text-[var(--color-tekst-3)]">{p.headline}</div>
+                    </div>
+                    <Badge ton={p.active ? "ok" : "szkic"}>{p.active ? "włączony" : "wyłączony"}</Badge>
+                  </div>
+                  <div className="mt-3 flex items-end justify-between gap-4">
+                    <div className="tekst-pomocniczy">
+                      <span>Po {p.rules?.delay_seconds ?? 0} s</span>
+                      <span className="mx-1.5 text-[var(--color-linia-mocna)]">·</span>
+                      <span className="liczba font-semibold text-[var(--color-tekst)]">{p.zgloszen}</span> zapisów
+                      {p.discount_code ? <span className="mt-0.5 block">Kod <code className="font-mono">{p.discount_code}</code></span> : null}
+                    </div>
+                    <form action={przelaczPopupAkcja}>
+                      <input type="hidden" name="tenantId" value={tenantId} />
+                      <input type="hidden" name="popupId" value={p.id} />
+                      <input type="hidden" name="wlacz" value={p.active ? "0" : "1"} />
+                      <Button variant="secondary" size="sm" type="submit">{p.active ? "Wyłącz" : "Włącz"}</Button>
+                    </form>
+                  </div>
+                </MobileListItem>
+              ))}
+            </MobileList>
+            </>
+          )}
+          {popupy.length > 0 ? (
+            <div className="border-t border-[var(--color-linia-0)] px-4 py-3 sm:hidden [&>span]:w-full [&_a]:w-full">
+              <Button href="#nowy-formularz" className="w-full"><Icon name="dodaj" size={16} />Nowy formularz</Button>
+            </div>
+          ) : null}
+        </Card>
 
-          <section className="karta p-4">
-            <h2 className="mb-1 text-sm font-semibold">Wklej na stronę sklepu</h2>
-            <p className="mb-3 text-xs text-[var(--color-tekst-3)]">
-              Jeden tag przed zamknięciem body. Skrypt sam pobiera najnowszy włączony popup,
-              więc po włączeniu albo wyłączeniu popupu w panelu nic na stronie nie trzeba zmieniać.
-            </p>
-            <code className="karta-plaska block overflow-x-auto whitespace-nowrap px-3 py-2 text-[12px]">
-              {snippet}
-            </code>
-          </section>
+        <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)] xl:items-start">
+          <Card>
+            <CardHeader title="Instalacja w sklepie" description="Tag wkleja się raz, przed zamknięciem elementu body." />
+            <CardBody>
+              <p className="tekst-pomocniczy mb-4">Skrypt sam pobiera najnowszy włączony formularz. Późniejsze przełączanie nie wymaga zmian na stronie sklepu.</p>
+              <code className="karta-plaska block overflow-x-auto whitespace-nowrap px-4 py-3 font-mono text-[12px]">{snippet}</code>
+            </CardBody>
+          </Card>
+
+          <Card id="nowy-formularz">
+            <CardHeader title="Nowy formularz zapisu" description="Nowy formularz powstaje jako wyłączony. Włączysz go po sprawdzeniu treści." />
+            <CardBody className="p-0 max-md:p-0"><FormularzPopupu tenantId={tenantId} /></CardBody>
+          </Card>
         </div>
-
-        <section className="karta h-fit p-4">
-          <h2 className="mb-1 text-sm font-semibold">Nowy popup</h2>
-          <p className="mb-4 text-xs text-[var(--color-tekst-3)]">
-            Popup rodzi się wyłączony: najpierw sprawdź treść, potem włącz go w tabeli.
-          </p>
-          <FormularzPopupu tenantId={tenantId} />
-        </section>
       </div>
     </>
   );

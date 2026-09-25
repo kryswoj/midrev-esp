@@ -1,0 +1,364 @@
+import type { Pool, PoolClient } from "pg";
+import { getPool } from "../../adapters/db/pool";
+import type { SkrzynkaZwrotna } from "../../adapters/email/imap";
+import { parsujRaportZwrotny, type RaportZwrotny } from "../../domain/email/dsn";
+import { zapiszZgloszenieDostawcy, type WynikZgloszenia } from "./zdarzenia-dostawcy";
+
+/**
+ * Ingest odbić i skarg ze skrzynki zwrotnej klienta (Blok D, audyt 24.09 #3).
+ *
+ * Tor jest ten sam co dla webhooka dostawcy: parser → dopasowanie do wiadomości →
+ * `zapiszZgloszenieDostawcy` (klasyfikacja, wykluczenie adresu, zdarzenie). Ten plik NIE
+ * klasyfikuje odbić sam — od tego jest `klasyfikujOdpowiedzSmtp` w domenie, dokładnie
+ * ta, której używa adapter SMTP przy odmowie na RCPT TO. Dwa źródła, jedna klasyfikacja.
+ *
+ * Dopasowanie, w kolejności pewności:
+ *   1. Message-ID oryginału = `messages.provider_id` (nadajemy własny `<id@domena>`),
+ *   2. lewa strona Message-ID = `messages.id` (gdyby dostawca przepisał prawą),
+ *   3. adres odbiorcy: OSTATNIA wiadomość do tego adresu przekazana dostawcy w ciągu
+ *      30 dni (raport bez kopii nagłówków — część starych MTA tak robi).
+ * Zawsze w obrębie tenanta: skrzynka jest tenanta, więc raport też.
+ *
+ * Idempotencja: `bounce_reports` unikalne per (tenant, UIDVALIDITY, UID); zdarzenie
+ * unikalne per (message_id, event_type). Przebieg przerwany w połowie nie zapisze
+ * niczego dwa razy.
+ */
+
+export interface WynikRaportu {
+  rodzaj: RaportZwrotny["rodzaj"];
+  /** 'zapisane' | 'brak_wiadomosci' | 'pominiete' | 'nie_odbicie' | 'brak_daty' */
+  wynik: string;
+  adres: string | null;
+  messageIdOryginalu: string | null;
+  messageId: string | null;
+  dopasowanie: "message_id" | "adres" | null;
+  typZdarzenia: string | null;
+  klasa: string | null;
+  kodSmtp: string | null;
+  kiedy: Date | null;
+  temat: string;
+}
+
+const OKNO_DOPASOWANIA_PO_ADRESIE_DNI = 30;
+
+async function dopasuj(
+  tenantId: string,
+  messageIdOryginalu: string | null,
+  adres: string | null,
+): Promise<{ messageId: string; jak: "message_id" | "adres" } | null> {
+  const pool = getPool();
+  if (messageIdOryginalu) {
+    const { rows } = await pool.query<{ id: string }>(
+      "select id from messages where tenant_id = $1 and provider_id = $2 limit 1",
+      [tenantId, messageIdOryginalu],
+    );
+    if (rows[0]) return { messageId: rows[0].id, jak: "message_id" };
+    const lewa = /^<([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})@/i.exec(messageIdOryginalu);
+    if (lewa) {
+      const { rows: poId } = await pool.query<{ id: string }>(
+        "select id from messages where tenant_id = $1 and id = $2::uuid",
+        [tenantId, lewa[1]],
+      );
+      if (poId[0]) return { messageId: poId[0].id, jak: "message_id" };
+    }
+  }
+  if (adres) {
+    // po adresie: tylko wiadomości, które faktycznie wyszły (sent/delivered) i tylko
+    // świeże; raport o mailu sprzed pół roku nie ma do czego się przykleić
+    const { rows } = await pool.query<{ id: string }>(
+      `select id from messages
+        where tenant_id = $1 and lower(btrim(email)) = $2
+          and current_state in ('sent', 'delivered')
+          and coalesce(handed_off_at, created_at) > now() - make_interval(days => $3::int)
+        order by coalesce(handed_off_at, created_at) desc
+        limit 1`,
+      [tenantId, adres.trim().toLowerCase(), OKNO_DOPASOWANIA_PO_ADRESIE_DNI],
+    );
+    if (rows[0]) return { messageId: rows[0].id, jak: "adres" };
+  }
+  return null;
+}
+
+/**
+ * Jeden surowy mail ze skrzynki → zero, jeden albo kilka wyników (DSN potrafi nieść
+ * kilku odbiorców; u nas każda wiadomość ma jednego, więc zwykle jeden).
+ */
+export async function przetworzRaport(
+  tenantId: string,
+  surowy: string,
+  opcje: { dataZapasowa?: Date | null } = {},
+): Promise<{ raport: RaportZwrotny; wyniki: WynikRaportu[] }> {
+  const raport = parsujRaportZwrotny(surowy);
+  const baza = (o: Partial<WynikRaportu>): WynikRaportu => ({
+    rodzaj: raport.rodzaj,
+    wynik: "pominiete",
+    adres: null,
+    messageIdOryginalu: raport.messageIdOryginalu,
+    messageId: null,
+    dopasowanie: null,
+    typZdarzenia: null,
+    klasa: null,
+    kodSmtp: null,
+    kiedy: raport.kiedy ?? opcje.dataZapasowa ?? null,
+    temat: raport.temat,
+    ...o,
+  });
+
+  if (raport.rodzaj === "nie_odbicie") return { raport, wyniki: [baza({ wynik: "nie_odbicie" })] };
+
+  const kiedy = raport.kiedy ?? opcje.dataZapasowa ?? null;
+  const wyniki: WynikRaportu[] = [];
+  for (const o of raport.odbiorcy) {
+    if (!kiedy) {
+      wyniki.push(baza({ adres: o.adres, wynik: "brak_daty" }));
+      continue;
+    }
+    // DSN o sukcesie/przekazaniu dalej (NOTIFY=SUCCESS) — nie jest odbiciem
+    if (raport.rodzaj === "dsn" && (o.akcja === "relayed" || o.akcja === "expanded")) {
+      wyniki.push(baza({ adres: o.adres, wynik: "pominiete" }));
+      continue;
+    }
+    // Heurystyka bez kodu rozszerzonego: „550" gdzieś w treści to za mało, żeby
+    // wykluczyć żywy adres. Zapisujemy w rejestrze raportów, nie w zdarzeniach.
+    if (raport.rodzaj === "heurystyka" && !o.status) {
+      wyniki.push(baza({ adres: o.adres, wynik: "pominiete", kodSmtp: null }));
+      continue;
+    }
+    const dop = await dopasuj(tenantId, raport.messageIdOryginalu, o.adres);
+    if (!dop) {
+      wyniki.push(baza({ adres: o.adres, wynik: "brak_wiadomosci", kiedy }));
+      continue;
+    }
+
+    // Skrzynka zwrotna jest PUBLICZNA: każdy może na nią napisać. Raport, który nie
+    // dowodzi tożsamości wiadomości (brak Message-ID = dopasowanie po samym adresie, albo
+    // heurystyka bez DSN), nie ma prawa wykluczyć adresu całej platformie. Wykluczenie
+    // sklepowe zostaje: jest widoczne w rejestrze raportów i odwracalne z panelu.
+    const zaufany = dop.jak === "message_id" && raport.pewnosc === "wysoka";
+    const opcjeZapisu = { wykluczenieGlobalne: zaufany };
+    let zapis: WynikZgloszenia;
+    if (raport.rodzaj === "arf") {
+      zapis = await zapiszZgloszenieDostawcy(tenantId, { messageId: dop.messageId }, {
+        rodzaj: "complaint",
+        kiedy,
+        complaintFeedbackType: raport.typSkargi ?? "abuse",
+      }, opcjeZapisu);
+    } else if (o.akcja === "delivered") {
+      zapis = await zapiszZgloszenieDostawcy(tenantId, { messageId: dop.messageId }, {
+        rodzaj: "delivered",
+        kiedy,
+        smtpResponse: o.diagnostyka ?? undefined,
+      }, opcjeZapisu);
+    } else {
+      // Tekst dla klasyfikatora: diagnostyka serwera odbiorcy, a gdy jej brak — sam
+      // Status (RFC 3463), który klasyfikator czyta jako kod rozszerzony. Status idzie
+      // NA POCZĄTKU, żeby to on (a nie liczba w treści diagnostyki) decydował o klasie.
+      const odpowiedz = [o.status, o.diagnostyka].filter(Boolean).join(" ").trim() || "brak kodu";
+      zapis = await zapiszZgloszenieDostawcy(tenantId, { messageId: dop.messageId }, {
+        rodzaj: "bounce_smtp",
+        kiedy,
+        odpowiedz,
+      }, opcjeZapisu);
+    }
+    wyniki.push(
+      baza({
+        adres: o.adres,
+        wynik: zapis.zapisane ? "zapisane" : zapis.powodOdrzucenia ?? "pominiete",
+        messageId: dop.messageId,
+        dopasowanie: dop.jak,
+        typZdarzenia: zapis.typZdarzenia ?? null,
+        klasa: zapis.klasyfikacja?.klasa ?? null,
+        kodSmtp: zapis.klasyfikacja?.kodSmtp ?? o.status ?? null,
+        kiedy,
+      }),
+    );
+  }
+  if (wyniki.length === 0) wyniki.push(baza({ wynik: "pominiete" }));
+  return { raport, wyniki };
+}
+
+export interface PodsumowanieOdbic {
+  uidvalidity: number;
+  przejrzane: number;
+  zapisane: number;
+  bezWiadomosci: number;
+  nieOdbicia: number;
+  pominiete: number;
+  ostatniUid: number;
+  /** true, gdy w skrzynce zostało więcej niż limit na przebieg */
+  zostalo: boolean;
+}
+
+/** Ile wiadomości maksymalnie na jeden przebieg: reszta wejdzie w następnym tiku (5 min). */
+export const MAKS_NA_PRZEBIEG = 200;
+
+/**
+ * Pełny przebieg dla tenanta: otwarcie skrzynki, nieprzeczytane od kursora, per mail
+ * parsowanie + zapis + wpis do `bounce_reports` + oznaczenie jako przeczytany. Maile,
+ * które NIE są raportami (odpowiedzi ludzi), zostają nieprzeczytane — skrzynka zwrotna
+ * bywa tą samą skrzynką, na którą odpisują klienci sklepu.
+ */
+export async function pobierzOdbicia(
+  tenantId: string,
+  skrzynka: SkrzynkaZwrotna,
+  kursor: { uidvalidity: number | null; ostatniUid: number | null },
+  opcje: { maksNaPrzebieg?: number } = {},
+): Promise<PodsumowanieOdbic> {
+  const pool = getPool();
+  const maks = opcje.maksNaPrzebieg ?? MAKS_NA_PRZEBIEG;
+  const { uidvalidity } = await skrzynka.otworz();
+  // Zmiana UIDVALIDITY = skrzynka odtworzona, stare UID-y nic nie znaczą: kursor od zera
+  const od = kursor.uidvalidity === uidvalidity ? (kursor.ostatniUid ?? 0) : 0;
+  const uidy = await skrzynka.nieprzeczytaneOd(od);
+  const doPrzejrzenia = uidy.slice(0, maks);
+
+  const p: PodsumowanieOdbic = {
+    uidvalidity,
+    przejrzane: 0,
+    zapisane: 0,
+    bezWiadomosci: 0,
+    nieOdbicia: 0,
+    pominiete: 0,
+    ostatniUid: od,
+    zostalo: uidy.length > maks,
+  };
+
+  for (const uid of doPrzejrzenia) {
+    // druga warstwa idempotencji: raport już przetworzony (crash przed STORE \Seen)
+    const { rows: juz } = await pool.query(
+      "select kind from bounce_reports where tenant_id = $1 and imap_uidvalidity = $2 and imap_uid = $3",
+      [tenantId, uidvalidity, uid],
+    );
+    if (juz[0]) {
+      if (juz[0].kind !== "nie_odbicie") await skrzynka.oznaczPrzeczytane(uid);
+      p.ostatniUid = Math.max(p.ostatniUid, uid);
+      continue;
+    }
+    const mail = await skrzynka.pobierz(uid);
+    if (!mail) {
+      p.ostatniUid = Math.max(p.ostatniUid, uid);
+      continue;
+    }
+    p.przejrzane++;
+    const { raport, wyniki } = await przetworzRaport(tenantId, mail.surowy, { dataZapasowa: mail.dataSerwera });
+    const glowny = wyniki[0];
+    await pool.query(
+      `insert into bounce_reports
+         (tenant_id, imap_uidvalidity, imap_uid, original_message_id, matched_message_id, matched_by,
+          recipient, kind, outcome, event_type, bounce_class, smtp_code, subject, received_at)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+       on conflict (tenant_id, imap_uidvalidity, imap_uid) do nothing`,
+      [
+        tenantId, uidvalidity, uid, raport.messageIdOryginalu, glowny.messageId, glowny.dopasowanie,
+        glowny.adres, raport.rodzaj, glowny.wynik, glowny.typZdarzenia, glowny.klasa, glowny.kodSmtp,
+        raport.temat.slice(0, 500),
+        // data ZE ŹRÓDŁA; gdy raport nie ma daty — INTERNALDATE serwera; zapis wymaga jakiejś
+        glowny.kiedy ?? mail.dataSerwera ?? new Date(),
+      ],
+    );
+    for (const w of wyniki) {
+      if (w.wynik === "zapisane") p.zapisane++;
+      else if (w.wynik === "brak_wiadomosci") p.bezWiadomosci++;
+      else if (w.wynik === "nie_odbicie") p.nieOdbicia++;
+      else p.pominiete++;
+    }
+    if (raport.rodzaj !== "nie_odbicie") await skrzynka.oznaczPrzeczytane(uid);
+    p.ostatniUid = Math.max(p.ostatniUid, uid);
+  }
+  return p;
+}
+
+// ---------------------------------------------------------------------------
+// RODO: rejestr raportów trzyma adres z DSN i temat, więc podlega art. 15 i 17
+// ---------------------------------------------------------------------------
+
+export interface RaportDoEksportu {
+  kiedy: Date;
+  adres: string | null;
+  rodzaj: string;
+  wynik: string;
+  typZdarzenia: string | null;
+  klasa: string | null;
+  kodSmtp: string | null;
+  temat: string | null;
+}
+
+/**
+ * Raporty dotyczące osoby (art. 15): po dopasowanej wiadomości (messages.profile_id)
+ * i po adresie odbiorcy z raportu. Wołane z eksportu profilu w profil-rodo.ts, w tej
+ * samej transakcji (`przez`), żeby eksport był spójny z resztą.
+ */
+export async function eksportujOdbicia(
+  tenantId: string,
+  profileId: string,
+  email: string | null,
+  przez: Pool | PoolClient = getPool(),
+): Promise<RaportDoEksportu[]> {
+  const { rows } = await przez.query(
+    `select b.received_at, b.recipient, b.kind, b.outcome, b.event_type, b.bounce_class, b.smtp_code, b.subject
+       from bounce_reports b
+       left join messages m on m.tenant_id = b.tenant_id and m.id = b.matched_message_id
+      where b.tenant_id = $1
+        and (m.profile_id = $2 or ($3::text is not null and lower(btrim(b.recipient)) = lower(btrim($3))))
+      order by b.received_at`,
+    [tenantId, profileId, email],
+  );
+  return rows.map((r) => ({
+    kiedy: r.received_at,
+    adres: r.recipient,
+    rodzaj: r.kind,
+    wynik: r.outcome,
+    typZdarzenia: r.event_type,
+    klasa: r.bounce_class,
+    kodSmtp: r.smtp_code,
+    temat: r.subject,
+  }));
+}
+
+/**
+ * Anonimizacja (art. 17): adres i temat z raportów tej osoby zastąpione zaślepką
+ * (temat bywa spersonalizowany). Wiersz zostaje, bo liczniki dostarczalności i kursor
+ * IMAP (unikalność UID) mają dalej działać. Zwraca liczbę zmienionych wierszy do
+ * kontroli zwrotnej w transakcji RODO.
+ */
+export async function anonimizujOdbicia(
+  tenantId: string,
+  profileId: string,
+  email: string | null,
+  przez: Pool | PoolClient = getPool(),
+): Promise<number> {
+  const wynik = await przez.query(
+    `update bounce_reports b
+        set recipient = case when b.recipient is null then null else 'usuniety@rodo.invalid' end,
+            subject = case when b.subject is null then null else '[usunięto]' end,
+            original_message_id = null
+      where b.tenant_id = $1
+        and (
+          exists (select 1 from messages m where m.tenant_id = b.tenant_id and m.id = b.matched_message_id and m.profile_id = $2)
+          or ($3::text is not null and lower(btrim(b.recipient)) = lower(btrim($3)))
+        )
+        and (b.recipient is distinct from 'usuniety@rodo.invalid' or b.subject is distinct from '[usunięto]' or b.original_message_id is not null)`,
+    [tenantId, profileId, email],
+  );
+  return wynik.rowCount ?? 0;
+}
+
+/** Ile raportów tej osoby wciąż niesie adres albo temat — do kontroli zwrotnej po anonimizacji (ma być 0). */
+export async function pozostaleDaneOdbic(
+  tenantId: string,
+  profileId: string,
+  email: string | null,
+  przez: Pool | PoolClient = getPool(),
+): Promise<number> {
+  const { rows } = await przez.query(
+    `select count(*)::int as ile from bounce_reports b
+      where b.tenant_id = $1
+        and (
+          exists (select 1 from messages m where m.tenant_id = b.tenant_id and m.id = b.matched_message_id and m.profile_id = $2)
+          or ($3::text is not null and lower(btrim(b.recipient)) = lower(btrim($3)))
+        )
+        and (b.recipient not in ('usuniety@rodo.invalid') or b.subject is distinct from '[usunięto]' or b.original_message_id is not null)`,
+    [tenantId, profileId, email],
+  );
+  return rows[0]?.ile ?? 0;
+}

@@ -4,10 +4,6 @@ import { FormularzLogowania } from "./formularz";
 
 export const dynamic = "force-dynamic";
 
-// Ekran logowania w kierunku "Noc": jedna karta na plotnie, istniejace klasy
-// (.karta, .pole, .przycisk, .etykieta), zero nowych tokenow w globals.css.
-// Formularz to komponent klientowy z useActionState - blad nie kasuje e-maila.
-
 export default async function StronaLogowania({
   searchParams,
 }: {
@@ -23,11 +19,16 @@ export default async function StronaLogowania({
   }
 
   return (
-    <main
-      style={{ background: "var(--color-plotno)" }}
-      className="flex min-h-screen items-center justify-center px-4"
-    >
-      <FormularzLogowania dalej={dalej} />
+    <main className="flex min-h-screen items-center justify-center bg-[var(--color-plotno)] px-4 py-10 sm:px-6">
+      <div className="w-full max-w-[424px]">
+        <div className="mb-8 flex items-center justify-center gap-3">
+          <span className="grid h-10 w-10 place-items-center rounded-[10px] bg-[var(--color-akcent)] text-[17px] font-bold text-white shadow-sm">m</span>
+          <span className="text-[17px] leading-6 font-semibold tracking-[-0.01em]">midrev esp</span>
+        </div>
+        <section className="karta p-6 sm:p-8">
+          <FormularzLogowania dalej={dalej} />
+        </section>
+      </div>
     </main>
   );
 }

@@ -1,0 +1,12 @@
+﻿Email,First Name,Last Name,Phone Number,Email Marketing Consent,Email Marketing Consent Timestamp,Source,Email Suppressions,City,Shopify Tags,Profile ID
+anna.kowalska@example.test,Anna,Kowalska,+48600100200,SUBSCRIBED,2024-03-05 14:22:10,Klaviyo Form: Popup -10%,,Warszawa,"vip, newsletter",01HXYZAAAA
+Jan.Nowak@Example.test ,Jan,Nowak,,SUBSCRIBED,2023-11-20T09:15:00+00:00,Shopify Checkout,,Kraków,,01HXYZBBBB
+ewa.wisniewska@example.test,Ewa,"Wiśniewska, dr",+48600300400,UNSUBSCRIBED,2024-06-01 08:00:00,Klaviyo Form: Footer,,Gdańsk,,01HXYZCCCC
+piotr.zielinski@example.test,Piotr,Zieliński,,NEVER_SUBSCRIBED,,Shopify Checkout,,Poznań,,01HXYZDDDD
+marta.lewandowska@example.test,Marta,Lewandowska,,SUBSCRIBED,,Klaviyo Form: Popup -10%,,Łódź,,01HXYZEEEE
+tomasz.wojcik@example.test,Tomasz,"Wójcik ""Tomek""",,SUBSCRIBED,2022-01-15 12:00:00,Import,USER_SUPPRESSED,Wrocław,,01HXYZFFFF
+zle-bez-malpy,Błąd,Adresu,,SUBSCRIBED,2024-01-01 00:00:00,,,,,01HXYZGGGG
+anna.kowalska@example.test,Anna,Duplikat,,SUBSCRIBED,2024-03-05 14:22:10,,,Warszawa,,01HXYZAAAA
+=cmd|calc@example.test,Formuła,Injekcja,,SUBSCRIBED,2024-02-02 10:10:10,,,,,01HXYZHHHH
+katarzyna.dabrowska@example.test,Katarzyna,"Dąbrowska
+(wielolinijkowa uwaga)",,SUBSCRIBED,2024-04-04 04:04:04,Klaviyo Form: Popup -10%,,Szczecin,"gold, vip",01HXYZIIII

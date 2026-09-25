@@ -28,7 +28,8 @@ export async function rekoncyliacjaWysylki(tenantId: string) {
     );
     for (const wiersz of rows) {
       await zapiszZdarzenie(klient, tenantId, wiersz.id, "held", {
-        powod: "sending_bez_potwierdzenia",
+        kiedy: "teraz",
+        payload: { powod: "sending_bez_potwierdzenia" },
       });
     }
     await klient.query("commit");

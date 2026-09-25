@@ -1,6 +1,7 @@
 import { getPool } from "../adapters/db/pool";
 import { skompiluj } from "../adapters/db/segmenty";
-import type { Regula } from "../domain/segmenty";
+import { wykluczoneGlobalnie } from "../adapters/db/wykluczenia";
+import { znormalizujAdres } from "../adapters/hash-adresu";
 
 export interface RozbicieOdbiorcow {
   kandydaci: number;
@@ -10,16 +11,22 @@ export interface RozbicieOdbiorcow {
   bezAdresu: number;
   docelowo: number;
   probka: { email: string | null; imie: string | null; nazwisko: string | null }[];
-  zrodla: { mode: string; typ: string; nazwa: string; ile: number }[];
+  zrodla: { mode: string; typ: string; nazwa: string; ile: number; blad?: string }[];
   /** pełna lista docelowych profili; z niej silnik wysyłki buduje wiadomości */
   doceloweIds: string[];
+  /**
+   * Źródła, których nie dało się policzyć (segment z nieprawidłowymi regułami).
+   * Niepusta lista ma BLOKOWAĆ wysyłkę widocznym komunikatem - zero kandydatów
+   * z uszkodzonego segmentu to nie jest wynik, tylko brak wyniku.
+   */
+  uszkodzone: string[];
 }
 
 async function idZeZrodla(
   tenantId: string,
   typ: string,
   sourceId: string,
-): Promise<{ nazwa: string; ids: string[] }> {
+): Promise<{ nazwa: string; ids: string[]; blad?: string }> {
   const pool = getPool();
   if (typ === "list") {
     const { rows } = await pool.query(
@@ -36,7 +43,13 @@ async function idZeZrodla(
     [tenantId, sourceId],
   );
   if (!seg[0]) return { nazwa: "?", ids: [] };
-  const { gdzie, parametry } = skompiluj(seg[0].rules as Regula[], tenantId);
+  let skompilowany: ReturnType<typeof skompiluj>;
+  try {
+    skompilowany = skompiluj(seg[0].rules, tenantId);
+  } catch (blad) {
+    return { nazwa: seg[0].name, ids: [], blad: blad instanceof Error ? blad.message : String(blad) };
+  }
+  const { gdzie, parametry } = skompilowany;
   const { rows } = await pool.query<{ id: string }>(
     `select pr.id from profiles pr where pr.tenant_id = $1 ${gdzie}`,
     parametry,
@@ -66,10 +79,12 @@ export async function policzOdbiorcow(
   const wlaczone = new Set<string>();
   const wylaczone = new Set<string>();
   const zrodla: RozbicieOdbiorcow["zrodla"] = [];
+  const uszkodzone: string[] = [];
 
   for (const z of zrodlaWiersze) {
-    const { nazwa, ids } = await idZeZrodla(tenantId, z.source_type, z.source_id);
-    zrodla.push({ mode: z.mode, typ: z.source_type, nazwa, ile: ids.length });
+    const { nazwa, ids, blad } = await idZeZrodla(tenantId, z.source_type, z.source_id);
+    zrodla.push({ mode: z.mode, typ: z.source_type, nazwa, ile: ids.length, ...(blad ? { blad } : {}) });
+    if (blad) uszkodzone.push(`${nazwa}: ${blad}`);
     for (const id of ids) (z.mode === "include" ? wlaczone : wylaczone).add(id);
   }
 
@@ -85,6 +100,7 @@ export async function policzOdbiorcow(
       probka: [],
       zrodla,
       doceloweIds: [],
+      uszkodzone,
     };
   }
 
@@ -108,7 +124,7 @@ export async function policzOdbiorcow(
         where tenant_id = $1
         order by lower(btrim(email)), occurred_at desc
      )
-     select k.id, k.email, k.first_name, k.last_name,
+     select k.id, k.email, k.first_name, k.last_name, k.klucz,
             (k.email is null) as bez_adresu,
             exists (select 1 from suppressions s where lower(btrim(s.email)) = k.klucz) as globalnie,
             coalesce((select l.action = 'suppressed' from lokalne l where l.klucz = k.klucz), false) as lokalnie,
@@ -117,6 +133,12 @@ export async function policzOdbiorcow(
     [tenantId, kandydaciIds],
   );
 
+  // wykluczenie globalne także po kluczowanym haszu (0022): to samo, co sprawdzi
+  // wiążąca bramka canSendTo - liczniki nie mogą rozjeżdżać się z wysyłką
+  const poHaszu = await wykluczoneGlobalnie(rows.map((r: any) => r.email));
+  for (const r of rows as any[]) {
+    if (r.email && poHaszu.has(znormalizujAdres(r.email))) r.globalnie = true;
+  }
   const docelowi = rows.filter(
     (r: any) => !r.bez_adresu && !r.globalnie && !r.lokalnie && !r.bez_zgody,
   );
@@ -135,5 +157,6 @@ export async function policzOdbiorcow(
     })),
     zrodla,
     doceloweIds: docelowi.map((r: any) => r.id),
+    uszkodzone,
   };
 }

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { jestWykluczonyGlobalnie } from "../../adapters/db/wykluczenia";
 import { getPool } from "../../adapters/db/pool";
 
 // Przyjecie zgloszenia z popupu (Epik F). To jedyna sciezka w systemie, ktora
@@ -87,8 +88,6 @@ export async function przyjmijZgloszenie(
     // czy adres jest na liscie wykluczen.
     const { rows: wykluczenia } = await klient.query(
       `select
-         exists (select 1 from suppressions s
-                  where lower(btrim(s.email)) = lower(btrim($2))) as globalne,
          coalesce((
            select ts.action = 'suppressed' from tenant_suppressions ts
             where ts.tenant_id = $1 and lower(btrim(ts.email)) = lower(btrim($2))
@@ -96,7 +95,9 @@ export async function przyjmijZgloszenie(
          ), false) as sklepowe`,
       [popup.tenant_id, dane.email],
     );
-    const wykluczony = wykluczenia[0].globalne || wykluczenia[0].sklepowe;
+    // globalne: JEDNA definicja (adres albo hasz, 0022) - ta sama co w bramce wysylki
+    const globalne = await jestWykluczonyGlobalnie(dane.email, klient);
+    const wykluczony = globalne || wykluczenia[0].sklepowe;
 
     if (!wykluczony) {
       // Zgoda jest DOPISYWANA, nigdy nadpisywana (AD-16). Drugi zapis tej samej

@@ -1,0 +1,39 @@
+import { notFound } from "next/navigation";
+import { getPool } from "../../../../../../../../adapters/db/pool";
+import { dokumentWiadomosci, wiadomoscFlow } from "../../../../../../../../usecases/automatyzacje/journeye";
+import { wymaganyTenant } from "../../../../../../../autoryzacja";
+import { EdytorWiadomosci } from "./edytor-wiadomosci";
+
+export const dynamic = "force-dynamic";
+export const metadata = { title: "Automatyzacja · treść maila" };
+
+/**
+ * Tresc wiadomosci kroku e-mail: TEN SAM edytor blokow co w kampaniach (biblioteka, plotno,
+ * panel wlasciwosci i render sa importowane z kreatora kampanii), tylko zapis idzie do
+ * wiadomosci automatyzacji. Serwer wczytuje dokument i oddaje go komponentowi klienta.
+ */
+export default async function TrescWiadomosci({ params }: { params: Promise<{ tenantId: string; journeyId: string; emailId: string }> }) {
+  const { tenantId: zadany, journeyId, emailId } = await params;
+  const { tenantId } = await wymaganyTenant(zadany);
+  const w = await wiadomoscFlow(tenantId, journeyId, emailId);
+  if (!w) notFound();
+  const { dokument, zrodlo } = dokumentWiadomosci(w.content);
+  const { rows } = await getPool().query("select name from tenants where id = $1", [tenantId]);
+  return (
+    <div className="-mx-4 flex h-screen flex-col bg-[var(--color-app)] md:-mx-8">
+      <EdytorWiadomosci
+        tenantId={tenantId}
+        flowId={journeyId}
+        emailId={emailId}
+        flowName={w.flowName}
+        nazwaStartowa={w.nazwa}
+        tematStartowy={w.temat}
+        dokumentStartowy={dokument}
+        zrodlo={zrodlo}
+        nazwaSklepu={String(rows[0]?.name ?? "")}
+        flowStatus={w.flowStatus}
+        wersjaStartowa={w.wersja}
+      />
+    </div>
+  );
+}

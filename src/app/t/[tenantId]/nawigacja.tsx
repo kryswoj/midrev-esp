@@ -1,107 +1,104 @@
 "use client";
 
+/** Nawigacja główna z prawdziwym stanem aktywnym i ikonami lucide. */
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { Icon, type NazwaIkony } from "../../ui/icon";
 
-/**
- * Nawigacja z realnym stanem aktywnym (aria-current). Bez tego panel wygląda jak
- * zbiór podstron, a nie jak narzędzie: operator nie wie, gdzie jest.
- * Ikony są celowo ciemniejsze od tekstu obok, tak jak w Linearze i Attio.
- */
-const IKONY: Record<string, React.ReactNode> = {
-  przeglad: <path d="M3 9.5 8 4l5 5.5V13a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9.5Z" />,
-  sklepy: <path d="M3 6h10l-.8 7.1a1 1 0 0 1-1 .9H4.8a1 1 0 0 1-1-.9L3 6Zm2.5 0V4.5a2.5 2.5 0 0 1 5 0V6" />,
-  profile: <path d="M8 8.5A2.75 2.75 0 1 0 8 3a2.75 2.75 0 0 0 0 5.5ZM3 14c0-2.2 2.2-3.5 5-3.5s5 1.3 5 3.5" />,
-  zamowienia: <path d="M3 4.5h10M3 8h10M3 11.5h6" />,
-  zgodnosc: <path d="M8 2.5 13 5v3.5c0 3-2.1 4.6-5 5.5-2.9-.9-5-2.5-5-5.5V5l5-2.5Z" />,
-  kampanie: <path d="M2.5 5.5h11v7h-11z M2.5 5.5 8 9.5l5.5-4" />,
-  segmenty: <path d="M13 3H3l4 4.7V13l2-1.2V7.7L13 3Z" />,
-  listy: <path d="M5.5 4.5h8M5.5 8h8M5.5 11.5h8M2.8 4.5h.01M2.8 8h.01M2.8 11.5h.01" />,
-  zgody: <path d="m3.5 8.2 3 3 6-6.4" />,
-  popupy: <path d="M2.5 3.5h11v6h-11z M5.5 12.5h5 M8 9.5v3" />,
-  automatyzacje: <path d="M8 2.5v3 M8 10.5v3 M2.5 8h3 M10.5 8h3 M8 6.5A1.5 1.5 0 1 0 8 9.5 1.5 1.5 0 0 0 8 6.5Z" />,
+const IKONY: Record<string, NazwaIkony> = {
+  przeglad: "przeglad",
+  sklepy: "sklep",
+  profile: "profil",
+  zamowienia: "zamowienie",
+  zgodnosc: "zgodnosc",
+  kampanie: "kampania",
+  segmenty: "segment",
+  listy: "lista",
+  zgody: "zgodnosc",
+  popupy: "formularz",
+  automatyzacje: "automatyzacja",
+  wysylka: "wysylka",
+  import: "dokument",
 };
 
-function Ikona({ nazwa }: { nazwa: string }) {
-  return (
-    <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-      {IKONY[nazwa]}
-    </svg>
-  );
+type Pozycja = { href: string; etykieta: string; ikona: string };
+type Sekcja = { tytul: string; pozycje: Pozycja[] };
+
+function aktywnyLink(sciezka: string, baza: string, href: string) {
+  const cel = `${baza}${href}`;
+  return href === "" ? sciezka === baza : sciezka.startsWith(cel);
 }
 
-/**
- * Pasek zakładek na telefonie (< md). Ten sam sygnał aktywności co w nawigacji bocznej:
- * jaśniejsza powierzchnia + aria-current, inaczej po przejściu pasek wygląda identycznie
- * i operator nie wie, gdzie jest.
- */
-export function NawigacjaMobilna({
-  tenantId,
-  pozycje,
-}: {
-  tenantId: string;
-  pozycje: { href: string; etykieta: string }[];
-}) {
+export function NawigacjaMobilna({ tenantId, pozycje }: { tenantId: string; pozycje: Pozycja[] }) {
   const sciezka = usePathname();
   const baza = `/t/${tenantId}`;
+  const glowneSciezki = new Set(["", "/kampanie", "/profile"]);
+  const glowne = pozycje.filter((pozycja) => glowneSciezki.has(pozycja.href));
+  const pozostale = pozycje
+    .filter((pozycja) => !glowneSciezki.has(pozycja.href))
+    .sort((a, b) => Number(b.href === "/automatyzacje") - Number(a.href === "/automatyzacje"));
+  const aktywnaPozostala = pozostale.some((pozycja) => aktywnyLink(sciezka, baza, pozycja.href));
 
   return (
-    <nav className="flex gap-1 overflow-x-auto border-b border-[var(--color-linia)] bg-[var(--color-panel)] px-3 py-2 md:hidden">
-      {pozycje.map((p) => {
-        const cel = `${baza}${p.href}`;
-        const aktywna = p.href === "" ? sciezka === baza : sciezka.startsWith(cel);
+    <nav aria-label="Główna nawigacja" className="relative z-30 grid h-14 grid-cols-4 border-b border-[var(--color-linia)] bg-white px-1 md:hidden">
+      {glowne.map((p) => {
+        const aktywna = aktywnyLink(sciezka, baza, p.href);
         return (
           <Link
             key={p.href}
-            href={cel}
+            href={`${baza}${p.href}`}
             aria-current={aktywna ? "page" : undefined}
-            className={`whitespace-nowrap rounded-md px-2.5 py-1 text-[13px] ${
-              aktywna
-                ? "bg-[var(--color-powierzchnia-2)] text-[var(--color-tekst)]"
-                : "text-[var(--color-tekst-2)]"
-            }`}
+            className={`relative flex min-h-11 min-w-0 flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-center text-[12px] leading-4 ${aktywna ? "font-semibold text-[var(--color-tekst)] after:absolute after:inset-x-4 after:bottom-0 after:h-[3px] after:rounded-t-full after:bg-[var(--color-akcent)]" : "font-medium text-[var(--color-tekst-2)]"}`}
           >
-            {p.etykieta}
+            <Icon name={IKONY[p.ikona] ?? "dokument"} size={18} />
+            <span>{p.etykieta}</span>
           </Link>
         );
       })}
+      <details className="group relative min-w-0">
+        <summary className={`relative flex min-h-11 cursor-pointer list-none flex-col items-center justify-center gap-0.5 rounded-md px-1 py-1 text-[12px] leading-4 ${aktywnaPozostala ? "font-semibold text-[var(--color-tekst)] after:absolute after:inset-x-4 after:bottom-0 after:h-[3px] after:rounded-t-full after:bg-[var(--color-akcent)]" : "font-medium text-[var(--color-tekst-2)]"}`}>
+          <Icon name="lista" size={18} />
+          <span>Więcej</span>
+        </summary>
+        <div className="absolute right-0 top-[calc(100%+8px)] w-[min(280px,calc(100vw-16px))] overflow-hidden rounded-[10px] border border-[var(--color-linia)] bg-white p-1.5 shadow-[var(--cien-uniesiony)]">
+          {pozostale.map((p) => {
+            const aktywna = aktywnyLink(sciezka, baza, p.href);
+            return (
+              <Link
+                key={p.href}
+                href={`${baza}${p.href}`}
+                aria-current={aktywna ? "page" : undefined}
+                onClick={(event) => event.currentTarget.closest("details")?.removeAttribute("open")}
+                className={`flex min-h-11 items-center gap-3 rounded-[7px] px-3 text-[14px] leading-5 ${aktywna ? "bg-[var(--color-powierzchnia-2)] font-semibold text-[var(--color-tekst)]" : "font-medium text-[var(--color-tekst-2)]"}`}
+              >
+                <Icon name={IKONY[p.ikona] ?? "dokument"} size={17} className={aktywna ? "text-[var(--color-akcent)]" : "text-[var(--color-tekst-3)]"} />
+                <span>{p.etykieta}</span>
+              </Link>
+            );
+          })}
+        </div>
+      </details>
     </nav>
   );
 }
 
-export function Nawigacja({
-  tenantId,
-  sekcje,
-  liczniki,
-}: {
-  tenantId: string;
-  sekcje: { tytul: string; pozycje: { href: string; etykieta: string; ikona: string }[] }[];
-  liczniki: Record<string, number>;
-}) {
+export function Nawigacja({ tenantId, sekcje, liczniki }: { tenantId: string; sekcje: Sekcja[]; liczniki: Record<string, number> }) {
   const sciezka = usePathname();
   const baza = `/t/${tenantId}`;
 
   return (
-    <nav className="mt-4 space-y-4">
-      {sekcje.map((sekcja) => (
-        <div key={sekcja.tytul}>
-          <div className="etykieta mb-1 px-2">{sekcja.tytul}</div>
-          <div className="space-y-px">
+    <nav aria-label="Główna nawigacja" className="mt-5 space-y-4">
+      {sekcje.map((sekcja, indeks) => (
+        <div key={`${sekcja.tytul}-${indeks}`}>
+          {sekcja.tytul ? <div className="mb-1.5 px-3 text-[12px] leading-4 font-semibold text-[var(--color-tekst-3)]">{sekcja.tytul}</div> : null}
+          <div className="space-y-0.5">
             {sekcja.pozycje.map((p) => {
-              const cel = `${baza}${p.href}`;
-              const aktywna = p.href === "" ? sciezka === baza : sciezka.startsWith(cel);
+              const aktywna = aktywnyLink(sciezka, baza, p.href);
               return (
-                <Link
-                  key={p.href}
-                  href={cel}
-                  className="nawigacja-pozycja"
-                  aria-current={aktywna ? "page" : undefined}
-                >
-                  <Ikona nazwa={p.ikona} />
-                  {p.etykieta}
-                  {liczniki[p.ikona] !== undefined ? (
-                    <span className="nawigacja-licznik">{liczniki[p.ikona]}</span>
-                  ) : null}
+                <Link key={p.href} href={`${baza}${p.href}`} className="nawigacja-pozycja" aria-current={aktywna ? "page" : undefined}>
+                  <Icon name={IKONY[p.ikona] ?? "dokument"} size={18} />
+                  <span className="min-w-0 flex-1 whitespace-nowrap">{p.etykieta}</span>
+                  {liczniki[p.ikona] !== undefined ? <span className="nawigacja-licznik">{liczniki[p.ikona]}</span> : null}
                 </Link>
               );
             })}

@@ -1,116 +1,55 @@
-/**
- * Nagłówek strony: 48px, nie 118px. Sticky nagłówek zabierający jedną szóstą ekranu
- * w narzędziu, w którym siedzi się godzinami, to zmarnowane miejsce na dane.
- * Opis strony schodzi pod nagłówek jako zwijalna notka, nie jako blok tekstu na górze.
- */
-export function Naglowek({
-  tytul,
-  opis,
-  akcja,
-}: {
+/** Kompatybilne komponenty nagłówka i metryk używane przez wszystkie ekrany. */
+import { Alert, Card, Icon, PageHeader, Stat, StatGrid } from "../../ui";
+
+export function Naglowek({ tytul, opis, akcja, podtytul, powrot, oznaczenie, akcjaMobilnaPelna = false }: {
   tytul: string;
   opis?: string;
   akcja?: React.ReactNode;
+  podtytul?: React.ReactNode;
+  powrot?: { href: string; etykieta: string };
+  oznaczenie?: React.ReactNode;
+  akcjaMobilnaPelna?: boolean;
 }) {
+  const dlugiOpis = Boolean(opis && opis.length > 160);
   return (
-    <>
-      <header className="sticky top-0 z-10 flex h-11 items-center justify-between gap-4 border-b border-[var(--color-linia)] bg-[var(--color-app)] px-4">
-        <h1>{tytul}</h1>
-        {akcja}
-      </header>
-      {opis ? (
-        <details className="border-b border-[var(--color-linia-0)] px-4 py-2">
-          <summary className="cursor-pointer list-none text-[12px] text-[var(--color-tekst-3)] marker:hidden">
-            <span className="underline decoration-dotted underline-offset-2">
-              Jak to działa
-            </span>
+    <PageHeader
+      title={tytul}
+      subtitle={podtytul ?? (dlugiOpis ? undefined : opis)}
+      actions={akcja}
+      back={powrot ? { href: powrot.href, label: powrot.etykieta } : undefined}
+      leading={oznaczenie}
+      help={dlugiOpis ? (
+        <details className="group relative z-20">
+          <summary className="grid h-7 w-7 cursor-pointer list-none place-items-center rounded-full text-[var(--color-tekst-3)] hover:bg-[var(--color-powierzchnia-2)] hover:text-[var(--color-akcent)]" aria-label="Informacje o tym ekranie">
+            <Icon name="info" size={16} />
           </summary>
-          <p className="mt-2 max-w-[74ch] text-[12px] leading-[18px] text-[var(--color-tekst-3)]">{opis}</p>
+          <div className="tekst-pomocniczy fixed left-4 right-4 top-32 w-auto rounded-[10px] border border-[var(--color-linia)] bg-white p-4 font-normal tracking-normal shadow-[var(--cien-uniesiony)] md:absolute md:left-0 md:right-auto md:top-9 md:w-[min(520px,calc(100vw-32px))]">
+            {opis}
+          </div>
         </details>
       ) : null}
-    </>
+      actionsFullWidthOnMobile={akcjaMobilnaPelna}
+    />
   );
 }
 
 export function Komunikat({ ok, blad }: { ok?: string; blad?: string }) {
   if (!ok && !blad) return null;
+  return <div className="pb-4"><Alert tone={blad ? "blad" : "ok"} title={blad ? "Błąd" : "Gotowe"}>{blad ?? ok}</Alert></div>;
+}
+
+export function PasekMetryk({ pozycje }: { pozycje: { etykieta: string; wartosc: string; opis?: string }[] }) {
   return (
-    <div className="px-4 pt-3">
-      <div
-        className="flex items-center gap-2 rounded-md px-3 py-2 text-[13px]"
-        style={{
-          background: blad ? "var(--color-blad-tlo)" : "var(--color-ok-tlo)",
-          border: `1px solid ${blad ? "var(--color-blad)" : "var(--color-ok-ramka)"}`,
-          color: blad ? "var(--color-blad)" : "var(--color-ok)",
-        }}
-        role="status"
-      >
-        <span className="font-medium">{blad ? "Błąd" : "Gotowe"}</span>
-        <span className="text-[var(--color-tekst-2)]">{blad ?? ok}</span>
-      </div>
+    <div className="pasek-metryk grid grid-cols-2 overflow-hidden rounded-[10px] border border-[var(--color-linia)] bg-white lg:grid-cols-4">
+      {pozycje.map((p, i) => <Stat key={p.etykieta} label={p.etykieta} value={p.wartosc} description={p.opis} className={`${i % 2 === 0 ? "border-r" : ""} ${i < 2 ? "border-b lg:border-b-0" : ""} border-[var(--color-linia-0)] lg:border-r lg:last:border-r-0`} />)}
     </div>
   );
 }
 
-/** Wąski pasek metryk. Zastępuje siedem dużych kafelków, które zajmowały pół ekranu. */
-export function PasekMetryk({
-  pozycje,
-}: {
-  pozycje: { etykieta: string; wartosc: string; opis?: string }[];
-}) {
-  return (
-    <div className="grid grid-cols-2 gap-px overflow-hidden rounded-md border border-[var(--color-linia)] bg-[var(--color-linia)] sm:grid-cols-4">
-      {pozycje.map((p) => (
-        <div key={p.etykieta} className="bg-[var(--color-powierzchnia)] px-3 py-2.5">
-          <div className="etykieta">{p.etykieta}</div>
-          <div className="liczba mt-1 text-[15px] font-medium leading-[20px]">
-            {p.wartosc}
-          </div>
-          {p.opis ? <div className="mt-0.5 text-[12px] text-[var(--color-tekst-3)]">{p.opis}</div> : null}
-        </div>
-      ))}
-    </div>
-  );
+export function MetrykaWiodaca({ etykieta, wartosc, opis, dodatek }: { etykieta: string; wartosc: string; opis?: string; dodatek?: React.ReactNode }) {
+  return <Card><StatGrid><Stat label={etykieta} value={wartosc} description={opis} /><div className="flex items-center justify-end p-6 max-md:p-4">{dodatek}</div></StatGrid></Card>;
 }
 
-/** Metryka wiodąca: jedna liczba, która ma być pierwszą rzeczą na ekranie. */
-export function MetrykaWiodaca({
-  etykieta,
-  wartosc,
-  opis,
-  dodatek,
-}: {
-  etykieta: string;
-  wartosc: string;
-  opis?: string;
-  dodatek?: React.ReactNode;
-}) {
-  return (
-    <div className="flex flex-wrap items-end justify-between gap-4 rounded-md border border-[var(--color-linia)] bg-[var(--color-powierzchnia)] px-4 py-3.5">
-      <div>
-        <div className="etykieta">{etykieta}</div>
-        <div className="wielkosc-hero mt-1">{wartosc}</div>
-        {opis ? <div className="mt-1 text-[12px] text-[var(--color-tekst-3)]">{opis}</div> : null}
-      </div>
-      {dodatek}
-    </div>
-  );
-}
-
-export function Kafelek({
-  etykieta,
-  wartosc,
-  opis,
-}: {
-  etykieta: string;
-  wartosc: string;
-  opis?: string;
-}) {
-  return (
-    <div className="karta px-3 py-2.5">
-      <div className="etykieta">{etykieta}</div>
-      <div className="wielkosc mt-1">{wartosc}</div>
-      {opis ? <div className="mt-1 text-[12px] text-[var(--color-tekst-3)]">{opis}</div> : null}
-    </div>
-  );
+export function Kafelek({ etykieta, wartosc, opis }: { etykieta: string; wartosc: string; opis?: string }) {
+  return <Card><Stat label={etykieta} value={wartosc} description={opis} /></Card>;
 }

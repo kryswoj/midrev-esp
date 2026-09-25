@@ -5,6 +5,7 @@ import { przeczytajOgraniczone } from "../../../przeczytaj-ograniczone";
 import { getPool } from "../../../../../adapters/db/pool";
 import { odszyfruj } from "../../../../../adapters/crypto";
 import { dodajZadanie } from "../../../../../jobs/kolejka";
+import { bytTematu, kluczZdarzeniaWebhooka, tematObslugiwany } from "../../../../../adapters/store/webhooki";
 
 const schematId = z.string().uuid();
 
@@ -15,8 +16,10 @@ const schematId = z.string().uuid();
  *
  * Klucz idempotencji opisuje BYT, nie kanał (AD-24): to samo zamówienie przysłane
  * webhookiem i zaciągnięte importem historycznym ma ten sam klucz i nie wejdzie dwa razy.
- * Kształt klucza MUSI być identyczny z tym w imporcie:
- * woocommerce:{tenant}:order:{id}:{date_modified_gmt}.
+ * Kształt klucza MUSI być identyczny z tym w imporcie (`kluczZdarzeniaWebhooka`):
+ * woocommerce:{tenant}:{byt}:{id}:{date_modified_gmt}. Byt pochodzi z TEMATU webhooka
+ * (order.* / customer.*), nie jest zaszyty: klient nr 8 i zamówienie nr 8 z tą samą
+ * datą miały wcześniej jeden klucz i drugie ginęło jako duplikat (audyt #4).
  */
 // zamowienie Woo z dlugimi line_items miewa dziesiatki KB; 1 MB to sufit z zapasem,
 // a bez sufitu endpoint bez uwierzytelnienia przyjmuje dowolnie duze cialo do pamieci
@@ -68,15 +71,24 @@ export async function POST(zadanie: NextRequest, ctx: { params: Promise<{ storeI
   } catch {
     return new NextResponse("nieczytelne ciało", { status: 400 });
   }
-  const temat = zadanie.headers.get("x-wc-webhook-topic") ?? "order.updated";
+  // temat jest OBOWIĄZKOWY: bez nagłówka nie wiadomo, czy payload to zamówienie, czy
+  // klient, a zgadywanie "order" mapowało klienta jako zamówienie (audyt #4)
+  const temat = zadanie.headers.get("x-wc-webhook-topic") ?? "";
+  // temat spoza subskrypcji (np. order.deleted skonfigurowany recznie w sklepie): ACK 200
+  // bez zapisu - zapisane zdarzenie nie mialoby czym sie przetworzyc i krazyloby
+  // w kolejce (review #4). 4xx kazalby Woo ponawiac i po serii bledow wylaczyc webhooka.
+  if (!tematObslugiwany(temat)) return new NextResponse("temat pominięty", { status: 200 });
+  const byt = bytTematu(temat);
+  if (!byt) return new NextResponse("nieobsługiwany temat", { status: 400 });
   const zewnetrzneId = String(dane.id ?? "");
   if (!zewnetrzneId) return new NextResponse("brak id", { status: 400 });
+  // data ZE ZRODLA jest warunkiem zapisu (AD-10): payload bez niej nigdy nie da sie
+  // zmapowac, a klucz z fallbacku na status zostawialby zatrute zdarzenie na zawsze
+  if (typeof dane.date_created_gmt !== "string" || !dane.date_created_gmt) {
+    return new NextResponse("brak date_created_gmt", { status: 400 });
+  }
 
-  // wersja bytu = data modyfikacji ze zrodla, nie status: order.updated z ta sama
-  // wartoscia statusu, ale zmieniona kwota, mialby ten sam klucz i przepadlby
-  // w idempotencji (znalezisko review R2). Ksztalt identyczny z importem (AD-24).
-  const wersja = String(dane.date_modified_gmt ?? dane.date_created_gmt ?? dane.status ?? "?");
-  const klucz = `woocommerce:${sklep.tenant_id}:order:${zewnetrzneId}:${wersja}`;
+  const klucz = kluczZdarzeniaWebhooka(sklep.tenant_id, byt, { ...dane, id: zewnetrzneId });
 
   // Zapis zdarzenia i job w JEDNEJ transakcji: gdyby job powstawał osobno i padł,
   // retry nadawcy trafiłby w idempotencję zapisu (duplikat) i zdarzenie zostałoby

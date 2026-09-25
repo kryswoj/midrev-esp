@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { config } from "../../config";
 
 /**
@@ -14,12 +15,49 @@ export interface Zlinkowany {
   linki: string[];
 }
 
+/**
+ * Token pixela otwarć, wyprowadzony z tokena kliknięć tej samej wiadomości.
+ *
+ * Ta funkcja MUSI dawać dokładnie to, co liczy kolumna generowana `messages.open_token`
+ * z migracji 0016 — inaczej pixel w mailu wskazywałby na adres, którego trasa nie
+ * znajdzie, a otwarcia po cichu przestałyby się liczyć. Test sprawdza tę równość wobec
+ * BAZY, a nie wobec drugiego wywołania tej samej funkcji.
+ *
+ * Dlaczego osobny token, a nie po prostu `clickToken`: adres pixela widzi każdy
+ * pośrednik, który pobiera obrazek za odbiorcę (proxy obrazków, skaner bramki). Gdyby
+ * niósł token kliknięć, dałoby się z niego złożyć `/r/<token>?l=0` i wstrzyknąć
+ * kliknięcie do atrybucji przychodu. sha256 jest jednokierunkowa, więc ta droga jest
+ * zamknięta.
+ */
+export function tokenOtwarcia(clickToken: string): string {
+  return createHash("sha256").update(`otwarcie:${clickToken}`).digest("hex");
+}
+
+/** Adres pixela otwarć dla wiadomości o podanym tokenie kliknięć. */
+export function adresPixela(clickToken: string): string {
+  // `.gif` na końcu jest ozdobą adresu (część filtrów pocztowych patrzy krzywo na
+  // obrazek bez rozszerzenia); trasa obcina je przed wyszukaniem tokena.
+  return `${config().APP_URL}/api/o/${tokenOtwarcia(clickToken)}.gif`;
+}
+
+/** Tekst od operatora (nazwa sklepu) wchodzi do HTML maila wyłącznie po escapowaniu. */
+export function escapujHtml(tekst: string): string {
+  return String(tekst).replace(/[&<>"']/g, (z) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[z]!);
+}
+
+/**
+ * Przepisuje KAŻDY link http(s) na własną domenę: `href="…"`, `href='…'` i `href=…`
+ * bez cudzysłowu (edytory i szablony z zewnątrz produkują wszystkie trzy). Wcześniej
+ * łapany był tylko podwójny cudzysłów, więc link w pojedynczym wychodził bez śledzenia
+ * i lista kontrolna pokazywała „brak linku" w mailu, który link miał.
+ */
 export function przepiszLinki(html: string, clickToken: string): Zlinkowany {
   const linki: string[] = [];
   const baza = config().APP_URL;
   const przepisany = html.replace(
-    /href="(https?:\/\/[^"]+)"/g,
-    (_pelny, url: string) => {
+    /href\s*=\s*(?:"(https?:\/\/[^"]*)"|'(https?:\/\/[^']*)'|(https?:\/\/[^\s>"']+))/gi,
+    (_pelny, wDwoch: string | undefined, wJednym: string | undefined, bez: string | undefined) => {
+      const url = wDwoch ?? wJednym ?? bez ?? "";
       const indeks = linki.push(url) - 1;
       return `href="${baza}/r/${clickToken}?l=${indeks}"`;
     },
@@ -32,18 +70,48 @@ export function zlozWiadomosc(opcje: {
   clickToken: string;
   unsubscribeToken: string;
   nazwaSklepu: string;
+  /**
+   * Zgoda na śledzenie kliknięć, rozstrzygnięta przy budowie wiadomości (Blok A, A5).
+   * Gdy `false`, linki zostają ORYGINALNE, a snapshot `linki` jest pusty — odbiorca
+   * klika prosto w sklep, a `/r` nie ma czego mu podstawić. Domyślne `true` zachowuje
+   * dotychczasowe zachowanie i nie zmienia nic tam, gdzie tej decyzji jeszcze nie ma.
+   */
+  sledzKlikniecia?: boolean;
+  /**
+   * Zgoda na śledzenie OTWARĆ, rozstrzygnięta przy budowie wiadomości (Blok A, A5).
+   * Gdy `false`, pixel w ogóle nie trafia do treści — i o to chodzi. Bramka po stronie
+   * trasy (`zapiszZaangazowanie` czyta migawkę `open_tracking_allowed`) pilnuje danych,
+   * ale samo POBRANIE obrazka jest już śledzeniem: mail bez zgody ma wyjść bez pixela,
+   * a nie z pixelem, który my potem grzecznie zignorujemy.
+   *
+   * Domyślne `true` jest tą samą konwencją co przy `sledzKlikniecia`: wołający, który
+   * o zgodzie nie wie, dostaje dotychczasowe zachowanie. Ścieżka wysyłki kampanii ma
+   * tę decyzję policzoną (`zgody.otwarcia`) i MUSI ją tu przekazać jawnie — bez tego
+   * odbiorca z wycofaną zgodą na otwarcia dostanie pixel, którego nie powinien dostać.
+   */
+  sledzOtwarcia?: boolean;
 }): Zlinkowany {
   const baza = config().APP_URL;
-  const { html, linki } = przepiszLinki(opcje.trescHtml, opcje.clickToken);
+  const { html, linki } =
+    opcje.sledzKlikniecia === false
+      ? { html: opcje.trescHtml, linki: [] as string[] }
+      : przepiszLinki(opcje.trescHtml, opcje.clickToken);
   const stopka = `
   <div style="margin-top:32px;padding-top:16px;border-top:1px solid #e5e5e5;color:#8a8a8a;font:12px/1.6 -apple-system,Segoe UI,sans-serif">
-    <p style="margin:0 0 4px">Otrzymujesz tę wiadomość, bo wyraziłaś/eś zgodę na komunikację od ${opcje.nazwaSklepu}.</p>
+    <p style="margin:0 0 4px">Otrzymujesz tę wiadomość, bo wyraziłaś/eś zgodę na komunikację od ${escapujHtml(opcje.nazwaSklepu)}.</p>
     <p style="margin:0"><a href="${baza}/u/${opcje.unsubscribeToken}" style="color:#8a8a8a">Wypisz się jednym kliknięciem</a></p>
   </div>`;
+  // Pixel na samym końcu ciała, POZA kontenerem treści: nie wpływa na układ, a klient
+  // pocztowy, który obcina długie maile ("[Message clipped]" w Gmailu), obcina go razem
+  // z końcem treści — czyli nie zapisujemy otwarcia komuś, kto maila nie rozwinął.
+  const pixel =
+    opcje.sledzOtwarcia === false
+      ? ""
+      : `<img src="${adresPixela(opcje.clickToken)}" width="1" height="1" alt="" style="display:block;width:1px;height:1px;border:0;margin:0;padding:0;overflow:hidden">`;
   const pelny = `<!doctype html><html lang="pl"><body style="margin:0;padding:24px;background:#f5f5f5">
   <div style="max-width:560px;margin:0 auto;background:#ffffff;border-radius:8px;padding:32px;font:14px/1.6 -apple-system,Segoe UI,sans-serif;color:#1c1c1e">
   ${html}
   ${stopka}
-  </div></body></html>`;
+  </div>${pixel}</body></html>`;
   return { html: pelny, linki };
 }

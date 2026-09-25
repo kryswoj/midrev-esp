@@ -1,11 +1,14 @@
 import { randomBytes } from "node:crypto";
 import { getPool } from "../../adapters/db/pool";
-import { AdapterSmtp } from "../../adapters/email/smtp";
+import { hashAdresu } from "../../adapters/hash-adresu";
 import { config } from "../../config";
 import type { DostawcaWysylki } from "../../domain/email/port";
+import { klasyfikujOdpowiedzSmtp, type Klasyfikacja } from "../../domain/email/klasyfikacja";
 import { canSendTo } from "./can-send-to";
-import { zlozWiadomosc } from "./renderuj";
+import { tokenOtwarcia, zlozWiadomosc } from "./renderuj";
+import { politykaSledzenia } from "./zgody";
 import { policzOdbiorcow } from "../policz-odbiorcow";
+import { adresNadawcyTenanta, wybierzWysylke } from "../wysylka-konfiguracja/nadawca";
 
 /**
  * Rangi stanów wiadomości (AD-22). Projekcja current_state na messages jest aktualizowana
@@ -19,31 +22,127 @@ const RANGI: Record<string, number> = {
   sent: 2,
   delivered: 3,
   bounced: 3,
+  // `dropped` (mail nie opuścił naszej strony) jest stanem TERMINALNYM tak samo jak
+  // `failed` — rozdział tych dwóch dotyczy przyczyny, nie tego, czy sprawa jest zamknięta.
+  dropped: 3,
   failed: 3,
   suppressed: 3,
   held: 3,
   complained: 4,
 };
 
+export type TypZdarzeniaWiadomosci =
+  | "queued"
+  | "sending"
+  | "sent"
+  | "delivered"
+  | "bounced"
+  | "complained"
+  | "dropped"
+  | "failed"
+  | "suppressed"
+  | "held";
+
+export interface OpcjeZdarzenia {
+  /**
+   * Data zdarzenia. Podawana ZAWSZE jawnie, bo 0014 zdjęło z kolumny `default now()`
+   * (AD-10, ten sam ruch, który 0002 zrobiło na `events`).
+   *   `Date`    — zdarzenie zaraportowane przez dostawcę: data pochodzi OD NIEGO,
+   *               a nie z chwili, w której webhook do nas dotarł.
+   *   `"teraz"` — przejście stanu, które dzieje się w tej chwili. Datę stawia zegar
+   *               BAZY, nie serwera aplikacji: po tej samej dacie liczy się limit
+   *               dobowy i rozjazd zegarów przesunąłby wysyłkę między dobami.
+   */
+  kiedy: Date | "teraz";
+  payload?: Record<string, unknown>;
+  /** Klasyfikacja odbicia (A2). Przy `bounced` wymagana także przez CHECK w bazie. */
+  klasyfikacja?: Klasyfikacja;
+  /**
+   * Czy twarde odbicie / skarga ma trafić także na wykluczenia GLOBALNE (cała platforma).
+   * Domyślnie tak. `false` dla raportów bez dowodu tożsamości wiadomości (skrzynka
+   * zwrotna jest publiczna: sfałszowany DSN dopasowany po samym adresie nie może
+   * wykluczyć adresu wszystkim tenantom; sklepowe wykluczenie zostaje, bo jest
+   * odwracalne z panelu i widoczne w rejestrze raportów).
+   */
+  wykluczenieGlobalne?: boolean;
+}
+
 export async function zapiszZdarzenie(
   klient: import("pg").PoolClient,
   tenantId: string,
   messageId: string,
-  typ: string,
-  payload: Record<string, unknown> = {},
+  typ: TypZdarzeniaWiadomosci,
+  opcje: OpcjeZdarzenia,
 ) {
+  const k = opcje.klasyfikacja;
   // Zdarzenie jest append-only z unikalnością (message_id, event_type): powtórka
   // (np. ponowiony job) nie tworzy drugiego wpisu i nie przesuwa stanu wstecz.
-  await klient.query(
-    `insert into message_events (tenant_id, message_id, event_type, payload)
-     values ($1, $2, $3, $4) on conflict (message_id, event_type) do nothing`,
-    [tenantId, messageId, typ, JSON.stringify(payload)],
+  const zapis = await klient.query(
+    `insert into message_events
+       (tenant_id, message_id, event_type, payload, occurred_at,
+        bounce_class, bounce_category, smtp_code, provider_reason, add_exclusion, counts_to_rate)
+     values ($1, $2, $3, $4, coalesce($5::timestamptz, now()), $6, $7, $8, $9, $10, $11)
+     on conflict (message_id, event_type) do nothing
+     returning id`,
+    [
+      tenantId,
+      messageId,
+      typ,
+      JSON.stringify(opcje.payload ?? {}),
+      opcje.kiedy === "teraz" ? null : opcje.kiedy,
+      k?.klasa ?? null,
+      k?.kategoria ?? null,
+      k?.kodSmtp ?? null,
+      k?.powodDostawcy ?? null,
+      k?.wykluczAdres ?? null,
+      k?.liczySieDoWskaznika ?? null,
+    ],
   );
   await klient.query(
     `update messages set current_state = $3, current_rank = $4
       where tenant_id = $1 and id = $2 and current_rank < $4`,
     [tenantId, messageId, typ, RANGI[typ] ?? 0],
   );
+
+  // Decyzja `add_exclusion` zapisana w zdarzeniu ma być WYKONANA, nie tylko odnotowana.
+  // Warunek na rowCount: gdy zdarzenie było duplikatem, wykluczenie już wcześniej
+  // powstało i drugi wpis tylko zaśmieciłby log (tenant_suppressions nie ma unikalności).
+  if (k?.wykluczAdres && zapis.rowCount) {
+    const powod = `odbicie:${k.kategoria ?? "unclassified"}${k.kodSmtp ? ` (${k.kodSmtp})` : ""}`;
+    const { rows: adres } = await klient.query<{ email: string }>(
+      "select email from messages where tenant_id = $1 and id = $2",
+      [tenantId, messageId],
+    );
+    const email = adres[0]?.email ?? null;
+    // Spóźniony raport do wiadomości już ZANONIMIZOWANEJ (RODO, art. 17): adres to
+    // zaślepka `usuniety@rodo.invalid`. Wpis wykluczenia z zaślepką nikogo nie chroni,
+    // a wykluczenie osoby, która zażądała usunięcia, i tak stoi po haszu w `suppressions`.
+    if (email && !czyZaslepkaRodo(email)) {
+      await klient.query(
+        `insert into tenant_suppressions (tenant_id, email, action, reason, actor, occurred_at)
+         values ($1, $2, 'suppressed', $3, 'system', coalesce($4::timestamptz, now()))`,
+        [tenantId, email, powod, opcje.kiedy === "teraz" ? null : opcje.kiedy],
+      );
+      // Wykluczenie GLOBALNE tylko przy martwym adresie i przy skardze: to chroni
+      // reputację całej platformy (0001). Miękkie odbicie zostaje przy jednym sklepie.
+      // `email_hash` od razu (0022/0023): wpis przeżyje anonimizację, a dedup po haszu
+      // nie dopisze jawnie adresu, który już siedzi na liście jako sama zaślepka.
+      if ((k.klasa === "hard" || k.typZdarzenia === "complained") && opcje.wykluczenieGlobalne !== false) {
+        await klient.query(
+          `insert into suppressions (email, reason, email_hash)
+           select $1, $2, $3
+            where not exists (select 1 from suppressions s where s.email_hash = $3 or lower(btrim(s.email)) = lower(btrim($1)))
+           on conflict do nothing`,
+          [email, powod, hashAdresu(email)],
+        );
+      }
+    }
+  }
+}
+
+/** Adres-zaślepka po anonimizacji RODO (profil-rodo.ts) albo zaślepka globalnej listy (0022). */
+function czyZaslepkaRodo(email: string): boolean {
+  return email === "usuniety@rodo.invalid" || email.startsWith("anonimizowano:");
 }
 
 function token(): string {
@@ -51,9 +150,38 @@ function token(): string {
 }
 
 /**
+ * Domena wysyłkowa użyta przy tej wiadomości (A3). Rozstrzygana z adresu nadawcy, bo
+ * to on decyduje, spod której tożsamości mail wychodzi. `null`, gdy tenant nie ma
+ * jeszcze wiersza w `sending_domains` — tak jest dziś przy Mailpicie i tak zostanie do
+ * Bloku D, w którym dochodzi twarda bramka "bez zweryfikowanej domeny nie wysyłamy".
+ * Zapisujemy to, co wiemy, zamiast nie zapisywać nic.
+ */
+async function domenaWysylkowa(tenantId: string, adresOd: string): Promise<string | null> {
+  const domena = adresOd.split("@")[1]?.trim().toLowerCase();
+  if (!domena) return null;
+  const { rows } = await getPool().query(
+    "select id from sending_domains where tenant_id = $1 and lower(domain) = $2",
+    [tenantId, domena],
+  );
+  return rows[0]?.id ?? null;
+}
+
+/**
  * Faza 1: budowa wiadomości dla kampanii. Idempotentna dzięki unikalności
  * (tenant_id, source_type, source_id, profile_id) z AD-26: drugie uruchomienie
  * nie tworzy duplikatów, tylko dokłada brakujących odbiorców.
+ *
+ * Jeden `INSERT … SELECT` na całą kampanię zamiast SELECT + SELECT + INSERT per profil
+ * (audyt 24.09, #5: przy 10 tys. odbiorców to było 30 tys. zapytań). Zasady, które
+ * zostały DOKŁADNIE te same, tylko przeniesione do SQL:
+ *   - adres z profilu w chwili budowy, profil bez adresu pomijany,
+ *   - zgoda na śledzenie otwarć i kliknięć rozstrzygana per odbiorca tą samą regułą co
+ *     `zgodyNaSledzenie` (ostatni wpis w rejestrze, polityka tenanta) i UTRWALANA na
+ *     wiadomości (A5, AD-32),
+ *   - HTML per wiadomość z jej własnymi tokenami (klik, wypis, pixel), identyczny z tym,
+ *     co daje `zlozWiadomosc` dla tych tokenów (test regresji porównuje bajt w bajt).
+ * Tokeny powstają w Node (CSPRNG), nie w bazie: `gen_random_bytes` wymaga pgcrypto, a
+ * hash pixela i tak liczymy tutaj. Do bazy idą jako tablice do `unnest`.
  */
 export async function zbudujWiadomosciKampanii(tenantId: string, campaignId: string) {
   const pool = getPool();
@@ -65,43 +193,104 @@ export async function zbudujWiadomosciKampanii(tenantId: string, campaignId: str
   );
   const kampania = kampanie[0];
   if (!kampania) throw new Error("Kampania nie istnieje w tym tenancie");
-  const trescHtml: string = (kampania.content as any)?.html ?? "";
+  const trescHtml: string = (kampania.content as { html?: string } | null)?.html ?? "";
   if (!trescHtml.trim()) throw new Error("Kampania nie ma treści");
   if (!kampania.subject) throw new Error("Kampania nie ma tematu");
 
   const odbiorcy = await policzOdbiorcow(tenantId, campaignId);
-  let utworzone = 0;
+  if (odbiorcy.doceloweIds.length === 0) return { utworzone: 0, kandydatow: 0 };
+  // adres nadawcy TEGO tenanta (własny serwer SMTP albo domyślny MAIL_FROM)
+  const sendingDomainId = await domenaWysylkowa(tenantId, await adresNadawcyTenanta(tenantId));
+  // polityka śledzenia raz na kampanię, nie raz na odbiorcę
+  const polityka = await politykaSledzenia(pool, tenantId);
 
-  for (const profileId of odbiorcy.doceloweIds) {
-    const { rows: profil } = await pool.query(
-      "select email from profiles where tenant_id = $1 and id = $2",
-      [tenantId, profileId],
-    );
-    const email = profil[0]?.email;
-    if (!email) continue;
-
-    const clickToken = token();
-    const unsubToken = token();
-    // HTML utrwalany PER WIADOMOŚĆ z jej własnymi tokenami: zmiana szablonu po wysyłce
-    // nie może wstecznie zmienić tego, co ludzie dostali (AD-32).
-    const { html, linki } = zlozWiadomosc({
+  // Cztery szablony HTML (śledzenie kliknięć × otwarć) z ZNACZNIKAMI zamiast tokenów.
+  // Znaczniki są losowe per wywołanie, więc nie da się ich trafić treścią kampanii.
+  const znacznikKlik = `KLIK-${token()}`;
+  const znacznikWypis = `WYPIS-${token()}`;
+  const znacznikPixel = tokenOtwarcia(znacznikKlik);
+  const szablon = (klikniecia: boolean, otwarcia: boolean) =>
+    zlozWiadomosc({
       trescHtml,
-      clickToken,
-      unsubscribeToken: unsubToken,
+      clickToken: znacznikKlik,
+      unsubscribeToken: znacznikWypis,
       nazwaSklepu: kampania.nazwa_sklepu,
+      sledzKlikniecia: klikniecia,
+      sledzOtwarcia: otwarcia,
     });
+  const zKlikZOtw = szablon(true, true);
+  const zKlikBezOtw = szablon(true, false);
+  const bezKlikZOtw = szablon(false, true);
+  const bezKlikBezOtw = szablon(false, false);
 
-    const wynik = await pool.query(
-      `insert into messages (tenant_id, profile_id, source_type, source_id, email, subject,
-                             body_html, click_token, unsubscribe_token, links)
-       values ($1, $2, 'campaign', $3, $4, $5, $6, $7, $8, $9)
-       on conflict (tenant_id, source_type, source_id, profile_id) do nothing
-       returning id`,
-      [tenantId, profileId, campaignId, email, kampania.subject, html, clickToken, unsubToken, JSON.stringify(linki)],
-    );
-    if (wynik.rowCount) utworzone++;
-  }
-  return { utworzone, kandydatow: odbiorcy.doceloweIds.length };
+  const ids = odbiorcy.doceloweIds;
+  const clickTokeny = ids.map(() => token());
+  const unsubTokeny = ids.map(() => token());
+  const pixelTokeny = clickTokeny.map((t) => tokenOtwarcia(t));
+
+  const wynik = await pool.query(
+    `with polityka as (
+       select $12::text as otwarcia, $13::text as klikniecia
+     ),
+     odbiorca as (
+       select d.profile_id, d.click_token, d.unsub_token, d.pixel_token, p.email
+         from unnest($3::uuid[], $4::text[], $5::text[], $6::text[])
+                as d(profile_id, click_token, unsub_token, pixel_token)
+         join profiles p on p.tenant_id = $1 and p.id = d.profile_id
+        where p.email is not null
+     ),
+     wpisy as (
+       -- ostatni wpis w rejestrze per kanał (AD-16): occurred_at, potem recorded_at
+       select o.profile_id,
+              (select (c.state = 'granted' and (c.valid_until is null or c.valid_until > now()))
+                 from consents c
+                where c.tenant_id = $1 and c.profile_id = o.profile_id and c.channel = 'email_open_tracking'
+                order by c.occurred_at desc, c.recorded_at desc limit 1) as otwarcia_wpis,
+              (select (c.state = 'granted' and (c.valid_until is null or c.valid_until > now()))
+                 from consents c
+                where c.tenant_id = $1 and c.profile_id = o.profile_id and c.channel = 'email_click_tracking'
+                order by c.occurred_at desc, c.recorded_at desc limit 1) as klikniecia_wpis
+         from odbiorca o
+     ),
+     zgody as (
+       -- ta sama reguła co zgodyNaSledzenie: 'wymaga_zgody' = tylko jawna ważna zgoda,
+       -- 'dozwolone' = blokuje wyłącznie jawny wpis, który nie uprawnia
+       select w.profile_id,
+              case when pl.otwarcia is null then false
+                   when pl.otwarcia = 'wymaga_zgody' then coalesce(w.otwarcia_wpis, false)
+                   else coalesce(w.otwarcia_wpis, true) end as otwarcia,
+              case when pl.klikniecia is null then false
+                   when pl.klikniecia = 'wymaga_zgody' then coalesce(w.klikniecia_wpis, false)
+                   else coalesce(w.klikniecia_wpis, true) end as klikniecia
+         from wpisy w cross join polityka pl
+     )
+     insert into messages (tenant_id, profile_id, source_type, source_id, email, subject,
+                           body_html, click_token, unsubscribe_token, links,
+                           sending_domain_id, open_tracking_allowed, click_tracking_allowed)
+     select $1, o.profile_id, 'campaign', $2, o.email, $7,
+            replace(replace(replace(
+              case when z.klikniecia and z.otwarcia then $8
+                   when z.klikniecia then $9
+                   when z.otwarcia then $10
+                   else $11 end,
+              $14, o.pixel_token), $15, o.click_token), $16, o.unsub_token),
+            o.click_token, o.unsub_token,
+            case when z.klikniecia then $17::jsonb else '[]'::jsonb end,
+            $18, z.otwarcia, z.klikniecia
+       from odbiorca o join zgody z on z.profile_id = o.profile_id
+     on conflict (tenant_id, source_type, source_id, profile_id) do nothing`,
+    [
+      tenantId, campaignId, ids, clickTokeny, unsubTokeny, pixelTokeny,
+      kampania.subject,
+      zKlikZOtw.html, zKlikBezOtw.html, bezKlikZOtw.html, bezKlikBezOtw.html,
+      polityka?.otwarcia ?? null, polityka?.klikniecia ?? null,
+      // kolejność podmian: NAJPIERW pixel (hash znacznika kliku), potem klik, potem wypis —
+      // inaczej podmiana kliku zniszczyłaby hash, który go zawiera w formie skrótu
+      znacznikPixel, znacznikKlik, znacznikWypis,
+      JSON.stringify(zKlikZOtw.linki), sendingDomainId,
+    ],
+  );
+  return { utworzone: wynik.rowCount ?? 0, kandydatow: ids.length };
 }
 
 /**
@@ -143,6 +332,25 @@ function klasaBledu(blad: unknown): "przejsciowy" | "trwaly" | "nieznany" {
 }
 
 /**
+ * Trwała odmowa dostawcy przy przekazaniu wiadomości to `dropped`, a NIE `bounced` (A2):
+ * mail nigdy nie dotarł do serwera odbiorcy, więc nie mówi nic o naszej reputacji u niego
+ * i nie ma prawa wchodzić do bounce rate. Klasyfikacja hard/soft i decyzja o wykluczeniu
+ * adresu powstają tutaj, z kodu SMTP, i lądują w samym zdarzeniu — bo surowej odpowiedzi
+ * serwera nikt nie przechowa drugi raz.
+ */
+function klasyfikujOdmowe(blad: unknown): Klasyfikacja {
+  const tresc = blad instanceof Error ? blad.message : String(blad);
+  return klasyfikujOdpowiedzSmtp(tresc, "dropped");
+}
+
+/**
+ * Dlaczego partia się skończyła, gdy skończyła się NIE dlatego, że zabrakło wiadomości.
+ * Wołający musi umieć to rozróżnić: limit dobowy wraca jutro sam, wstrzymanie tenanta
+ * czeka na człowieka, a brak wiadomości to normalne domknięcie kampanii.
+ */
+export type PowodZatrzymania = "limit_dobowy" | "wstrzymanie_tenanta" | "blokada_nadawcy" | null;
+
+/**
  * Faza 2: wysyłka partii. Cykl JEDNEJ wiadomości wg AD-23:
  *   tx1: wiążące canSendTo + przejście queued -> sending, commit PRZED wywołaniem dostawcy
  *   wywołanie dostawcy z idempotencyKey = id wiadomości
@@ -152,24 +360,87 @@ function klasaBledu(blad: unknown): "przejsciowy" | "trwaly" | "nieznany" {
  */
 export async function wyslijPartie(
   tenantId: string,
-  opcje: { limit?: number; dostawca?: DostawcaWysylki } = {},
+  opcje: { limit?: number; dostawca?: DostawcaWysylki; dns?: import("../wysylka-konfiguracja/domeny").OpcjeDns } = {},
 ) {
   const pool = getPool();
-  const dostawca = opcje.dostawca ?? new AdapterSmtp(config().SMTP_HOST, config().SMTP_PORT);
   const limitPartii = opcje.limit ?? 50;
 
-  const { rows: limity } = await pool.query(
-    "select daily_limit from tenant_send_limits where tenant_id = $1",
+  // Limit dobowy i stan wstrzymania tenanta jednym zapytaniem: to sa dwie odpowiedzi na
+  // to samo pytanie "czy temu tenantowi wolno teraz wysylac", zadawane przed kazda partia.
+  const { rows: ustawienia } = await pool.query(
+    `select l.daily_limit, t.sending_paused_at, t.sending_pause_reason
+       from tenants t left join tenant_send_limits l on l.tenant_id = t.id
+      where t.id = $1`,
     [tenantId],
   );
-  const limitDobowy = limity[0]?.daily_limit ?? 500;
+  const limitDobowy = ustawienia[0]?.daily_limit ?? 500;
+
+  // B5: wstrzymanie tenanta sprawdzane MIEDZY PARTIAMI, nie w srodku partii. Partia juz
+  // zajeta idzie do konca (jej wiadomosci sa w drodze do dostawcy), a nastepna nie rusza.
+  // Czytane z bazy przy kazdej partii, a nie raz na starcie joba: wstrzymanie ma zadzialac
+  // takze na kampanie, ktora akurat trwa godzine.
+  if (ustawienia[0]?.sending_paused_at) {
+    return {
+      wyslane: 0,
+      odmowy: 0,
+      bledy: 0,
+      powodZatrzymania: "wstrzymanie_tenanta" as const,
+      powodOpis: String(ustawienia[0].sending_pause_reason ?? ""),
+    };
+  }
   // Wstępny odczyt służy TYLKO doborowi rozmiaru partii; wiążąca jest rezerwacja
   // per wiadomość w transakcji przejścia w sending (poniżej).
   const zuzyte = await zuzycieDzisiaj(tenantId);
   const wolneMiejsce = Math.max(0, limitDobowy - zuzyte);
   if (wolneMiejsce === 0) {
-    return { wyslane: 0, odmowy: 0, bledy: 0, powodZatrzymania: "limit_dobowy" as const };
+    return { wyslane: 0, odmowy: 0, bledy: 0, powodZatrzymania: "limit_dobowy" as const, powodOpis: null };
   }
+
+  // Wybór dostawcy i nadawcy per tenant (moduł „Wysyłka i domeny"). Tylko gdy jest co
+  // wysłać: wybór potrafi zapytać DNS i otworzyć połączenie SMTP, a tik automatyzacji
+  // woła tę funkcję także przy pustej kolejce. Pusta kolejka kończy się dokładnie tym
+  // samym wynikiem co wcześniej (zero zajętych wiadomości).
+  // Ten sam filtr co przy zajmowaniu partii (review flow, runda 2, #11): wiadomości
+  // wstrzymanej/odwołanej kampanii i wstrzymanej/wyłączonej automatyzacji nie są „czymś do
+  // wysłania". Bez tego tik co minutę pytał DNS i łączył się z SMTP dla partii, która i tak
+  // nic nie zajmie.
+  const { rows: kolejka } = await pool.query(
+    `select exists (
+       select 1 from messages m
+        where m.tenant_id = $1 and m.current_state = 'queued'
+          and not exists (
+            select 1 from campaigns c
+             where m.source_type = 'campaign'
+               and c.tenant_id = m.tenant_id and c.id = m.source_id
+               and c.status in ('paused', 'cancelled')
+          )
+          and not exists (
+            select 1 from journeys j
+              join flows f on f.tenant_id = j.tenant_id and f.id = j.flow_id
+             where m.source_type = 'journey'
+               and j.tenant_id = m.tenant_id and j.id = m.source_id
+               and f.status <> 'wlaczony'
+          )
+     ) as jest`,
+    [tenantId],
+  );
+  if (!kolejka[0]?.jest) {
+    return { wyslane: 0, odmowy: 0, bledy: 0, powodZatrzymania: null, powodOpis: null };
+  }
+  const wybor = await wybierzWysylke(tenantId, { dostawca: opcje.dostawca, dns: opcje.dns });
+  if (wybor.rodzaj === "blokada") {
+    // FR45 albo niesprawdzony/niedostępny serwer klienta: NIC nie jest zajmowane, więc
+    // nic nie utknie w claimed/sending. Wiadomości czekają w queued na naprawę.
+    console.warn(`[wysylka] tenant ${tenantId}: wysyłka zablokowana — ${wybor.powod}`);
+    return {
+      wyslane: 0,
+      odmowy: 0,
+      bledy: 0,
+      powodZatrzymania: "blokada_nadawcy" as const,
+      powodOpis: wybor.powod,
+    };
+  }
+  const { dostawca, nadawca } = wybor;
 
   // Zajęcie partii tym samym wzorcem co kolejka: atomowy UPDATE przez SKIP LOCKED.
   // Bez tego dwa workery pracujące naraz wybrałyby te same wiadomości w stanie queued
@@ -182,9 +453,30 @@ export async function wyslijPartie(
   const { rows: doWyslania } = await pool.query(
     `update messages set current_state = 'claimed', claimed_at = now()
       where (tenant_id, id) in (
-        select tenant_id, id from messages
-         where tenant_id = $1 and current_state = 'queued'
-         order by created_at
+        select m.tenant_id, m.id from messages m
+         where m.tenant_id = $1 and m.current_state = 'queued'
+           -- B2: wiadomosci kampanii WSTRZYMANEJ albo ODWOLANEJ nie sa zajmowane.
+           -- Warunek stoi tutaj, a nie tylko w petli workera, bo wyslijPartie oprozni
+           -- kolejke CALEGO tenanta: bez tego wiadomosci wstrzymanej kampanii wychodzily
+           -- dalej z joba sasiedniej kampanii albo z tiku automatyzacji, a operator
+           -- widzialby w panelu "wstrzymana" i rosnacy licznik wyslanych.
+           and not exists (
+             select 1 from campaigns c
+              where m.source_type = 'campaign'
+                and c.tenant_id = m.tenant_id and c.id = m.source_id
+                and c.status in ('paused', 'cancelled')
+           )
+           -- To samo dla automatyzacji (review flow 24.09, B#2): wstrzymana albo wyłączona
+           -- automatyzacja nie może wypuszczać maili, które zdążyły trafić do kolejki
+           -- (np. czekały na limit dobowy). Inaczej panel mówi „zatrzymane", a maile idą.
+           and not exists (
+             select 1 from journeys j
+               join flows f on f.tenant_id = j.tenant_id and f.id = j.flow_id
+              where m.source_type = 'journey'
+                and j.tenant_id = m.tenant_id and j.id = m.source_id
+                and f.status <> 'wlaczony'
+           )
+         order by m.created_at
          for update skip locked
          limit $2
       )
@@ -196,8 +488,9 @@ export async function wyslijPartie(
   let wyslane = 0;
   let odmowy = 0;
   let bledy = 0;
-  let powodZatrzymania: "limit_dobowy" | null = null;
+  let powodZatrzymania: PowodZatrzymania = null;
 
+  try {
   for (let i = 0; i < doWyslania.length; i++) {
     const wiadomosc = doWyslania[i];
     const klient = await pool.connect();
@@ -226,7 +519,8 @@ export async function wyslijPartie(
           : { wolno: true as const };
         if (!bramka.wolno) {
           await zapiszZdarzenie(klient, tenantId, wiadomosc.id, "suppressed", {
-            powod: (bramka as any).powod,
+            kiedy: "teraz",
+            payload: { powod: (bramka as any).powod },
           });
           odmowy++;
         } else {
@@ -243,7 +537,7 @@ export async function wyslijPartie(
           if (!rezerwacja.rowCount) {
             limitOdmowil = true;
           } else {
-            await zapiszZdarzenie(klient, tenantId, wiadomosc.id, "sending");
+            await zapiszZdarzenie(klient, tenantId, wiadomosc.id, "sending", { kiedy: "teraz" });
             wolnoWysylac = true;
           }
         }
@@ -279,8 +573,9 @@ export async function wyslijPartie(
     try {
       wynik = await dostawca.wyslij({
         do: wiadomosc.email,
-        od: config().MAIL_FROM,
-        odNazwa: "Sklep Testowy MidRev",
+        od: nadawca.od,
+        odNazwa: nadawca.odNazwa,
+        odpowiedzDo: nadawca.odpowiedzDo,
         temat: wiadomosc.subject,
         html: wiadomosc.body_html,
         adresWypisania: `${config().APP_URL}/u/${wiadomosc.unsubscribe_token}`,
@@ -316,9 +611,20 @@ export async function wyslijPartie(
             [tenantId, wiadomosc.id],
           );
           if ((proby[0]?.attempts ?? MAX_PROB_WIADOMOSCI) >= MAX_PROB_WIADOMOSCI) {
+            // Wyczerpane próby to awaria BEZ rozstrzygniętej klasy odbicia: serwer
+            // odbiorcy nic nam nie odpowiedział, więc `failed`, nie `bounced`.
             await zapiszZdarzenie(k3, tenantId, wiadomosc.id, "failed", {
-              blad: opisBledu,
-              powod: "wyczerpane_proby",
+              kiedy: "teraz",
+              payload: { blad: opisBledu, powod: "wyczerpane_proby" },
+              klasyfikacja: {
+                typZdarzenia: "failed",
+                klasa: null,
+                kategoria: null,
+                kodSmtp: null,
+                powodDostawcy: opisBledu.slice(0, 2000),
+                wykluczAdres: false,
+                liczySieDoWskaznika: false,
+              },
             });
           } else {
             // Kontrolowane cofnięcie projekcji (rank w dół): zdarzenie 'sending' z tej
@@ -331,7 +637,12 @@ export async function wyslijPartie(
           }
           await k3.query("commit");
         } else {
-          await zapiszZdarzenie(k3, tenantId, wiadomosc.id, "failed", { blad: opisBledu });
+          const klasyfikacja = klasyfikujOdmowe(blad);
+          await zapiszZdarzenie(k3, tenantId, wiadomosc.id, "dropped", {
+            kiedy: "teraz",
+            payload: { blad: opisBledu },
+            klasyfikacja,
+          });
           await k3.query("commit");
         }
       } catch (bladZapisu) {
@@ -346,12 +657,30 @@ export async function wyslijPartie(
     const k2 = await pool.connect();
     try {
       await k2.query("begin");
-      await k2.query("update messages set provider_id = $3 where tenant_id = $1 and id = $2", [
-        tenantId,
-        wiadomosc.id,
-        wynik.providerId,
-      ]);
-      await zapiszZdarzenie(k2, tenantId, wiadomosc.id, "sent", { provider: dostawca.nazwa });
+      // Pola diagnostyczne (A3) zapisujemy RAZEM z identyfikatorem u dostawcy, w tej samej
+      // transakcji co zdarzenie `sent`. Dołożenie ich osobnym UPDATE-em znaczyłoby, że przy
+      // awarii między jednym a drugim mamy wiadomość bez śladu, którędy poszła.
+      await k2.query(
+        `update messages
+            set provider_id = $3, provider = $4, ip_pool = $5, sending_ip = $6::inet,
+                handed_off_at = $7
+          where tenant_id = $1 and id = $2`,
+        [
+          tenantId,
+          wiadomosc.id,
+          wynik.providerId,
+          dostawca.nazwa,
+          wynik.ipPool ?? null,
+          wynik.sendingIp ?? null,
+          // gdy dostawca nie podaje momentu przekazania, źródłem jest chwila, w której
+          // przyjął wiadomość — wciąż data zdarzenia, a nie domyślne `now()` bazy
+          wynik.handedOffAt ?? new Date(),
+        ],
+      );
+      await zapiszZdarzenie(k2, tenantId, wiadomosc.id, "sent", {
+        kiedy: "teraz",
+        payload: { provider: dostawca.nazwa, ipPool: wynik.ipPool ?? null, sendingIp: wynik.sendingIp ?? null },
+      });
       await k2.query("commit");
       wyslane++;
     } catch (blad) {
@@ -368,6 +697,11 @@ export async function wyslijPartie(
       k2.release();
     }
   }
+  } finally {
+    // Pula połączeń SMTP żyje dokładnie jedną partię (patrz AdapterNodemailer.zamknij):
+    // zamykana także po wyjątku, żeby nie zostawić wiszącego połączenia do serwera klienta.
+    await dostawca.zamknij?.();
+  }
 
-  return { wyslane, odmowy, bledy, powodZatrzymania };
+  return { wyslane, odmowy, bledy, powodZatrzymania, powodOpis: null };
 }

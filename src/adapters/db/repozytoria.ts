@@ -250,12 +250,21 @@ export async function segmentyTenanta(tenantId: string) {
   return rows;
 }
 
+/**
+ * Zapis segmentu: reguły PRZECHODZĄ PRZEZ SCHEMAT (nieznany typ, pusta wartość z
+ * formularza = błąd z nazwą, nie segment obejmujący całą bazę - audyt #12), a duplikat
+ * nazwy jest ODRZUCANY: wcześniejsze `on conflict do update` podmieniało reguły segmentu,
+ * na który już wskazywały kampanie (review S2).
+ */
 export async function utworzSegment(tenantId: string, nazwa: string, reguly: unknown) {
+  const { parsujReguly } = await import("../../domain/segmenty");
+  const sprawdzone = parsujReguly(reguly);
   const { rows } = await getPool().query(
     `insert into segments (tenant_id, name, rules) values ($1, $2, $3)
-     on conflict (tenant_id, name) do update set rules = excluded.rules returning id`,
-    [tenantId, nazwa, JSON.stringify(reguly)],
+     on conflict (tenant_id, name) do nothing returning id`,
+    [tenantId, nazwa, JSON.stringify(sprawdzone)],
   );
+  if (!rows[0]) throw new Error(`Segment o nazwie „${nazwa}” już istnieje - wybierz inną nazwę`);
   return rows[0].id as string;
 }
 
@@ -293,10 +302,22 @@ export async function wykluczeniaTenanta(tenantId: string, limit = 50) {
   return rows;
 }
 
-export async function wykluczeniaGlobalne(limit = 50) {
+/**
+ * Wykluczenia globalne WIDOCZNE dla danego tenanta. Tabela `suppressions` jest celowo
+ * wspólna dla całej platformy (martwy adres jest martwy u każdego), ale pokazywać ją
+ * wolno wyłącznie w przecięciu z profilami TEGO tenanta. Wersja bez filtra (audyt
+ * 24.09, P1) wyświetlała każdemu sklepowi adresy z odbić pozostałych klientów agencji,
+ * także roli `client` — czyli cudze dane osobowe.
+ */
+export async function wykluczeniaGlobalne(tenantId: string, limit = 50) {
   const { rows } = await getPool().query(
-    "select email, reason, created_at from suppressions order by created_at desc limit $1",
-    [limit],
+    `select s.email, s.reason, s.created_at
+       from suppressions s
+      where exists (select 1 from profiles p
+                     where p.tenant_id = $1 and lower(btrim(p.email)) = lower(btrim(s.email)))
+      order by s.created_at desc
+      limit $2`,
+    [tenantId, limit],
   );
   return rows;
 }
@@ -304,6 +325,9 @@ export async function wykluczeniaGlobalne(limit = 50) {
 export async function zgodyTenanta(tenantId: string, limit = 50) {
   // "wykluczony" liczony w SQL, nie z pobranej listy wykluczeń: lista jest limitowana,
   // a adres spoza limitu dostawałby czyste "zgoda" mimo faktycznej blokady.
+  // Wykluczenie globalne po haszu (0022) dokładane w JS: hasz liczy aplikacja.
+  const { wykluczoneGlobalnie } = await import("./wykluczenia");
+  const { znormalizujAdres } = await import("../hash-adresu");
   const { rows } = await getPool().query(
     `select distinct on (c.profile_id, c.channel)
             c.profile_id, c.channel, c.state, c.source, c.wording, c.occurred_at,
@@ -327,6 +351,10 @@ export async function zgodyTenanta(tenantId: string, limit = 50) {
       limit $2`,
     [tenantId, limit],
   );
+  const poHaszu = await wykluczoneGlobalnie(rows.map((r) => r.email));
+  for (const r of rows) {
+    if (r.email && poHaszu.has(znormalizujAdres(r.email))) r.wykluczony = true;
+  }
   return rows;
 }
 
@@ -358,7 +386,7 @@ export async function licznikiNawigacji(tenantId: string): Promise<Record<string
        (select count(*)::int from segments where tenant_id = $1) as segmenty,
        (select count(*)::int from lists where tenant_id = $1) as listy,
        (select count(*)::int from popups where tenant_id = $1) as popupy,
-       (select count(*)::int from journeys where tenant_id = $1) as automatyzacje,
+       (select count(*)::int from flows where tenant_id = $1) as automatyzacje,
        (select count(*)::int from (
           select distinct on (lower(btrim(email))) action
             from tenant_suppressions where tenant_id = $1

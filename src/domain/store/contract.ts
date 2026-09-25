@@ -9,8 +9,12 @@ export interface KlientSklepu {
   email: string | null;
   imie: string | null;
   nazwisko: string | null;
+  telefon: string | null;
   /** Data założenia konta w sklepie. Zawsze ze źródła (AD-10). */
   occurredAt: Date;
+  /** Data ostatniej zmiany danych ZE ŹRÓDŁA (kolejność webhooków nie jest gwarantowana). */
+  zmodyfikowaneAt: Date;
+  surowe: unknown;
 }
 
 export interface PozycjaZamowienia {
@@ -69,7 +73,10 @@ export interface WynikWeryfikacji {
 
 export interface StronaWynikow<T> {
   pozycje: T[];
+  /** Łączna liczba pozycji wg sklepu (nagłówek X-WP-Total), nie długość tej strony. */
   lacznie: number;
+  /** Łączna liczba stron wg sklepu (X-WP-TotalPages). Paginacja idzie do tej liczby, nie do zaszytego sufitu. */
+  stron: number;
 }
 
 /** Port platformy sklepowej (AD-7 dla wysyłki, AD-8 tutaj). */
@@ -81,11 +88,17 @@ export interface PortPlatformy {
   pobierzZamowienia(opcje: {
     strona: number;
     naStrone: number;
+    /** Tylko zamówienia złożone od tej daty (zakres importu). */
     od?: Date;
+    /** Tryb lekki do PLANOWANIA: bez pozycji i pełnego dokumentu, tylko nagłówek
+     *  (id, status, e-mail, kwota, daty). `surowe` jest wtedy okrojone - nie zapisywać. */
+    lekko?: boolean;
   }): Promise<StronaWynikow<ZamowienieSklepu>>;
   pobierzProdukty(strona: number, naStrone: number): Promise<StronaWynikow<ProduktSklepu>>;
   /** Liczba zamówień w sklepie w danym okresie. Podstawa ekranu zgodności (FR14). */
   policzZamowienia(od?: Date, do_?: Date): Promise<number>;
+  /** Liczba kont klientów w sklepie - do planu importu (ile profili powstanie). */
+  policzKlientow(): Promise<number>;
   /**
    * Klucz idempotencji opisuje BYT, nie kanał (AD-24). Ta sama funkcja obsługuje
    * webhook i import historyczny, więc to samo zamówienie nie wejdzie dwiema drogami.

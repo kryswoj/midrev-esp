@@ -48,3 +48,23 @@ const NAZWY_MOZLIWOSCI: Record<string, string> = {
 export function nazwaMozliwosci(klucz: string): string {
   return NAZWY_MOZLIWOSCI[klucz] ?? klucz;
 }
+
+/**
+ * Status sklepu (kolumna `stores.status`) w języku interfejsu. "connected" na ekranie
+ * sklepów to surowy enum bazy, a nie słowo dla operatora (audyt UX, P6 bis).
+ */
+const NAZWY_STATUSOW_SKLEPU: Record<string, string> = {
+  pending: "w trakcie podłączania",
+  connected: "podłączony",
+  error: "błąd połączenia",
+};
+
+export function nazwaStatusuSklepu(status: string): string {
+  return NAZWY_STATUSOW_SKLEPU[status] ?? status;
+}
+
+export function wagaStatusuSklepu(status: string): WagaStatusu {
+  if (status === "connected") return "ok";
+  if (status === "error") return "blad";
+  return "uwaga";
+}
