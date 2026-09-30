@@ -556,11 +556,14 @@ export async function zapiszSzkic(
     return { ok: false, blad: `Definicja nie przeszła walidacji (${p?.path.join(".") || "graf"}: ${p?.message ?? "błąd"}).` };
   }
   const graf: Graf = parsed.data;
-  // Szkic w v2 przed wlaczeniem MIDREV_GRAF_V2 = definicja, ktorej stary kod po rollbacku nie
-  // przeczyta. Ponowne wejscie ma osobna bramke (publikacja), bo zapisuje sie w ustawieniach.
+  // Szkic w v2 przed wlaczeniem MIDREV_GRAF_V2 (albo z ponownym wejsciem przed 0036) =
+  // definicja, ktorej stary kod po rollbacku nie przeczyta: nie zapisujemy jej wcale.
   const v2 = funkcjeWymagajaceV2(graf);
   if (v2.length && !config().MIDREV_GRAF_V2) {
     return { ok: false, blad: `${v2.join(" i ")} będzie dostępne po włączeniu nowych automatyzacji. Zmiana nie została zapisana.` };
+  }
+  if (graf.ustawienia.ponowneWejscie.tryb !== "raz" && !(await ponowneWejscieDostepne(getPool()))) {
+    return { ok: false, blad: "Ponowne wejście będzie dostępne po najbliższej aktualizacji systemu. Zmiana nie została zapisana." };
   }
   const klient = await getPool().connect();
   try {

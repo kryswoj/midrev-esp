@@ -137,9 +137,13 @@ describe("Automatyzacje E4a: wyzwalacz metryczny, ponowne wejście, zmienne", ()
   // ── Wydanie N (0035, stare unikalnosci stoja) ─────────────────────────────
 
   describe("wydanie N: 0035 bez 0036", () => {
-    it("flaga włączona, ale stare unikalności stoją: ponowne wejście niedostępne, publikacja „zawsze” zablokowana", async () => {
+    it("flaga włączona, ale stare unikalności stoją: ponowne wejście niedostępne; szkicu z „zawsze” nie da się zapisać ani opublikować", async () => {
       expect(await ponowneWejscieDostepne(getPool())).toBe(false);
-      const f = await prosty("REENTRY zawsze zablokowane", { tryb: "zawsze" });
+      await expect(prosty("REENTRY zawsze zablokowane", { tryb: "zawsze" })).rejects.toThrow(/Ponowne wejście/);
+      // publikacja definicji wpisanej z pominieciem zapisu szkicu tez stoi na bramce
+      const f = await prosty("REENTRY zawsze bramka", { tryb: "raz" });
+      const g = (await pobierzAutomatyzacje(tenantId, f.id))!.graf;
+      await getPool().query("update flows set draft = $3 where tenant_id = $1 and id = $2", [tenantId, f.id, JSON.stringify({ ...g, ustawienia: { ...g.ustawienia, ponowneWejscie: { tryb: "zawsze" } } })]);
       const w = await zmienStatus(tenantId, f.id, "wlaczony");
       expect(w.ok).toBe(false);
       expect(JSON.stringify(w)).toContain("Ponowne wejście");
