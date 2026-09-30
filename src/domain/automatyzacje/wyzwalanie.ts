@@ -52,7 +52,13 @@ export function regulaCzasu(e: Pick<ZdarzenieWyzwalajace, "occurredAtMs" | "reco
   const dotarlo = e.ingestedAtMs ?? e.recordedAtMs;
   if (dotarlo - e.occurredAtMs > MAX_SPOZNIENIE_MS) return "spoznione";
   if (e.occurredAtMs - dotarlo > MARGINES_PRZYSZLOSCI_MS) return "z_przyszlosci";
-  if (e.occurredAtMs < activeSinceMs) return "sprzed_wlaczenia";
+  if (e.occurredAtMs < activeSinceMs) {
+    // Czas zdarzenia w strumieniu jest uciety do pelnej sekundy (AD-39, jak w Klaviyo), a
+    // `active_since` ma mikrosekundy: zdarzenie z sekundy wlaczenia, ktore DOTARLO juz po
+    // wlaczeniu, jest po wlaczeniu (inaczej lead wyslany 0,5 s po wlaczeniu flow przepada).
+    const sekundaWlaczenia = Math.floor(activeSinceMs / 1000) * 1000;
+    if (!(e.occurredAtMs === sekundaWlaczenia && dotarlo >= activeSinceMs)) return "sprzed_wlaczenia";
+  }
   return null;
 }
 

@@ -1,6 +1,6 @@
 import { getPool } from "../adapters/db/pool";
 import { przetworzZdarzenieApi, RODZAJ_JOBA } from "../usecases/api/przyjmij-zdarzenie";
-import { dosynchronizujStareZdarzenia } from "../usecases/zdarzenia/lustro";
+import { dosynchronizujOknoDeployu, dosynchronizujStareZdarzenia } from "../usecases/zdarzenia/lustro";
 import { utrzymajPartycjeMetryk } from "../usecases/zdarzenia/partycje";
 import type { OpcjeAlertu } from "./alerty";
 import type { Zadanie } from "./kolejka";
@@ -10,7 +10,8 @@ import type { Zadanie } from "./kolejka";
  *
  *   przetworz_zdarzenie_api — faza 2 `POST /api/events` (usecases/api/przyjmij-zdarzenie.ts)
  *   partycje metryk (start + co dobę) — zapas partycji miesięcznych, alert krytyczny przy błędzie
- *   dosynchronizowanie `events` (start) — okno deployu, stary kod pisał tylko do `events`
+ *   dosynchronizowanie `events` (start, potem co minutę przez 30 min) — okno deployu: stary
+ *     kod pisał tylko do `events`, a deploy.sh restartuje panel PO starcie workera
  *   zaległe żądania API (co 15 min) — surowe żądanie bez przetworzenia i bez żywego joba
  *     (job wyczerpał próby) dostaje nowy job; najwyżej 3 razy, potem alert. Bez tego
  *     202 dane klientowi mogłoby skończyć się cichą utratą zdarzenia.
@@ -80,9 +81,14 @@ export async function ponowZalegleZdarzeniaApi(): Promise<{ ponowione: number; p
   }
 }
 
+/** Jak długo po starcie workera działa cykliczne dosynchronizowanie okna deployu. */
+export const OKNO_DEPLOYU_MS = 30 * 60_000;
+
 export function zaplanujZdarzenia(opcje: {
   workerId: string;
   wyslijAlert: (tresc: string, o?: OpcjeAlertu) => Promise<void>;
+  /** zegar (testy) */
+  teraz?: () => number;
 }) {
   const { workerId, wyslijAlert } = opcje;
   async function partycje() {
@@ -99,15 +105,24 @@ export function zaplanujZdarzenia(opcje: {
       });
     }
   }
+  const start = opcje.teraz?.() ?? Date.now();
+  async function oknoDeployu() {
+    // tylko przez pierwsze 30 min pracy workera: potem stary kod już nie działa, a przebieg
+    // (skan `events` z ostatniej godziny) byłby czystym kosztem
+    if ((opcje.teraz?.() ?? Date.now()) - start > OKNO_DEPLOYU_MS) return;
+    const n = await dosynchronizujOknoDeployu();
+    if (n) console.warn(`[${workerId}] strumień: dosynchronizowano ${n} zdarzeń zapisanych przez poprzednią wersję (okno deployu)`);
+  }
   return {
     async start() {
       await partycje();
       const n = await dosynchronizujStareZdarzenia();
-      if (n) console.warn(`[${workerId}] strumień: dosynchronizowano ${n} zdarzeń zapisanych przez poprzednią wersję (backfill)`);
+      if (n) console.warn(`[${workerId}] strumień: dosynchronizowano ${n} zdarzeń zapisanych przez poprzednią wersję`);
     },
     cykliczne: [
       { nazwa: "partycje metryk", ms: 24 * 3600_000, praca: partycje },
       { nazwa: "zaległe zdarzenia API", ms: 15 * 60_000, praca: zalegle },
+      { nazwa: "strumień: okno deployu", ms: 60_000, praca: oknoDeployu },
     ],
   };
 }

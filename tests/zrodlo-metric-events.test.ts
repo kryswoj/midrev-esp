@@ -73,7 +73,9 @@ describe("zrodloZdarzenMetricEvents / katalogMetrykTabela (kontrakt A↔B)", () 
   it("zwraca tylko zdarzenia, które mogą wyzwolić (predykat z kontraktu), tego tenanta i tej metryki, w porządku (recorded_at, id)", async () => {
     const r = await zrodloZdarzenMetricEvents.kandydaci(k, zapytanie(100));
     expect(r.map((e) => e.id)).toEqual([id(1), id(5), id(9)]);
-    expect(r[0].context).toEqual({ orderId: "01a0cccc-0000-7000-8000-000000000001", totalMinor: 19900 });
+    // OrderId w properties to id W SKLEPIE (parytet Klaviyo): dla metryki spoza „Placed Order”
+    // nie jest nasze orders.id, wiec kontekst go nie przenosi
+    expect(r[0].context).toEqual({ totalMinor: 19900 });
     expect(r[0].properties).toEqual({ ProductID: "1", OrderId: "01a0cccc-0000-7000-8000-000000000001" });
     expect(r[1].ingestedAtMs).toBeGreaterThan(r[1].occurredAtMs);
   });
@@ -105,9 +107,31 @@ describe("zrodloZdarzenMetricEvents / katalogMetrykTabela (kontrakt A↔B)", () 
     expect(await zrodloZdarzenMetricEvents.pobierzWlasciwosci(k, T, "nie-uuid", null)).toBeNull();
   });
 
-  it("katalog: bez ukrytych, otwarcia nie mogą wyzwalać; id metryki tylko we własnym tenancie", async () => {
+  it("„Placed Order”: orderId w kontekście = orders.id z unique_id (kontrakt A-B §3), nie OrderId ze sklepu", async () => {
+    const mPo = "01a0dddd-0000-7000-8000-000000000005";
+    await k.query("insert into metrics (id, tenant_id, name, integration_key) values ($1, $2, 'Placed Order', 'woocommerce')", [mPo, T]);
+    await k.query(
+      `insert into metric_events (id, tenant_id, metric_id, profile_id, occurred_at, recorded_at, ingested_at, source, unique_id, properties, value_minor)
+       values ($1, $2, $3, $4, date_trunc('second', now()) - interval '1 minute', now(), now(), 'webhook', $5, '{"OrderId":"4711","OrderNumber":"4711"}', 5000)`,
+      [id(20), T, mPo, P, "01a0cccc-0000-7000-8000-0000000000f1"],
+    );
+    const r = await zrodloZdarzenMetricEvents.kandydaci(k, { ...zapytanie(10), metryka: { integracja: "woocommerce", nazwa: "Placed Order" } });
+    expect(r.map((e) => e.id)).toEqual([id(20)]);
+    expect(r[0].context).toEqual({ orderId: "01a0cccc-0000-7000-8000-0000000000f1", totalMinor: 5000 });
+    expect(r[0].properties.OrderId).toBe("4711");
+  });
+
+  it("katalog: bez ukrytych, otwarcia nie mogą wyzwalać, wbudowane wyzwalające zawsze obecne; id metryki tylko we własnym tenancie", async () => {
     const lista = await katalogMetrykTabela.lista(k, T);
-    expect(lista.map((m) => `${m.integracja}|${m.nazwa}|${m.canTrigger}`).sort()).toEqual(["api|Quiz Ukończony|true", "midrev|Opened Email|false"]);
+    expect(lista.map((m) => `${m.integracja}|${m.nazwa}|${m.canTrigger}`).sort()).toEqual([
+      "api|Quiz Ukończony|true",
+      "midrev|Opened Email|false",
+      "midrev|Submitted Form|true",
+      "woocommerce|Ordered Product|true",
+      "woocommerce|Placed Order|true",
+    ]);
+    // wbudowana bez zdarzenia w koncie: w katalogu bez id (id powstanie przy publikacji)
+    expect(lista.find((m) => m.nazwa === "Submitted Form")!.id).toBeNull();
     expect(await zrodloZdarzenMetricEvents.idMetryki(k, T, { integracja: "api", nazwa: "Quiz Ukończony" })).toBe("01a0dddd-0000-7000-8000-000000000001");
     expect(await zrodloZdarzenMetricEvents.idMetryki(k, T, { integracja: "api", nazwa: "Nie ma" })).toBeNull();
   });

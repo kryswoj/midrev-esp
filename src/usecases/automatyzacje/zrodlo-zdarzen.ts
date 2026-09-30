@@ -1,5 +1,8 @@
 import { ETYKIETY_METRYK, METRYKI_BEZ_WYZWALANIA, METRYKI_Z_V1, kluczMetryki, zdarzenieV1, type MetrykaRef } from "../../domain/automatyzacje/graf";
-import { predykatWyzwalaniaSql } from "../../domain/zdarzenia/kontrakt";
+import type { PoolClient } from "pg";
+import { config } from "../../config";
+import { METRYKI_WBUDOWANE, predykatWyzwalaniaSql } from "../../domain/zdarzenia/kontrakt";
+import { metrykaPoKluczu } from "../zdarzenia/metryki";
 import type {
   KatalogMetryk,
   MetrykaKatalogu,
@@ -13,14 +16,15 @@ import type {
 /**
  * Adaptery portow wyzwalaczy metrycznych.
  *
- * STAN PRZEJSCIOWY (do scalenia strumienia A): zdarzenia leza w tabeli `events` pod nazwami
- * v1 (`popup.submitted`, `order.created`). `zrodloZdarzenEvents` tlumaczy metryki wbudowane
- * (midrev/Submitted Form, woocommerce/Placed Order) na te nazwy, wiec istniejace flow biegna
- * dokladnie tak jak dotad. Metryk niestandardowych w `events` nie ma: kandydatow brak.
- *
- * Po scaleniu A (AD-36): `zrodloZdarzenMetricEvents` (metric_events + metrics) i
- * `katalogMetrykTabela` (metrics). Przelaczenie w jednym miejscu: `zrodloZdarzen()` /
- * `katalogMetryk()` ponizej. Szczegoly w raporcie strumienia B (punkty integracji).
+ * Dwa zrodla (po scaleniu strumieni A i B, integracja MVP):
+ *  - `zrodloZdarzenEvents` (stara tabela `events`, nazwy v1 `popup.submitted`, `order.created`):
+ *    domyslne, dopoki MIDREV_GRAF_V2 jest wylaczona. Istniejace flow biegna dokladnie tak jak
+ *    przed tym wydaniem; strumien A pisze lustro do `events` z tym samym id.
+ *  - `zrodloZdarzenMetricEvents` + `katalogMetrykTabela` (AD-36, metric_events + metrics):
+ *    z MIDREV_GRAF_V2. Dopiero tu wyzwalaja metryki z API (np. „Lead z formularza” z n8n)
+ *    i dziala filtr wyzwalacza po wlasciwosciach w ksztalcie Klaviyo.
+ * Przelaczenie w jednym miejscu: `zrodloZdarzen()` / `katalogMetryk()` ponizej. Uzasadnienie
+ * (brak podwojnego wejscia i luk kursora przy przejsciu) w raporcie integracji 06.
  */
 
 const UUID_SQL = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$";
@@ -139,7 +143,7 @@ export const zrodloZdarzenMetricEvents: ZrodloZdarzenDoWyzwalaczy = {
     const parametry: unknown[] = [z.tenantId, z.metryka.integracja, z.metryka.nazwa, z.zaszlePo, z.limit];
     const zakres = zakresSkanu("e", z, parametry);
     const { rows } = await klient.query(
-      `select e.id, e.profile_id, e.properties, e.source, e.backfill, e.value_minor,
+      `select e.id, e.profile_id, e.properties, e.source, e.backfill, e.value_minor, e.unique_id,
               e.occurred_at::text as occurred_at, e.recorded_at::text as recorded_at,
               extract(epoch from e.occurred_at) * 1000 as occurred_ms,
               extract(epoch from e.recorded_at) * 1000 as recorded_ms,
@@ -154,11 +158,15 @@ export const zrodloZdarzenMetricEvents: ZrodloZdarzenDoWyzwalaczy = {
         limit $5`,
       parametry,
     );
+    // „Placed Order” ze sklepu: `OrderId` w properties to id zamowienia W SKLEPIE (parytet
+    // Klaviyo, np. numer Woo), a nasze `orders.id` jest w `unique_id` (kontrakt A-B, §3).
+    // Warunek „wartosc zamowienia” i regula wyjscia po zakupie potrzebuja `orders.id`.
+    const zamowienieSklepu = kluczMetryki(z.metryka) === kluczMetryki(METRYKI_WBUDOWANE.zlozoneZamowienie);
     return rows.map((r) => {
       const w = wiersz(r, r.source as ZrodloZdarzenia, r.backfill === true);
       w.ingestedAtMs = Number(r.ingested_ms);
       // dotychczasowe warunki (wartosc zamowienia) czytaja orderId/totalMinor z kontekstu
-      const orderId = w.properties.OrderId;
+      const orderId = zamowienieSklepu ? r.unique_id : null;
       w.context = {
         ...(typeof orderId === "string" && UUID.test(orderId) ? { orderId } : {}),
         ...(r.value_minor !== null && r.value_minor !== undefined ? { totalMinor: Number(r.value_minor) } : {}),
@@ -178,15 +186,31 @@ export const zrodloZdarzenMetricEvents: ZrodloZdarzenDoWyzwalaczy = {
     return p && typeof p === "object" && !Array.isArray(p) ? p : null;
   },
   async idMetryki(klient: Wykonawca, tenantId: string, m: MetrykaRef) {
+    // Metryka wbudowana (formularz, zamowienie) moze jeszcze nie istniec w koncie, ktore
+    // nie mialo zadnego zdarzenia: zaklada ja funkcja strumienia A (limit 200, blokada
+    // tenanta). Metryk spoza wbudowanych NIE zakladamy przy publikacji: powstaja z pierwszym
+    // zdarzeniem (walidacja grafu i tak wymaga metryki z katalogu).
     const { rows } = await klient.query(
       "select id from metrics where tenant_id = $1 and integration_key = $2 and name = $3",
       [tenantId, m.integracja, m.nazwa],
     );
-    return rows[0]?.id ?? null;
+    if (rows[0]) return rows[0].id;
+    if (!WYZWALAJACE_WBUDOWANE.some((d) => kluczMetryki(d) === kluczMetryki(m))) return null;
+    const metryka = await metrykaPoKluczu(klient as unknown as PoolClient, tenantId, { integracja: m.integracja as never, nazwa: m.nazwa }, { utworz: true });
+    return metryka?.id ?? null;
   },
 };
 
-/** Katalog metryk na tabeli `metrics` (bez ukrytych technicznych), kontrakt A↔B. */
+/** Metryki wbudowane, ktore moga wyzwalac flow (widoczne w katalogu, zanim przyjdzie pierwsze zdarzenie). */
+const WYZWALAJACE_WBUDOWANE: MetrykaRef[] = Object.values(METRYKI_WBUDOWANE)
+  .filter((d) => d.mozeWyzwalac && !d.ukryta)
+  .map((d) => ({ integracja: d.integracja, nazwa: d.nazwa }));
+
+/**
+ * Katalog metryk na tabeli `metrics` (bez ukrytych technicznych), kontrakt A↔B. Metryki
+ * wbudowane, ktore moga wyzwalac, sa w katalogu zawsze (id null, dopoki nie ma zdarzenia):
+ * nowe konto musi moc zbudowac powitanie po formularzu przed pierwszym zgloszeniem.
+ */
 export const katalogMetrykTabela: KatalogMetryk = {
   async lista(klient: Wykonawca, tenantId: string): Promise<MetrykaKatalogu[]> {
     const { rows } = await klient.query(
@@ -194,7 +218,12 @@ export const katalogMetrykTabela: KatalogMetryk = {
         where tenant_id = $1 and not hidden order by name, integration_key`,
       [tenantId],
     );
-    return rows.map((r) => ({ id: r.id, integracja: r.integration_key, nazwa: r.name, canTrigger: r.can_trigger === true && !METRYKI_BEZ_WYZWALANIA.has(`${r.integration_key}|${r.name}`) }));
+    const lista: MetrykaKatalogu[] = rows.map((r) => ({ id: r.id, integracja: r.integration_key, nazwa: r.name, canTrigger: r.can_trigger === true && !METRYKI_BEZ_WYZWALANIA.has(`${r.integration_key}|${r.name}`) }));
+    const sa = new Set(lista.map((m) => kluczMetryki(m)));
+    for (const d of WYZWALAJACE_WBUDOWANE) {
+      if (!sa.has(kluczMetryki(d))) lista.push({ id: null, integracja: d.integracja, nazwa: d.nazwa, canTrigger: true });
+    }
+    return lista;
   },
 };
 
@@ -204,16 +233,24 @@ let zrodloNadpisane: ZrodloZdarzenDoWyzwalaczy | null = null;
 let katalogNadpisany: KatalogMetryk | null = null;
 
 /**
- * PUNKT INTEGRACJI po scaleniu strumienia A: zamienic domyslne na `zrodloZdarzenMetricEvents`
- * i `katalogMetrykTabela` (w wydaniu, w ktorym `zapiszZdarzenie` pisze do metric_events
- * wszystkie wyzwalajace metryki). Do tego czasu: tabela `events`, jak dotad.
+ * Zrodlo wyzwalaczy metrycznych: z MIDREV_GRAF_V2 strumien `metric_events` (wszystkie
+ * wyzwalajace metryki, takze z API), bez flagi stara tabela `events` jak przed wydaniem.
+ *
+ * Dlaczego przejscie nie daje podwojnego wejscia ani luki (raport 06):
+ *  - kazde zdarzenie popupu i zamowienia ma w obu tabelach TO SAMO id (lustro A), a wejscie
+ *    chroni unikalnosc (flow, profil, entry_key) z kluczem `raz` albo `e:<id>`;
+ *  - jeden proces czyta tylko jedno zrodlo (flaga czytana raz, przy starcie);
+ *  - kursor (recorded_at, id) jest wspolny: `metric_events.recorded_at` (clock_timestamp)
+ *    >= `events.recorded_at` (now() tej samej transakcji), wiec zdarzenie widziane w starej
+ *    tabeli przed kursorem jest w nowej najwyzej pozniej (ponowne przetworzenie = konflikt
+ *    unikalnosci), a spoznione commity lapie 15-minutowa zakladka w obu zrodlach.
  */
 export function zrodloZdarzen(): ZrodloZdarzenDoWyzwalaczy {
-  return zrodloNadpisane ?? zrodloZdarzenEvents;
+  return zrodloNadpisane ?? (config().MIDREV_GRAF_V2 ? zrodloZdarzenMetricEvents : zrodloZdarzenEvents);
 }
 
 export function katalogMetryk(): KatalogMetryk {
-  return katalogNadpisany ?? katalogMetrykWbudowanych;
+  return katalogNadpisany ?? (config().MIDREV_GRAF_V2 ? katalogMetrykTabela : katalogMetrykWbudowanych);
 }
 
 /** Wylacznie dla testow (atrapa zrodla na kontrakcie A). `null` przywraca domyslne. */

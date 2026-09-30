@@ -11,8 +11,10 @@
 -- Rozjazd = `raise exception`: cala migracja (i 0030 w tej samej paczce deployu nie,
 -- bo migrator ma transakcje per plik) jest wycofana, jak w 0018.
 --
--- Historia dostaje `backfill = true`: zdarzenia, ktore stary silnik juz obsluzyl (albo
--- ktorych okno minelo), nie moga wyzwolic flow w nowym silniku drugi raz.
+-- Historia (zapisana w `events` ponad 4 h temu) i import dostaja `backfill = true`: zdarzenia,
+-- ktorych okno minelo, nie moga wyzwolic flow w nowym silniku. Wiersze swiezsze niz 4 h
+-- (zdarzenia z ostatnich minut przed deployem i z okna deployu) zostaja wyzwalajace: wejscie
+-- do flow jest idempotentne po (flow, profil, entry_key) i tym samym id zdarzenia.
 --
 -- Mapowanie (kontrakt A-B, src/domain/zdarzenia/kontrakt.ts):
 --   popup.submitted -> (midrev, Submitted Form)   unique_id form:{popup_id}:{id}, source client
@@ -146,7 +148,14 @@ begin
            when m.event_type = 'popup.submitted' then 'client'
            when m.event_type like 'customer.%' then 'webhook'
            else 'system' end,
-         true
+         -- backfill (nie wyzwala flow): historia starsza niz okno wyzwalania (4 h, jak
+         -- OKNO_WYZWALANIA_MS w kontrakcie) albo import. Swiezy wiersz to zdarzenie NA ZYWO,
+         -- ktore zapisal jeszcze stary kod (okno deployu, rollback kodu i powrot): musi moc
+         -- wyzwolic flow w nowym silniku, inaczej powitanie z tych minut przepada. Podwojnego
+         -- wejscia nie ma: stary silnik wpuszczal osobe po tym samym id, a wejscie chroni
+         -- unikalnosc (flow, profil, entry_key) - integracja MVP, raport 06.
+         m.recorded_at < now() - interval '4 hours'
+           or (m.event_type = 'order.created' and m.payload ->> 'kanal' = 'import')
     from mapa m
     join metrics mt on mt.tenant_id = m.tenant_id and mt.integration_key = m.integracja and mt.name = m.nazwa
    where not exists (

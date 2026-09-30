@@ -3,6 +3,7 @@
 process.env.MIDREV_PONOWNE_WEJSCIE = "1";
 process.env.MIDREV_GRAF_V2 = "1";
 
+import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -25,6 +26,8 @@ import { uruchomAutomatyzacje, wprowadzUczestnikow } from "../src/usecases/autom
 import { ponowneWejscieDostepne } from "../src/usecases/automatyzacje/ponowne-wejscie";
 import { ustawZrodloZdarzen } from "../src/usecases/automatyzacje/zrodlo-zdarzen";
 import { zbudujWiadomosciKampanii } from "../src/usecases/wysylka/wyslij-kampanie";
+import { METRYKI_WBUDOWANE } from "../src/domain/zdarzenia/kontrakt";
+import { zapiszZdarzenie } from "../src/usecases/zdarzenia/zapisz-zdarzenie";
 
 // Wykonywalna specyfikacja E4a na prawdziwej bazie (AD-20): wyzwalacz metryczny z filtrem
 // i regula 4 h (4.3), ponowne wejscie z macierza 7.3 (4.4), zmienne w kazdym mailu przebiegu
@@ -60,12 +63,40 @@ describe("Automatyzacje E4a: wyzwalacz metryczny, ponowne wejście, zmienne", ()
       [tenantId, profile[klucz]],
     );
   }
+  /**
+   * Zdarzenie tak, jak zapisuje je kod produkcyjny po scaleniu strumienia A: `zapiszZdarzenie`
+   * (metric_events) z lustrem w `events` pod tym samym id. Z MIDREV_GRAF_V2 (ten plik) silnik
+   * czyta strumien metric_events.
+   */
   async function zdarzenie(klucz: string, typ: string, przesuniecie = "5 seconds", payload: Record<string, unknown> = {}) {
-    const { rows } = await getPool().query(
-      `insert into events (tenant_id, profile_id, event_type, payload, occurred_at) values ($1, $2, $3, $4, now() - $5::interval) returning id`,
-      [tenantId, profile[klucz], typ, JSON.stringify(payload), przesuniecie],
-    );
-    return rows[0].id as string;
+    if (typ !== "popup.submitted") throw new Error(`test: nieobslugiwany typ ${typ}`);
+    const pool = getPool();
+    const { rows: t } = await pool.query("select (now() - $1::interval) as kiedy", [przesuniecie]);
+    const klient = await pool.connect();
+    try {
+      await klient.query("begin");
+      const id = randomUUID();
+      const w = await zapiszZdarzenie(
+        klient,
+        {
+          tenantId, metryka: METRYKI_WBUDOWANE.zgloszenieFormularza, profileId: profile[klucz], occurredAt: t[0].kiedy,
+          id, uniqueId: `form:test:${id}`, properties: { form_id: "test", ...payload }, source: "client",
+        },
+        { lustro: { eventType: typ, payload: { popup_id: "test", ...payload } } },
+      );
+      await klient.query("commit");
+      return w.id;
+    } catch (b) {
+      await klient.query("rollback");
+      throw b;
+    } finally {
+      klient.release();
+    }
+  }
+  async function usunZdarzenia() {
+    await getPool().query("delete from event_keys where tenant_id = $1", [tenantId]);
+    await getPool().query("delete from metric_events where tenant_id = $1", [tenantId]);
+    await getPool().query("delete from events where tenant_id = $1", [tenantId]);
   }
   async function wiadomosc(flowId: string, nazwa: string, temat: string, html = `<p>${nazwa}</p>`) {
     const w = await utworzWiadomosc(tenantId, flowId, nazwa);
@@ -82,7 +113,7 @@ describe("Automatyzacje E4a: wyzwalacz metryczny, ponowne wejście, zmienne", ()
   }
   async function wlacz(flowId: string) {
     await getPool().query("update flows set status = 'szkic' where tenant_id = $1 and id <> $2 and status <> 'szkic'", [tenantId, flowId]);
-    await getPool().query("delete from events where tenant_id = $1", [tenantId]);
+    await usunZdarzenia();
     const w = await zmienStatus(tenantId, flowId, "wlaczony");
     if (!w.ok) throw new Error(`${w.blad} ${JSON.stringify((w as { bledy?: unknown }).bledy ?? [])}`);
     await getPool().query("update flows set active_since = now() - interval '1 hour' where tenant_id = $1 and id = $2", [tenantId, flowId]);
@@ -477,7 +508,7 @@ describe("Automatyzacje E4a: wyzwalacz metryczny, ponowne wejście, zmienne", ()
 
     it("dwa tiki naraz („zawsze” i „po X”): brak podwójnego wejścia i podwójnego maila", async () => {
       const f = (await getPool().query("select id from flows where tenant_id = $1 and name = 'REENTRY zawsze'", [tenantId])).rows[0];
-      await getPool().query("delete from events where tenant_id = $1", [tenantId]);
+      await usunZdarzenia();
       await zdarzenie("bartek", "popup.submitted", "3 seconds");
       await zdarzenie("bartek", "popup.submitted", "2 seconds");
       await Promise.all([wprowadzUczestnikow(tenantId), wprowadzUczestnikow(tenantId), wprowadzUczestnikow(tenantId)]);

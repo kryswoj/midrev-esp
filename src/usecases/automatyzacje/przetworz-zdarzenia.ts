@@ -269,8 +269,8 @@ async function kandydaciMetryczni(
             (s.scanned_to < now() - make_interval(mins => $4::int)) as zalegly,
             (now() - make_interval(mins => $4::int))::text as nie_wczesniej,
             (s.scanned_to - make_interval(mins => $5::int))::text as zakladka_od,
-            greatest($3::timestamptz, greatest(s.scanned_to, now() - make_interval(mins => $4::int)) - make_interval(mins => $6::int))::text as zaszle_nowe,
-            greatest($3::timestamptz, s.scanned_to - make_interval(mins => $5::int) - make_interval(mins => $6::int))::text as zaszle_zakladka
+            greatest(date_trunc('second', $3::timestamptz), greatest(s.scanned_to, now() - make_interval(mins => $4::int)) - make_interval(mins => $6::int))::text as zaszle_nowe,
+            greatest(date_trunc('second', $3::timestamptz), s.scanned_to - make_interval(mins => $5::int) - make_interval(mins => $6::int))::text as zaszle_zakladka
        from flow_trigger_state s
       where s.tenant_id = $1 and s.flow_id = $2
       for update`,
@@ -621,16 +621,24 @@ async function zakoncz(klient: Klient, tenantId: string, u: Uczestnik, status: "
   await przejscie(klient, tenantId, u, kind, u.node_id, null, { ...detail, powod });
 }
 
+const UUID_ZAMOWIENIA = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** Reguly wyjscia sprawdzane przy KAZDYM ruchu: zakup po wejsciu (gdy flow tak chce). */
 async function regulaWyjscia(klient: Klient, tenantId: string, u: Uczestnik): Promise<string | null> {
   if (!u.wyjscie_po_zakupie) return null;
+  // Zamowienie, ktore WYZWOLILO flow, nie jest „zakupem po wejsciu”: strumien zdarzen (i jego
+  // lustro w `events`) trzyma czas z dokladnoscia do sekundy (entered_at = occurred_at
+  // zdarzenia), a `orders.occurred_at` moze miec ulamki sekundy - bez wykluczenia po id osoba
+  // wychodzilaby na wlasnym zamowieniu. orderId = orders.id z kontekstu przebiegu.
+  const orderId = typeof u.context?.orderId === "string" && UUID_ZAMOWIENIA.test(u.context.orderId) ? u.context.orderId : null;
   const { rows } = await klient.query(
     `select exists (
        select 1 from orders o
         where o.tenant_id = $1 and o.profile_id = $2 and o.occurred_at > $3::timestamptz
           and o.status in ('completed', 'processing')
+          and o.id is distinct from $4::uuid
      ) as kupil`,
-    [tenantId, u.profile_id, u.entered_at],
+    [tenantId, u.profile_id, u.entered_at, orderId],
   );
   return rows[0].kupil ? "zakup" : null;
 }
