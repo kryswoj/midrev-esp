@@ -34,6 +34,7 @@ const OCZEKIWANE_PUBLICZNE = new Set([
   "/api/popup/[popupId]",
   "/api/webhooks/woo/[storeId]",
   "/api/zdrowie",
+  "/api/events",
 ]);
 
 /** Wzorce tras wymagające sesji panelu. */
@@ -116,6 +117,19 @@ describe("Trasy publiczne: lista vs drzewo src/app vs middleware", () => {
     }
     const post = middleware(new NextRequest(new URL("/u/tok", "https://link.midrev.test"), { method: "POST", body: "List-Unsubscribe=One-Click" }));
     expect(przeszlo(post)).toBe(true);
+  });
+
+  it("API zgodne z Klaviyo: /api/events/ (z ukośnikiem, jak w n8n) jest PRZEPISANE bez 308, POST przechodzi", () => {
+    const post = middleware(new NextRequest(new URL("/api/events/", "https://api.midrev.test"), { method: "POST", body: "{}" }));
+    expect(post.headers.get("location")).toBeNull();
+    expect(post.status).not.toBe(308);
+    expect(new URL(post.headers.get("x-middleware-rewrite") ?? "", "https://api.midrev.test").pathname).toBe("/api/events");
+    expect(przeszlo(wywolaj("/api/events"))).toBe(true);
+    // inne ścieżki z ukośnikiem: to samo 308 co wcześniej robił Next (skipTrailingSlashRedirect)
+    const panel = wywolaj("/t/abc/profile/");
+    expect(panel.status).toBe(308);
+    expect(new URL(panel.headers.get("location")!).pathname).toBe("/t/abc/profile");
+    expect(czyTrasaPubliczna("/api/eventsx")).toBe(false);
   });
 
   it("lista nie jest za szeroka: prefiksy nie łapią sąsiednich segmentów", () => {

@@ -18,10 +18,12 @@ import { ocenGotowosc } from "../src/usecases/tresc/lista-kontrolna";
 
 const HEX_A = "a".repeat(64);
 const HEX_B = "b".repeat(64);
+const HEX_D = "d".repeat(64);
 const PROD = {
   DATABASE_URL: "postgresql://u:p@127.0.0.1:5434/midrev_esp_prod",
   SECRETS_KEY: HEX_A,
   SUPPRESSION_HASH_KEY: HEX_B,
+  API_KEY_PEPPER: HEX_D,
   APP_URL: "https://esp.midrev.pl",
   ALERT_WEBHOOK_URL: "https://discord.com/api/webhooks/1/abc",
   TRUSTED_PROXY: "ostatni-xff",
@@ -48,6 +50,10 @@ describe("Guard konfiguracji poza sandboksem", () => {
     ["SECRETS_KEY nie-hex", { SECRETS_KEY: "z".repeat(64) }, /SECRETS_KEY/],
     ["brak SUPPRESSION_HASH_KEY", { SUPPRESSION_HASH_KEY: undefined }, /SUPPRESSION_HASH_KEY/],
     ["SUPPRESSION_HASH_KEY = SECRETS_KEY", { SUPPRESSION_HASH_KEY: HEX_A }, /inny niż SECRETS_KEY/],
+    ["brak API_KEY_PEPPER", { API_KEY_PEPPER: undefined }, /API_KEY_PEPPER jest wymagany/],
+    ["API_KEY_PEPPER z zer", { API_KEY_PEPPER: "0".repeat(64) }, /API_KEY_PEPPER jest wymagany/],
+    ["API_KEY_PEPPER = SECRETS_KEY", { API_KEY_PEPPER: HEX_A }, /API_KEY_PEPPER musi być inny/],
+    ["API_KEY_PEPPER = SUPPRESSION_HASH_KEY", { API_KEY_PEPPER: HEX_B }, /API_KEY_PEPPER musi być inny/],
     ["brak ALERT_WEBHOOK_URL", { ALERT_WEBHOOK_URL: undefined }, /ALERT_WEBHOOK_URL jest wymagany/],
     ["ALERT_WEBHOOK_URL po http", { ALERT_WEBHOOK_URL: "http://hooks.example/x" }, /ALERT_WEBHOOK_URL musi/],
     ["SMTP_HOSTY_DEWELOPERSKIE ustawione", { SMTP_HOSTY_DEWELOPERSKIE: "127.0.0.1:1025" }, /SMTP_HOSTY_DEWELOPERSKIE/],

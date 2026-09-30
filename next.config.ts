@@ -31,6 +31,10 @@ const nextConfig: NextConfig = {
   serverExternalPackages: ["pg"],
   // bez „X-Powered-By: Next.js": nie podpowiadamy skanerom wersji frameworka
   poweredByHeader: false,
+  // API zgodne z Klaviyo przyjmuje `/api/events/` (z ukośnikiem, jak wołają je workflowy
+  // n8n) BEZ 308: middleware przepisuje te ścieżki, a resztę przekierowuje jak dotąd
+  // (src/trasy-publiczne.ts, TRASY_API_Z_UKOSNIKIEM).
+  skipTrailingSlashRedirect: true,
   // Podgląd serwera deweloperskiego pod publicznym adresem VPS: bez tego Next 16 odmawia
   // przeglądarce plików JS (403) i panel renderuje się bez interakcji (edytor, kanwa).
   // WYŁĄCZNIE poza buildem produkcyjnym.

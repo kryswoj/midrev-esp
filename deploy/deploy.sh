@@ -306,7 +306,7 @@ wymagaj_uprawnien_600 "$ESP_DB_ENV_FILE"
 for zakazana in MIDREV_SANDBOX SMTP_HOSTY_DEWELOPERSKIE; do
 	[[ -z $(czytaj_zmienna "$ESP_ENV_FILE" "$zakazana") ]] || zgin "$zakazana jest ustawione w $ESP_ENV_FILE: na produkcji zakazane"
 done
-for wymagana in DATABASE_URL APP_URL SECRETS_KEY SUPPRESSION_HASH_KEY ALERT_WEBHOOK_URL; do
+for wymagana in DATABASE_URL APP_URL SECRETS_KEY SUPPRESSION_HASH_KEY API_KEY_PEPPER ALERT_WEBHOOK_URL; do
 	[[ -n $(czytaj_zmienna "$ESP_ENV_FILE" "$wymagana") ]] || zgin "brak $wymagana w $ESP_ENV_FILE"
 done
 db_gotowa || zgin "baza nie odpowiada (docker ps; docker logs $ESP_DB_CONTAINER)"

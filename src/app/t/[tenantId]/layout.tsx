@@ -41,6 +41,7 @@ const SEKCJE = [
 const USTAWIENIA = [
   { href: "/sklepy", etykieta: "Sklep i integracje", ikona: "sklepy" },
   { href: "/ustawienia/wysylka", etykieta: "Wysyłka i domeny", ikona: "wysylka" },
+  { href: "/ustawienia/klucze-api", etykieta: "Klucze API", ikona: "kluczeApi" },
 ];
 
 function Marka({ href }: { href: string }) {

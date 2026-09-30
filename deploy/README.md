@@ -144,6 +144,7 @@ openssl rand -base64 48 | tr -d '/+=\n' | cut -c1-40     # wklej jako POSTGRES_P
 install -m 600 -o root -g root /srv/midrev-esp/ops/production.env.example production.env
 openssl rand -hex 32     # SECRETS_KEY
 openssl rand -hex 32     # SUPPRESSION_HASH_KEY (inny!)
+openssl rand -hex 32     # API_KEY_PEPPER (inny niż oba!)
 ```
 W `DATABASE_URL` to samo hasło co w `db.env`. `ALERT_WEBHOOK_URL`: webhook kanału
 technicznego na Discordzie (https). `MIDREV_SANDBOX` i `SMTP_HOSTY_DEWELOPERSKIE` na
@@ -157,6 +158,7 @@ Do menedżera haseł (np. 1Password/Bitwarden, sejf „midrev-esp prod”), **os
 |---|---|---|
 | `SECRETS_KEY` | odszyfrowanie haseł SMTP/IMAP i kluczy sklepów w bazie | ponowne wpisanie wszystkich poświadczeń w panelu |
 | `SUPPRESSION_HASH_KEY` | hasze wykluczeń i nagrobków RODO | nagrobki RODO nie rozpoznają adresów; osoba po art. 17 może wrócić importem |
+| `API_KEY_PEPPER` | hasze kluczy API tenantów (n8n, serwery klientów) | wszystkie klucze API przestają działać; klienci generują nowe w Ustawieniach i wklejają w n8n |
 | klucz prywatny age backupu | odszyfrowanie kopii | **backup bezużyteczny** |
 | klucz podpisu backupu (`backup-hmac.key`, 64 hex) | `restore.sh --na-produkcje` sprawdza, że kopia pochodzi z naszego backupu | `--na-produkcje` odmawia; kopię nadal da się odtworzyć do bazy testowej i przenieść ręcznie (wolniej, pod presją czasu) |
 | hasło bazy | dostęp do bazy po odtworzeniu serwera | do odtworzenia (nowe hasło przy restore), mniejsza szkoda |

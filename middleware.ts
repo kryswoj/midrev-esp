@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
-import { czyTrasaPubliczna } from "./src/trasy-publiczne";
+import { czyTrasaPubliczna, TRASY_API_Z_UKOSNIKIEM } from "./src/trasy-publiczne";
 
 // Pierwsza linia obrony (Story 1.4). Edge runtime nie ma dostepu do bazy, wiec
 // middleware sprawdza wylacznie OBECNOSC ciasteczka sesji i odsyla anonimowych
@@ -16,6 +16,16 @@ const CIASTECZKO_SESJI = "midrev_sesja";
 
 export function middleware(zadanie: NextRequest) {
   const { pathname, search } = zadanie.nextUrl;
+  // Ukośnik na końcu (next.config: skipTrailingSlashRedirect). API zgodne z Klaviyo:
+  // rewrite bez 308 (POST z ciałem nie może odbić się przekierowaniem). Reszta: to samo
+  // 308 co dotąd robił Next.
+  if (pathname.length > 1 && pathname.endsWith("/")) {
+    const bez = pathname.replace(/\/+$/, "") || "/";
+    // zwykły URL, nie klon nextUrl: NextURL pamięta ukośnik z oryginału i dokleja go z powrotem
+    const cel = new URL(bez + search, zadanie.url);
+    if ((TRASY_API_Z_UKOSNIKIEM as readonly string[]).includes(bez)) return NextResponse.rewrite(cel);
+    return NextResponse.redirect(cel, 308);
+  }
   if (czyTrasaPubliczna(pathname)) return NextResponse.next();
   if (zadanie.cookies.get(CIASTECZKO_SESJI)?.value) return NextResponse.next();
 

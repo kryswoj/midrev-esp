@@ -31,6 +31,15 @@ const schemat = z.object({
     .string()
     .regex(/^[0-9a-f]{64}$/i, "SUPPRESSION_HASH_KEY musi byc 32 bajtami zapisanymi szesnastkowo (64 znaki)")
     .optional(),
+  /* Pieprz (klucz HMAC) do haszy kluczy API tenantów (0032). W bazie leży wyłącznie
+     HMAC-SHA256(pieprz, klucz), więc zrzut bazy nie daje kluczy, a bez pieprzu nie da się
+     ich nawet zgadywać offline. OSOBNY od SECRETS_KEY i SUPPRESSION_HASH_KEY. Zmiana =
+     unieważnienie wszystkich kluczy API (klienci muszą wkleić nowe). Poza sandboksem
+     wymagany; w sandboksie klucz pochodny od SECRETS_KEY. openssl rand -hex 32 */
+  API_KEY_PEPPER: z
+    .string()
+    .regex(/^[0-9a-f]{64}$/i, "API_KEY_PEPPER musi byc 32 bajtami zapisanymi szesnastkowo (64 znaki)")
+    .optional(),
   /* Adres PANELU: logowanie, ciasteczko sesji, akceptacja kampanii przez klienta,
      adres dostawy webhooków sklepu. Gdy TRACKING_URL nie jest ustawiony, na nim stoi
      też wszystko, co widzi odbiorca maila. */
@@ -147,6 +156,12 @@ export function zbudujKonfiguracje(env: Record<string, string | undefined>): Kon
   }
   if (k.SUPPRESSION_HASH_KEY.toLowerCase() === k.SECRETS_KEY.toLowerCase()) {
     throw blad("SUPPRESSION_HASH_KEY musi być inny niż SECRETS_KEY");
+  }
+  if (!k.API_KEY_PEPPER || /^0+$/.test(k.API_KEY_PEPPER)) {
+    throw blad("API_KEY_PEPPER jest wymagany poza sandboksem i nie może być zerami (openssl rand -hex 32)");
+  }
+  if ([k.SECRETS_KEY, k.SUPPRESSION_HASH_KEY].some((x) => x.toLowerCase() === k.API_KEY_PEPPER!.toLowerCase())) {
+    throw blad("API_KEY_PEPPER musi być inny niż SECRETS_KEY i SUPPRESSION_HASH_KEY");
   }
   // Alert, którego nikt nie dostaje, to log, którego nikt nie czyta (NFR38): wstrzymanie
   // wysyłki przez progi reputacji albo held po awarii ma dotrzeć do człowieka.
