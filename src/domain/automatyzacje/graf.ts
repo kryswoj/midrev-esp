@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { filtrPusty, opiszFiltr, schematFiltraZdarzenia } from "../filtry";
+import { METRYKA_ZE_STAREGO_TYPU, METRYKI_WBUDOWANE } from "../zdarzenia/kontrakt";
 
 /**
  * Definicja automatyzacji jako graf (wzorzec Klaviyo: plaska lista wezlow, krawedzie
@@ -13,14 +15,79 @@ import { z } from "zod";
  *  - wezel e-mail ma temat i tresc (to sprawdza serwer, bo tresc lezy w bazie).
  */
 
-export const WERSJA_GRAFU = 1;
+/**
+ * Wersja 2 (E4a, plan 3.1): wyzwalaczem jest dowolna METRYKA (z filtrem po wlasciwosciach
+ * zdarzenia) albo dolaczenie do LISTY, a ustawienia maja tryb ponownego wejscia.
+ *
+ * Wersja 1 zostaje czytana NA ZAWSZE: `flow_versions` sa niezmienne, a uczestnik biegnie po
+ * wersji, z ktora wszedl. `schematGrafu` przyjmuje v1 i v2 i zawsze oddaje v2 (upgrader
+ * `podniesDoV2`), wiec silnik, walidacja i kanwa znaja jeden ksztalt.
+ *
+ * Zapis idzie w NAJSTARSZYM formacie, ktory wyraza graf (`grafDoZapisu`): flow bez nowych
+ * funkcji (wyzwalacz popup/zamowienie/lista, bez filtra, wejscie "raz") zapisuje sie jako v1.
+ * To jest expand/contract dla danych (AD-46): po rollbacku wydania stary kod dalej czyta
+ * definicje wszystkich takich flow, a v2 dostaja tylko te, ktorych stary kod i tak nie umie.
+ */
+export const WERSJA_GRAFU = 2;
 
+/** Wyzwalacze wersji 1 (i ich etykiety). */
 export const ZDARZENIA_WYZWALACZA = {
   "popup.submitted": "zapis z formularza",
   "order.created": "złożone zamówienie",
   "list.joined": "dołączenie do listy",
 } as const;
 export type ZdarzenieWyzwalacza = keyof typeof ZDARZENIA_WYZWALACZA;
+
+/** Metryka po kluczu naturalnym (AD-37: tenant, integracja, nazwa). Nazwy jak w Klaviyo. */
+export interface MetrykaRef {
+  integracja: string;
+  nazwa: string;
+}
+
+/** Wyzwalacze v1 jako metryki wbudowane (upgrader i zapis w formacie v1); mapa z kontraktu A↔B. */
+export const METRYKI_Z_V1: Record<Exclude<ZdarzenieWyzwalacza, "list.joined">, MetrykaRef> = {
+  "popup.submitted": { integracja: METRYKA_ZE_STAREGO_TYPU["popup.submitted"].integracja, nazwa: METRYKA_ZE_STAREGO_TYPU["popup.submitted"].nazwa },
+  "order.created": { integracja: METRYKA_ZE_STAREGO_TYPU["order.created"].integracja, nazwa: METRYKA_ZE_STAREGO_TYPU["order.created"].nazwa },
+};
+
+/** Etykiety PL metryk wbudowanych (nazwa w bazie zostaje angielska, jak w Klaviyo). */
+export const ETYKIETY_METRYK: Record<string, string> = {
+  "midrev|Submitted Form": "Zapis z formularza",
+  "woocommerce|Placed Order": "Złożone zamówienie (WooCommerce)",
+  "woocommerce|Ordered Product": "Zamówiony produkt (WooCommerce)",
+  "midrev|Received Email": "Otrzymany e-mail",
+  "midrev|Opened Email": "Otwarty e-mail",
+  "midrev|Clicked Email": "Kliknięty e-mail",
+  "midrev|Subscribed to Email Marketing": "Zapis na marketing e-mail",
+  "midrev|Unsubscribed from Email Marketing": "Wypis z marketingu e-mail",
+  "midrev|Added to List": "Dodanie do listy",
+};
+
+/**
+ * Metryki, ktore NIE moga wyzwalac flow nawet bez katalogu: otwarcia i klikniecia (Klaviyo)
+ * oraz techniczne metryki wbudowane z kontraktu A↔B (customer.*, rodo.*).
+ */
+export const METRYKI_BEZ_WYZWALANIA: ReadonlySet<string> = new Set([
+  "midrev|Opened Email",
+  "midrev|Clicked Email",
+  ...Object.values(METRYKI_WBUDOWANE).filter((m) => !m.mozeWyzwalac).map((m) => `${m.integracja}|${m.nazwa}`),
+]);
+
+export function kluczMetryki(m: MetrykaRef): string {
+  return `${m.integracja}|${m.nazwa}`;
+}
+
+export function etykietaMetryki(m: MetrykaRef): string {
+  return ETYKIETY_METRYK[kluczMetryki(m)] ?? m.nazwa;
+}
+
+/** Metryka wbudowana v1 odpowiadajaca kluczowi naturalnemu (albo null). */
+export function zdarzenieV1(m: MetrykaRef): Exclude<ZdarzenieWyzwalacza, "list.joined"> | null {
+  for (const [z, ref] of Object.entries(METRYKI_Z_V1)) {
+    if (ref.integracja === m.integracja && ref.nazwa === m.nazwa) return z as Exclude<ZdarzenieWyzwalacza, "list.joined">;
+  }
+  return null;
+}
 
 export const JEDNOSTKI = { minuty: "min", godziny: "godz.", dni: "dni" } as const;
 export type Jednostka = keyof typeof JEDNOSTKI;
@@ -50,20 +117,9 @@ export type AkcjaProfilu = z.infer<typeof schematAkcjiProfilu>;
 
 const linkNext = z.object({ next: link });
 
-export const schematWezla = z.discriminatedUnion("typ", [
-  z.object({
-    id,
-    typ: z.literal("wyzwalacz"),
-    zdarzenie: z.enum(["popup.submitted", "order.created", "list.joined"]),
-    listId: uuid.optional(),
-    /**
-     * Tylko `list.joined`: czy wpuszczac takze dodania MASOWE (import, dodanie segmentu,
-     * inne automatyzacje). Domyslnie nie: import 20 tys. adresow na liste z wlaczonym
-     * powitaniem wyslalby 20 tys. powitan naraz, a tego nie da sie cofnac.
-     */
-    takzeMasowe: z.boolean().optional(),
-    links: linkNext,
-  }),
+// ── Schemat wezlow wspolny dla v1 i v2 (wszystko poza wyzwalaczem) ─────────────
+
+const wezlyWspolne = [
   z.object({
     id,
     typ: z.literal("opoznienie"),
@@ -105,21 +161,166 @@ export const schematWezla = z.discriminatedUnion("typ", [
     links: linkNext,
   }),
   z.object({ id, typ: z.literal("koniec") }),
-]);
-export type Wezel = z.infer<typeof schematWezla>;
-export type TypWezla = Wezel["typ"];
-export type WezelTypu<T extends TypWezla> = Extract<Wezel, { typ: T }>;
+] as const;
 
-export const schematGrafu = z.object({
-  wersja: z.literal(WERSJA_GRAFU),
+// ── Wersja 1 (tylko odczyt; zapis przez grafDoZapisu) ──────────────────────────
+
+const wyzwalaczV1 = z.object({
+  id,
+  typ: z.literal("wyzwalacz"),
+  zdarzenie: z.enum(["popup.submitted", "order.created", "list.joined"]),
+  listId: uuid.optional(),
+  /**
+   * Tylko `list.joined`: czy wpuszczac takze dodania MASOWE (import, dodanie segmentu,
+   * inne automatyzacje). Domyslnie nie: import 20 tys. adresow na liste z wlaczonym
+   * powitaniem wyslalby 20 tys. powitan naraz, a tego nie da sie cofnac.
+   */
+  takzeMasowe: z.boolean().optional(),
+  links: linkNext,
+});
+
+export const schematGrafuV1 = z.object({
+  wersja: z.literal(1),
   start: id,
   ustawienia: z.object({
     // osoba, ktora kupila PO wejsciu, wypada z automatyzacji (win-back, porzucony koszyk)
     wyjsciePoZakupie: z.boolean().default(false),
   }).default({ wyjsciePoZakupie: false }),
+  wezly: z.array(z.discriminatedUnion("typ", [wyzwalaczV1, ...wezlyWspolne])).min(1).max(200),
+});
+export type GrafV1 = z.infer<typeof schematGrafuV1>;
+
+// ── Wersja 2 ────────────────────────────────────────────────────────────────
+
+export const schematMetrykiRef = z.object({
+  integracja: z.string().min(1).max(64).regex(/^[a-z0-9_.-]+$/),
+  nazwa: z.string().min(1).max(127),
+});
+
+export const schematZrodlaWyzwalacza = z.discriminatedUnion("rodzaj", [
+  z.object({
+    rodzaj: z.literal("metryka"),
+    metryka: schematMetrykiRef,
+    /** filtr wyzwalacza (Klaviyo: trigger filter) po wlasciwosciach zdarzenia */
+    filtr: schematFiltraZdarzenia.optional(),
+  }),
+  z.object({
+    rodzaj: z.literal("lista"),
+    // opcjonalne w schemacie (szkic bez wybranej listy), wymagane przez zwalidujGraf
+    listId: uuid.optional(),
+    takzeMasowe: z.boolean().optional(),
+  }),
+]);
+export type ZrodloWyzwalacza = z.infer<typeof schematZrodlaWyzwalacza>;
+
+export const schematPonownegoWejscia = z.discriminatedUnion("tryb", [
+  /** raz na zawsze (dotychczasowe zachowanie, Klaviyo: "brak") */
+  z.object({ tryb: z.literal("raz") }),
+  /** kazde zdarzenie = nowy przebieg (Klaviyo: "zezwalaj") */
+  z.object({ tryb: z.literal("zawsze") }),
+  /** ponownie dopiero po uplywie czasu od ostatniego wejscia (Klaviyo: "po uplywie czasu") */
+  z.object({ tryb: z.literal("po"), ilosc: z.number().int().min(1).max(100_000), jednostka: z.enum(["minuty", "godziny", "dni"]) }),
+]);
+export type PonowneWejscie = z.infer<typeof schematPonownegoWejscia>;
+
+const wyzwalaczV2 = z.object({
+  id,
+  typ: z.literal("wyzwalacz"),
+  zrodlo: schematZrodlaWyzwalacza,
+  links: linkNext,
+});
+
+export const schematWezla = z.discriminatedUnion("typ", [wyzwalaczV2, ...wezlyWspolne]);
+export type Wezel = z.infer<typeof schematWezla>;
+export type TypWezla = Wezel["typ"];
+export type WezelTypu<T extends TypWezla> = Extract<Wezel, { typ: T }>;
+
+export const schematGrafuV2 = z.object({
+  wersja: z.literal(2),
+  start: id,
+  ustawienia: z.object({
+    wyjsciePoZakupie: z.boolean().default(false),
+    ponowneWejscie: schematPonownegoWejscia.default({ tryb: "raz" }),
+  }).default({ wyjsciePoZakupie: false, ponowneWejscie: { tryb: "raz" } }),
   wezly: z.array(schematWezla).min(1).max(200),
 });
-export type Graf = z.infer<typeof schematGrafu>;
+export type Graf = z.infer<typeof schematGrafuV2>;
+
+/** v1 -> v2. Czysta funkcja: ten sam graf, ten sam przebieg; wyzwalacz jako metryka/lista, wejscie "raz". */
+export function podniesDoV2(g: GrafV1): Graf {
+  return {
+    wersja: 2,
+    start: g.start,
+    ustawienia: { wyjsciePoZakupie: g.ustawienia.wyjsciePoZakupie, ponowneWejscie: { tryb: "raz" } },
+    wezly: g.wezly.map((w): Wezel => {
+      if (w.typ !== "wyzwalacz") return w;
+      const zrodlo: ZrodloWyzwalacza = w.zdarzenie === "list.joined"
+        ? { rodzaj: "lista", ...(w.listId ? { listId: w.listId } : {}), ...(w.takzeMasowe !== undefined ? { takzeMasowe: w.takzeMasowe } : {}) }
+        : { rodzaj: "metryka", metryka: { ...METRYKI_Z_V1[w.zdarzenie] } };
+      return { id: w.id, typ: "wyzwalacz", zrodlo, links: w.links };
+    }),
+  };
+}
+
+/**
+ * Definicja do zapisu w bazie: v1, gdy graf da sie w niej wyrazic (patrz komentarz przy
+ * WERSJA_GRAFU), inaczej v2. `schematGrafu.parse(grafDoZapisu(g))` zawsze daje `g`.
+ */
+export function grafDoZapisu(g: Graf): GrafV1 | Graf {
+  if (g.ustawienia.ponowneWejscie.tryb !== "raz") return g;
+  const wezly: GrafV1["wezly"] = [];
+  for (const w of g.wezly) {
+    if (w.typ !== "wyzwalacz") {
+      wezly.push(w);
+      continue;
+    }
+    const z = w.zrodlo;
+    if (z.rodzaj === "lista") {
+      wezly.push({
+        id: w.id, typ: "wyzwalacz", zdarzenie: "list.joined",
+        ...(z.listId ? { listId: z.listId } : {}),
+        ...(z.takzeMasowe !== undefined ? { takzeMasowe: z.takzeMasowe } : {}),
+        links: w.links,
+      });
+      continue;
+    }
+    const v1 = zdarzenieV1(z.metryka);
+    if (!v1 || (z.filtr && z.filtr.grupy.length)) return g;
+    wezly.push({ id: w.id, typ: "wyzwalacz", zdarzenie: v1, links: w.links });
+  }
+  return { wersja: 1, start: g.start, ustawienia: { wyjsciePoZakupie: g.ustawienia.wyjsciePoZakupie }, wezly };
+}
+
+/**
+ * Schemat definicji przyjmujacy v1 i v2, zawsze oddajacy v2. Bledy walidacji pochodza ze
+ * schematu tej wersji, ktora deklaruje definicja (czytelne sciezki, bez "invalid union").
+ */
+export const schematGrafu = z.unknown().transform((x, ctx): Graf => {
+  const v1 = !!x && typeof x === "object" && (x as { wersja?: unknown }).wersja === 1;
+  const r = v1 ? schematGrafuV1.safeParse(x) : schematGrafuV2.safeParse(x);
+  if (!r.success) {
+    for (const i of r.error.issues) ctx.addIssue({ code: "custom", message: i.message, path: i.path as (string | number)[] });
+    return z.NEVER;
+  }
+  return v1 ? podniesDoV2(r.data as GrafV1) : (r.data as Graf);
+});
+
+/** Wyzwalacz grafu (start) albo null. */
+export function wyzwalaczGrafu(g: Graf): WezelTypu<"wyzwalacz"> | null {
+  const s = wezel(g, g.start);
+  return s && s.typ === "wyzwalacz" ? s : null;
+}
+
+/**
+ * Tekst do `flows.trigger_event` (kolumna zdenormalizowana, czytana przez liste i stary kod):
+ * zdarzenie v1, gdy wyzwalacz je ma, inaczej `metryka:<integracja>:<nazwa>`.
+ */
+export function triggerEventGrafu(g: Graf): string | null {
+  const w = wyzwalaczGrafu(g);
+  if (!w) return null;
+  if (w.zrodlo.rodzaj === "lista") return "list.joined";
+  return zdarzenieV1(w.zrodlo.metryka) ?? `metryka:${w.zrodlo.metryka.integracja}:${w.zrodlo.metryka.nazwa}`;
+}
 
 /** Porty wyjsciowe wezla, w kolejnosci rysowania (lewa galaz najpierw). */
 export function porty(w: Wezel): { port: string; etykieta: string | null }[] {
@@ -165,14 +366,35 @@ export function noweIdWezla(typ: TypWezla, g?: Graf): string {
   }
 }
 
-/** Pusty graf: wyzwalacz -> koniec. */
-export function pustyGraf(zdarzenie: ZdarzenieWyzwalacza, listId?: string): Graf {
+/**
+ * Domyslne ponowne wejscie dla NOWEGO flow (decyzja D4): wyzwalacz metryczny = "zawsze"
+ * (parytet z Klaviyo), listowy = "raz". Dopoki ponowne wejscie jest niedostepne (przed 0036),
+ * wszystko startuje z "raz".
+ */
+export function domyslnePonowneWejscie(zrodlo: ZrodloWyzwalacza, ponowneWejscieDostepne: boolean): PonowneWejscie {
+  return ponowneWejscieDostepne && zrodlo.rodzaj === "metryka" ? { tryb: "zawsze" } : { tryb: "raz" };
+}
+
+/** Wyzwalacz z nazwy zdarzenia v1 (formularz "nowa automatyzacja", biblioteka, testy). */
+export function zrodloZV1(zdarzenie: ZdarzenieWyzwalacza, listId?: string): ZrodloWyzwalacza {
+  return zdarzenie === "list.joined"
+    ? { rodzaj: "lista", ...(listId ? { listId } : {}) }
+    : { rodzaj: "metryka", metryka: { ...METRYKI_Z_V1[zdarzenie] } };
+}
+
+/** Pusty graf: wyzwalacz -> koniec. Przyjmuje zdarzenie v1 albo zrodlo v2. */
+export function pustyGraf(
+  zrodlo: ZdarzenieWyzwalacza | ZrodloWyzwalacza,
+  listId?: string,
+  opcje: { ponowneWejscieDostepne?: boolean } = {},
+): Graf {
+  const z = typeof zrodlo === "string" ? zrodloZV1(zrodlo, listId) : zrodlo;
   return {
     wersja: WERSJA_GRAFU,
     start: "wyzwalacz",
-    ustawienia: { wyjsciePoZakupie: false },
+    ustawienia: { wyjsciePoZakupie: false, ponowneWejscie: domyslnePonowneWejscie(z, opcje.ponowneWejscieDostepne === true) },
     wezly: [
-      { id: "wyzwalacz", typ: "wyzwalacz", zdarzenie, ...(listId ? { listId } : {}), links: { next: "koniec" } },
+      { id: "wyzwalacz", typ: "wyzwalacz", zrodlo: z, links: { next: "koniec" } },
       { id: "koniec", typ: "koniec" },
     ],
   };
@@ -276,6 +498,32 @@ export interface KontekstWalidacji {
   emaile?: Record<string, { temat: string; maTresc: boolean }>;
   listy?: Set<string>;
   segmenty?: Set<string>;
+  /**
+   * Metryki tenanta po kluczu naturalnym (`kluczMetryki`). Brak = nie sprawdzamy istnienia
+   * (np. przegladarka bez katalogu); metryki wbudowane v1 sa zawsze dozwolone.
+   */
+  metryki?: Map<string, { canTrigger: boolean }>;
+  /** Czy tryby "zawsze" / "po X" sa juz dostepne (po 0036 i fladze). Brak = niedostepne. */
+  ponowneWejscieDostepne?: boolean;
+  /** Czy wolno zapisywac funkcje wymagajace grafu v2 (filtr wyzwalacza, metryka spoza wbudowanych). Brak = nie. */
+  grafV2Dostepny?: boolean;
+}
+
+/**
+ * Funkcje grafu, ktorych nie da sie zapisac w v1 (poza ponownym wejsciem, ktore ma wlasna
+ * bramke). Pusta lista = graf zapisze sie jako v1 i przetrwa rollback kodu.
+ *
+ * Ponowne wejscie celowo NIE jest tu liczone: zapisuje sie w v2, ale tylko gdy jest dostepne,
+ * czyli po 0036. Od 0036 kod sprzed 0035 i tak nie dziala (zdjete unikalnosci), a rollback do
+ * wydania z 0035 czyta v2 - wiec v2 z ponownym wejsciem nie lamie zadnego mozliwego rollbacku.
+ */
+export function funkcjeWymagajaceV2(g: Graf): string[] {
+  const w = wyzwalaczGrafu(g);
+  if (!w || w.zrodlo.rodzaj !== "metryka") return [];
+  const wynik: string[] = [];
+  if (!zdarzenieV1(w.zrodlo.metryka)) wynik.push(`metryka „${w.zrodlo.metryka.nazwa}”`);
+  if (w.zrodlo.filtr && w.zrodlo.filtr.grupy.length) wynik.push("filtr wyzwalacza");
+  return wynik;
 }
 
 export function zwalidujGraf(surowy: unknown, ctx: KontekstWalidacji = {}): { graf: Graf | null; bledy: BladGrafu[] } {
@@ -295,6 +543,15 @@ export function zwalidujGraf(surowy: unknown, ctx: KontekstWalidacji = {}): { gr
   if (wyzwalacze.length !== 1) bledy.push({ wezelId: null, tresc: "Automatyzacja musi mieć dokładnie jeden wyzwalacz." });
   const start = wezel(g, g.start);
   if (!start || start.typ !== "wyzwalacz") bledy.push({ wezelId: null, tresc: "Pierwszym krokiem musi być wyzwalacz." });
+  const v2 = funkcjeWymagajaceV2(g);
+  if (v2.length && ctx.grafV2Dostepny !== true) {
+    bledy.push({ wezelId: g.start, tresc: `${v2.join(" i ")}: ta funkcja będzie dostępna po włączeniu nowych automatyzacji (MIDREV_GRAF_V2). Na razie wyzwalaczem może być zapis z formularza, zamówienie albo lista, bez filtra.` });
+  }
+  if (g.ustawienia.ponowneWejscie.tryb !== "raz" && ctx.ponowneWejscieDostepne !== true) {
+    // Do czasu migracji 0036 baza wciaz pilnuje jednego wejscia na osobe. Po cichu zamienione
+    // "zawsze" na "raz" = operator mysli, ze ludzie wracaja, a nie wracaja.
+    bledy.push({ wezelId: null, tresc: "Ponowne wejście („za każdym razem” albo „po upływie czasu”) będzie dostępne po najbliższej aktualizacji systemu. Na razie wybierz „tylko raz”." });
+  }
 
   for (const w of g.wezly) {
     for (const p of porty(w)) {
@@ -308,12 +565,22 @@ export function zwalidujGraf(surowy: unknown, ctx: KontekstWalidacji = {}): { gr
       }
     }
     switch (w.typ) {
-      case "wyzwalacz":
-        if (w.zdarzenie === "list.joined") {
-          if (!w.listId) bledy.push({ wezelId: w.id, tresc: "Wyzwalacz „dołączenie do listy” wymaga wybrania listy." });
-          else if (ctx.listy && !ctx.listy.has(w.listId)) bledy.push({ wezelId: w.id, tresc: "Wybrana lista już nie istnieje." });
+      case "wyzwalacz": {
+        const z = w.zrodlo;
+        if (z.rodzaj === "lista") {
+          if (!z.listId) bledy.push({ wezelId: w.id, tresc: "Wyzwalacz „dołączenie do listy” wymaga wybrania listy." });
+          else if (ctx.listy && !ctx.listy.has(z.listId)) bledy.push({ wezelId: w.id, tresc: "Wybrana lista już nie istnieje." });
+        } else {
+          const klucz = kluczMetryki(z.metryka);
+          const znana = ctx.metryki?.get(klucz);
+          if (METRYKI_BEZ_WYZWALANIA.has(klucz) || znana?.canTrigger === false) {
+            bledy.push({ wezelId: w.id, tresc: `Metryka „${etykietaMetryki(z.metryka)}” nie może uruchamiać automatyzacji (tak samo jak w Klaviyo: otwarcia i kliknięcia są zbyt zawodne).` });
+          } else if (ctx.metryki && !znana && !zdarzenieV1(z.metryka)) {
+            bledy.push({ wezelId: w.id, tresc: `Metryki „${z.metryka.nazwa}” (${z.metryka.integracja}) nie ma w tym koncie. Wybierz metrykę z listy albo wyślij najpierw pierwsze zdarzenie.` });
+          }
         }
         break;
+      }
       case "email": {
         if (g.wezly.some((x) => x !== w && x.typ === "email" && x.emailId === w.emailId)) {
           bledy.push({ wezelId: w.id, tresc: "Ta sama wiadomość jest w dwóch krokach. Druga osoba dostałaby ją tylko raz." });
@@ -369,7 +636,8 @@ export function zwalidujGraf(surowy: unknown, ctx: KontekstWalidacji = {}): { gr
 export function ostrzezeniaGrafu(g: Graf): BladGrafu[] {
   const wynik: BladGrafu[] = [];
   const start = wezel(g, g.start);
-  if (!start || start.typ !== "wyzwalacz" || start.zdarzenie !== "order.created") return wynik;
+  // TODO(E5): rola `placed_order` z mapowania metryk zamiast stalej metryki Woo
+  if (!start || start.typ !== "wyzwalacz" || start.zrodlo.rodzaj !== "metryka" || zdarzenieV1(start.zrodlo.metryka) !== "order.created") return wynik;
   const odwiedzone = new Set<string>();
   const idz = (id: string | null, poOpoznieniu: boolean) => {
     if (!id || odwiedzone.has(`${id}:${poOpoznieniu}`)) return;
@@ -465,10 +733,13 @@ export const ZRODLA_POJEDYNCZE = ["reczny", "formularz", "popup"] as const;
 /** Jednowierszowe podsumowanie konfiguracji wezla (jak w edrone i Klaviyo). */
 export function opiszWezel(w: Wezel, s: Slowniki = {}): string {
   switch (w.typ) {
-    case "wyzwalacz":
-      return w.zdarzenie === "list.joined"
-        ? `Gdy ktoś dołączy do listy „${s.listy?.[w.listId ?? ""] ?? "…"}”`
-        : `Gdy ktoś ${w.zdarzenie === "popup.submitted" ? "zapisze się przez formularz" : "złoży zamówienie"}`;
+    case "wyzwalacz": {
+      const z = w.zrodlo;
+      if (z.rodzaj === "lista") return `Gdy ktoś dołączy do listy „${s.listy?.[z.listId ?? ""] ?? "…"}”`;
+      const v1 = zdarzenieV1(z.metryka);
+      const baza = v1 === "popup.submitted" ? "Gdy ktoś zapisze się przez formularz" : v1 === "order.created" ? "Gdy ktoś złoży zamówienie" : `Gdy wystąpi: ${etykietaMetryki(z.metryka)}`;
+      return filtrPusty(z.filtr) ? baza : `${baza}, gdzie ${opiszFiltr(z.filtr)}`;
+    }
     case "opoznienie":
       return `Czekaj ${opiszOpoznienie(w.ilosc, w.jednostka)}`;
     case "czekaj_do": {

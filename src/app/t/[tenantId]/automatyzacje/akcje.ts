@@ -68,7 +68,13 @@ export async function utworzAutomatyzacjeAkcja(_poprzedni: StanFormularza | unde
     zdarzenie: String(formularz.get("zdarzenie") ?? ""),
     listId: String(formularz.get("listId") ?? ""),
   };
-  const wynik = await utworzAutomatyzacje(tenantId, { name: wartosci.nazwa, zdarzenie: wartosci.zdarzenie, listId: wartosci.listId || null });
+  // "m:integracja|nazwa" = metryka z katalogu tenanta; inaczej zdarzenie v1 / lista
+  const wynik = await utworzAutomatyzacje(
+    tenantId,
+    wartosci.zdarzenie.startsWith("m:")
+      ? { name: wartosci.nazwa, metryka: wartosci.zdarzenie.slice(2) }
+      : { name: wartosci.nazwa, zdarzenie: wartosci.zdarzenie, listId: wartosci.listId || null },
+  );
   if (!wynik.ok) return { blad: wynik.blad, wartosci };
   revalidatePath(`/t/${tenantId}/automatyzacje`);
   redirect(`/t/${tenantId}/automatyzacje/${wynik.id}/edytor`);
@@ -208,5 +214,13 @@ export async function podgladWiadomosciFlowAkcja(
     sledzKlikniecia: false,
     sledzOtwarcia: false,
   });
-  return { ok: true, html, uwagi: render.uwagi };
+  // zmienne {{ event.X }} / {{ person.X }}: w podgladzie zostaja jako znaczniki (nie ma
+  // konkretnej osoby ani zdarzenia), ale blad skladni widac od razu, nie dopiero przy publikacji
+  const { maZmienne, sprawdzSzablon } = await import("../../../../domain/email/szablon");
+  const uwagi = [...render.uwagi];
+  if (maZmienne(render.html)) {
+    const blad = sprawdzSzablon("", render.html);
+    uwagi.push(blad ? `Błąd w zmiennych: ${blad}` : "Zmienne ({{ … }}) podstawią się przy wysyłce danymi osoby i zdarzenia.");
+  }
+  return { ok: true, html, uwagi };
 }

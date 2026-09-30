@@ -522,7 +522,7 @@ describe("Silnik flow", () => {
     expect(d.wyslane).toEqual(["flow-bartek@example.test"]);
     expect(await uczestnik(f.id, "anna")).toBeUndefined();
     // operator świadomie włącza masowe: nowa wersja wpuszcza też import
-    const g2 = { ...g, wezly: g.wezly.map((w) => (w.typ === "wyzwalacz" ? ({ ...w, takzeMasowe: true } as Wezel) : w)) };
+    const g2 = { ...g, wezly: g.wezly.map((w) => (w.typ === "wyzwalacz" && w.zrodlo.rodzaj === "lista" ? ({ ...w, zrodlo: { ...w.zrodlo, takzeMasowe: true } } as Wezel) : w)) };
     await zapisz(f.id, g2);
     expect((await opublikuj(tenantId, f.id)).ok).toBe(true);
     const d2 = new DostawcaAtrapa();
@@ -644,7 +644,9 @@ describe("Silnik flow", () => {
     expect(d.wyslane).toEqual(["flow-bartek@example.test"]);
   });
 
-  it("R2#3: stare zdarzenie (worker leżał) z opóźnieniem na starcie nie wysyła maila falą; „czekaj do” liczy się od teraz", async () => {
+  it("R2#3 / AD-39: zdarzenie spóźnione o ponad 4 h i zdarzenie sprzed zaległego skanu nie wchodzą; „czekaj do” liczy się od teraz", async () => {
+    // (a) webhook dotarl po 3 dniach (zaszlo 3 dni temu, zarejestrowane teraz): regula 4 h,
+    //     wejscia nie ma wcale, wiec tym bardziej maila fala (wczesniej: wejscie + przerwanie)
     const f = await utworzAutomatyzacje(tenantId, { name: "FLOW stare zdarzenie", zdarzenie: "popup.submitted" });
     if (!f.ok) throw new Error(f.blad);
     const e = await wiadomosc(f.id, "Po godzinie", "Po godzinie");
@@ -656,10 +658,28 @@ describe("Silnik flow", () => {
     await getPool().query("update flows set active_since = now() - interval '5 days' where tenant_id = $1 and id = $2", [tenantId, f.id]);
     await zdarzenie("anna", "popup.submitted", "3 days");
     const d = new DostawcaAtrapa();
-    await uruchomAutomatyzacje(tenantId, { dostawca: d });
+    const w1 = await uruchomAutomatyzacje(tenantId, { dostawca: d });
     expect(d.wyslane).toEqual([]);
-    expect(await uczestnik(f.id, "anna")).toMatchObject({ status: "przerwany", exit_reason: "opóźnienie przeterminowane (automatyzacja stała)" });
+    expect(w1.wejscia).toBe(0);
+    expect(await uczestnik(f.id, "anna")).toBeUndefined();
 
+    // (b) worker lezal 3 dni: zdarzenie zaszlo i zarejestrowalo sie 3 dni temu, znacznik skanu
+    //     stoi na wlaczeniu sprzed 5 dni. Zdarzen starszych niz doba nie wpuszczamy; idzie alert.
+    await getPool().query("delete from events where tenant_id = $1", [tenantId]);
+    await getPool().query("delete from flow_trigger_state where tenant_id = $1 and flow_id = $2", [tenantId, f.id]);
+    await getPool().query(
+      `insert into events (tenant_id, profile_id, event_type, payload, occurred_at, recorded_at)
+       values ($1, $2, 'popup.submitted', '{}', now() - interval '3 days', now() - interval '3 days')`,
+      [tenantId, profile.anna],
+    );
+    const w2 = await uruchomAutomatyzacje(tenantId, { dostawca: new DostawcaAtrapa() });
+    expect(w2.wejscia).toBe(0);
+    expect(w2.alerty.some((a) => a.includes("zaległy o ponad dobę"))).toBe(true);
+    // znacznik przesunal sie na teraz: kolejny tik nie powtarza alertu
+    const w3 = await uruchomAutomatyzacje(tenantId, { dostawca: new DostawcaAtrapa() });
+    expect(w3.alerty.some((a) => a.includes("zaległy"))).toBe(false);
+
+    // (c) "czekaj do" po zdarzeniu sprzed 3 godzin (w oknie 4 h): termin od max(wejscie, teraz - 1 h)
     const f2 = await utworzAutomatyzacje(tenantId, { name: "FLOW stare czekaj do", zdarzenie: "popup.submitted" });
     if (!f2.ok) throw new Error(f2.blad);
     const e2 = await wiadomosc(f2.id, "W poniedziałek", "W poniedziałek");
@@ -669,13 +689,27 @@ describe("Silnik flow", () => {
     await zapisz(f2.id, g2);
     await wlacz(f2.id);
     await getPool().query("update flows set active_since = now() - interval '5 days' where tenant_id = $1 and id = $2", [tenantId, f2.id]);
-    await zdarzenie("bartek", "popup.submitted", "3 days");
+    await zdarzenie("bartek", "popup.submitted", "3 hours");
     const d2 = new DostawcaAtrapa();
     await uruchomAutomatyzacje(tenantId, { dostawca: d2 });
     const u = await uczestnik(f2.id, "bartek");
-    // najbliższa 3:00 po (teraz - 1 h), a nie po dacie sprzed trzech dni
+    // najbliższa 3:00 po (teraz - 1 h), a nie po dacie sprzed trzech godzin
     const { rows } = await getPool().query("select ($1::timestamptz > now() - interval '1 hour') as swiezy", [u.resume_at ?? "1970-01-01"]);
     expect(u.status === "w_toku" ? rows[0].swiezy : u.status === "zakonczony").toBe(true);
+  });
+
+  it("bez MIDREV_GRAF_V2 szkicu z filtrem wyzwalacza nie da się zapisać (rollback kodu czyta tylko v1)", async () => {
+    const f = await utworzAutomatyzacje(tenantId, { name: "FLOW v2 zablokowane", zdarzenie: "popup.submitted" });
+    if (!f.ok) throw new Error(f.blad);
+    const g = (await pobierzAutomatyzacje(tenantId, f.id))!.graf;
+    const zFiltrem = { ...g, wezly: g.wezly.map((w) => (w.typ === "wyzwalacz" && w.zrodlo.rodzaj === "metryka"
+      ? ({ ...w, zrodlo: { ...w.zrodlo, filtr: { grupy: [{ warunki: [{ typ: "wlasciwosc_zdarzenia", pole: "popup_id", typPola: "string", operator: "rowna", wartosc: "x" }] }] } } } as Wezel)
+      : w)) };
+    const z = await zapisz(f.id, zFiltrem as Graf);
+    expect(z.ok).toBe(false);
+    const { rows } = await getPool().query("select draft->>'wersja' as w from flows where tenant_id = $1 and id = $2", [tenantId, f.id]);
+    expect(rows[0].w).toBe("1");
+    expect((await utworzAutomatyzacje(tenantId, { name: "FLOW metryka api", metryka: "api|Cokolwiek" })).ok).toBe(false);
   });
 
   it("R2#4: błędy systemowe są rozpoznawane, a alert o nich idzie najwyżej raz na godzinę", () => {

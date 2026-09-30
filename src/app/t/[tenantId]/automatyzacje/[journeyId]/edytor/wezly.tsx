@@ -7,7 +7,6 @@ import { odmien } from "../../../../../../domain/liczebniki";
 import {
   DNI_TYGODNIA,
   NAZWY_WEZLOW,
-  ZDARZENIA_WYZWALACZA,
   opiszWezel,
   tytulWezla,
   type RegulaWarunku,
@@ -16,6 +15,7 @@ import {
 } from "../../../../../../domain/automatyzacje/graf";
 import type { StatystykiEmaila } from "../../../../../../usecases/automatyzacje/journeye";
 import { IKONY_WEZLOW, KAFELEK } from "./biblioteka-krokow";
+import { PanelZrodla, type MetrykaDoWyboru } from "./wyzwalacz";
 
 export type Tryb = "edycja" | "analityka";
 
@@ -186,6 +186,8 @@ export function PanelWezla({
   slowniki,
   listy,
   segmenty,
+  metryki = [],
+  grafV2Dostepny = false,
   emaile,
   bledy,
   ostrzezenia = [],
@@ -200,6 +202,8 @@ export function PanelWezla({
   slowniki: Slowniki;
   listy: { id: string; name: string }[];
   segmenty: { id: string; name: string }[];
+  metryki?: MetrykaDoWyboru[];
+  grafV2Dostepny?: boolean;
   emaile: Record<string, { nazwa: string; temat: string; maTresc: boolean }>;
   bledy: string[];
   ostrzezenia?: string[];
@@ -233,30 +237,7 @@ export function PanelWezla({
       ) : null}
       {wezel.typ === "wyzwalacz" ? (
         <Sekcja tytul="Kiedy osoba wchodzi">
-          <Pole etykieta="Zdarzenie">
-            <select className="pole" value={wezel.zdarzenie} onChange={(e) => onZmiana({ zdarzenie: e.target.value as Wezel & any, ...(e.target.value === "list.joined" ? { listId: listy[0]?.id } : { listId: undefined }) } as Partial<Wezel>)}>
-              {Object.entries(ZDARZENIA_WYZWALACZA).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-            </select>
-          </Pole>
-          {wezel.zdarzenie === "list.joined" ? (
-            <Pole etykieta="Lista">
-              {listy.length ? (
-                <select className="pole" value={wezel.listId ?? ""} onChange={(e) => onZmiana({ listId: e.target.value } as Partial<Wezel>)}>
-                  {listy.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-                </select>
-              ) : <p className="text-[13px] text-[var(--color-tekst-2)]">Nie ma jeszcze żadnej listy.</p>}
-            </Pole>
-          ) : null}
-          {wezel.zdarzenie === "list.joined" ? (
-            <label className="flex items-start gap-2.5 rounded-md border border-[var(--color-czeka-ramka)] bg-[var(--color-czeka-tlo)] px-3 py-2.5 text-[13px] leading-5">
-              <input type="checkbox" className="mt-1 accent-[var(--color-akcent)]" checked={wezel.takzeMasowe === true} onChange={(e) => onZmiana({ takzeMasowe: e.target.checked } as Partial<Wezel>)} />
-              <span>
-                Także dodania masowe (import, cały segment)
-                <span className="block text-[12px] text-[var(--color-czeka)]">Import tysięcy adresów na tę listę uruchomi automatyzację dla każdego z nich naraz. Domyślnie wchodzą tylko osoby dodane pojedynczo: ręcznie albo formularzem.</span>
-              </span>
-            </label>
-          ) : null}
-          <p className="text-[12px] leading-4 text-[var(--color-tekst-3)]">Osoba wchodzi raz. Zdarzenia sprzed włączenia automatyzacji i zamówienia z importu historii nie liczą się.</p>
+          <PanelZrodla zrodlo={wezel.zrodlo} metryki={metryki} listy={listy} grafV2Dostepny={grafV2Dostepny} onZmiana={(zrodlo) => onZmiana({ zrodlo } as Partial<Wezel>)} />
         </Sekcja>
       ) : null}
 

@@ -36,6 +36,7 @@
     "@dnd-kit/core": "^6.3.1",
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
+    "liquidjs": "10.29.0",
     "lucide-react": "^1.47.0",
     "next": "^16.3.3",
     "nodemailer": "^10.0.10",

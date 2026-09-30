@@ -289,7 +289,9 @@ export async function zbudujWiadomosciKampanii(tenantId: string, campaignId: str
               case when z.klikniecia then $17::jsonb else '[]'::jsonb end,
               $18, z.otwarcia, z.klikniecia
          from odbiorca o join zgody z on z.profile_id = o.profile_id
-       on conflict (tenant_id, source_type, source_id, profile_id) do nothing`,
+       -- cel z predykatem: do 0036 arbitrem jest tez stary constraint (te same kolumny),
+       -- po 0036 tylko unikalnosc czesciowa messages_zrodlo_uq; semantyka bez zmian
+       on conflict (tenant_id, source_type, source_id, profile_id) where source_type <> 'journey' do nothing`,
       [
         tenantId, campaignId, ids, clickTokeny, unsubTokeny, pixelTokeny,
         kampania.subject,
@@ -481,9 +483,12 @@ export async function wyslijPartie(
   // (mikrosekundy; przejście przez Date psuje wartość, jak przy tożsamości jobów).
   // Sam stan 'claimed' nie wystarcza za dowód własności: po odzyskaniu zombie inny
   // proces mógł zająć tę samą wiadomość na nowo i też widzieć 'claimed'.
+  // Kandydaci w CTE MATERIALIZED, nie w `where (..) in (subquery)`: przy planie "Nested Loop
+  // Semi Join" Postgres wykonywal podzapytanie z LIMIT + SKIP LOCKED na nowo dla kazdego
+  // wiersza zewnetrznego i zajmowal WIECEJ wiadomosci niz limit (plan zalezny od statystyk,
+  // wiec "losowo"): partia 1 wysylala 3, a drugi worker nie dostawal nic.
   const { rows: doWyslania } = await pool.query(
-    `update messages set current_state = 'claimed', claimed_at = now()
-      where (tenant_id, id) in (
+    `with kandydaci as materialized (
         select m.tenant_id, m.id from messages m
          where m.tenant_id = $1 and m.current_state = 'queued'
            -- B2: wiadomosci kampanii WSTRZYMANEJ albo ODWOLANEJ nie sa zajmowane.
@@ -511,8 +516,11 @@ export async function wyslijPartie(
          for update skip locked
          limit $2
       )
-     returning id, profile_id, email, subject, body_html, unsubscribe_token,
-               claimed_at::text as claim_token`,
+     update messages set current_state = 'claimed', claimed_at = now()
+       from kandydaci k
+      where messages.tenant_id = k.tenant_id and messages.id = k.id
+     returning messages.id, messages.profile_id, messages.email, messages.subject, messages.body_html,
+               messages.unsubscribe_token, messages.claimed_at::text as claim_token`,
     [tenantId, Math.min(limitPartii, wolneMiejsce)],
   );
 

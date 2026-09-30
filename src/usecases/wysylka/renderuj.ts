@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { adresSledzenia } from "../../config";
+import { sanityzujAdresy } from "../../domain/email/szablon";
 
 /**
  * Render treści kampanii do finalnego HTML wiadomości.
@@ -55,7 +56,11 @@ export function przepiszLinki(html: string, clickToken: string): Zlinkowany {
   const linki: string[] = [];
   // domena ŚLEDZENIA (TRACKING_URL, bez niej APP_URL): adres panelu nie leci w mailach
   const baza = adresSledzenia();
-  const przepisany = html.replace(
+  // Linki spoza http(s) regex ponizej zostawia w spokoju, wiec `javascript:` (takze
+  // zakodowany encjami) musi zniknac PRZED nim (AD-43), niezaleznie od zrodla tresci.
+  // Lagodnie: jawne zle schematy odpadaja, wzgledne zostaja jak dotad (tresc po zmiennych
+  // przeszla juz scisla sanityzacje w renderujHtml).
+  const przepisany = sanityzujAdresy(html, { scisle: false }).replace(
     /href\s*=\s*(?:"(https?:\/\/[^"]*)"|'(https?:\/\/[^']*)'|(https?:\/\/[^\s>"']+))/gi,
     (_pelny, wDwoch: string | undefined, wJednym: string | undefined, bez: string | undefined) => {
       const url = wDwoch ?? wJednym ?? bez ?? "";
@@ -115,9 +120,10 @@ export function zlozWiadomosc(opcje: {
   sledzOtwarcia?: boolean;
 }): Zlinkowany {
   const baza = adresSledzenia();
+  // bez sledzenia klikniec linki zostaja oryginalne, ale niebezpieczne schematy i tak znikaja
   const { html, linki } =
     opcje.sledzKlikniecia === false
-      ? { html: opcje.trescHtml, linki: [] as string[] }
+      ? { html: sanityzujAdresy(opcje.trescHtml, { scisle: false }), linki: [] as string[] }
       : przepiszLinki(opcje.trescHtml, opcje.clickToken);
   const stopka = `
   <div style="margin-top:32px;padding-top:16px;border-top:1px solid #e5e5e5;color:#8a8a8a;font:12px/1.6 -apple-system,Segoe UI,sans-serif">

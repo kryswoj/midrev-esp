@@ -43,6 +43,7 @@ import {
   zapiszGraf,
   zmienWezel,
   zwalidujGraf,
+  kluczMetryki,
   type BladGrafu,
   type Graf,
   type HistoriaGrafu,
@@ -55,6 +56,7 @@ import type { StatystykiAutomatyzacji } from "../../../../../../usecases/automat
 import { opublikujAkcja, statystykiAkcja, utworzWiadomoscAkcja, zapiszNaglowekWiadomosciAkcja, zapiszSzkicAkcja, zmienNazweAkcja, zmienStatusAkcja } from "../../akcje";
 import { BibliotekaKrokow, IKONY_WEZLOW, KAFELEK, KATEGORIE, type TypDoDodania } from "./biblioteka-krokow";
 import { KartaWezla, PanelWezla, wysokoscWezla, type StatWezla, type Tryb } from "./wezly";
+import { WyborPonownegoWejscia, type MetrykaDoWyboru } from "./wyzwalacz";
 
 /**
  * Kanwa automatyzacji (jak flow builder Klaviyo): wyzwalacz na gorze, sciezka w dol,
@@ -78,6 +80,9 @@ export interface DaneStartowe {
   emaile: Emaile;
   listy: { id: string; name: string }[];
   segmenty: { id: string; name: string }[];
+  metryki: MetrykaDoWyboru[];
+  ponowneWejscieDostepne: boolean;
+  grafV2Dostepny: boolean;
   bramka: BladGrafu[];
   niepublikowane: boolean;
   liveVersion: number | null;
@@ -229,11 +234,14 @@ export function Kanwa({
       emaile: Object.fromEntries(Object.entries(emaile).map(([id, e]) => [id, { temat: e.temat, maTresc: e.maTresc }])),
       listy: new Set(start.listy.map((l) => l.id)),
       segmenty: new Set(start.segmenty.map((s) => s.id)),
+      metryki: new Map(start.metryki.map((m) => [kluczMetryki(m), { canTrigger: m.canTrigger }])),
+      ponowneWejscieDostepne: start.ponowneWejscieDostepne,
+      grafV2Dostepny: start.grafV2Dostepny,
     }).bledy;
     // serwer moze wiedziec wiecej (np. tresc maila zapisana w innej karcie): laczymy bez duplikatow
     const klucze = new Set(lokalne.map((b) => `${b.wezelId}|${b.tresc}`));
     return [...lokalne, ...bramkaSerwera.filter((b) => !klucze.has(`${b.wezelId}|${b.tresc}`))];
-  }, [g, emaile, start.listy, start.segmenty, bramkaSerwera]);
+  }, [g, emaile, start.listy, start.segmenty, start.metryki, start.ponowneWejscieDostepne, start.grafV2Dostepny, bramkaSerwera]);
   const bledyWezla = useCallback((id: string) => bledy.filter((b) => b.wezelId === id).map((b) => b.tresc), [bledy]);
   const ostrzezenia = useMemo(() => ostrzezeniaGrafu(g), [g]);
 
@@ -770,6 +778,8 @@ export function Kanwa({
                 slowniki={slowniki}
                 listy={start.listy}
                 segmenty={start.segmenty}
+                metryki={start.metryki}
+                grafV2Dostepny={start.grafV2Dostepny}
                 emaile={emaile}
                 bledy={bledyWezla(wezelZaznaczony.id)}
                 ostrzezenia={ostrzezenia.filter((o) => o.wezelId === wezelZaznaczony.id).map((o) => o.tresc)}
@@ -798,6 +808,14 @@ export function Kanwa({
                     <input type="checkbox" className="mt-1 accent-[var(--color-akcent)]" checked={g.ustawienia.wyjsciePoZakupie} onChange={(e) => aktualizuj((d) => ({ ...d, ustawienia: { ...d.ustawienia, wyjsciePoZakupie: e.target.checked } }))} />
                     <span>Osoba, która kupi po wejściu, wychodzi z automatyzacji<span className="block text-[12px] text-[var(--color-tekst-3)]">Do win-backu i przypomnień. Wypis ze zgód zawsze kończy ścieżkę na kroku e-mail.</span></span>
                   </label>
+                </section>
+                <section className="border-b border-[var(--color-linia-0)] px-4 py-4">
+                  <h3 className="mb-3 text-[13px] font-semibold">Ponowne wejście</h3>
+                  <WyborPonownegoWejscia
+                    wartosc={g.ustawienia.ponowneWejscie}
+                    dostepne={start.ponowneWejscieDostepne}
+                    onZmiana={(ponowneWejscie) => aktualizuj((d) => ({ ...d, ustawienia: { ...d.ustawienia, ponowneWejscie } }))}
+                  />
                 </section>
                 {ostrzezenia.length ? (
                   <section className="border-b border-[var(--color-linia-0)] px-4 py-4">
