@@ -1,3 +1,4 @@
+import { SQL_ZAJMIJ_ZADANIE } from "../src/jobs/kolejka";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { getPool, closePool } from "../src/adapters/db/pool";
 
@@ -249,17 +250,9 @@ describe("Migracja 0002: fundament", () => {
 
       // Docelowy ksztalt zajmowania: jeden atomowy UPDATE, nie select a potem update.
       // Ksztalt jak w produkcji: worker zajmuje zadania GLOBALNIE, bez filtra po tenancie,
-      // wiec test uzywa dokladnie tego zapytania, ktore pojdzie do kodu, a nie latwiejszego.
-      const zajmij = `
-        update jobs set status = 'running', locked_at = now(), locked_by = $1, attempts = attempts + 1
-         where (id, created_at) in (
-           select id, created_at from jobs
-            where status = 'pending' and run_after <= now()
-            order by run_after
-            for update skip locked
-            limit 1
-         )
-        returning id, created_at, attempts, tenant_id`;
+      // wiec test uzywa DOKLADNIE zapytania z kodu (stala z kolejka.ts), a nie kopii: kopia
+      // zostala tu w starym ksztalcie `in (select ... limit 1)` po poprawce 763ec70.
+      const zajmij = SQL_ZAJMIJ_ZADANIE;
 
       const a = await pool.connect();
       const b = await pool.connect();
