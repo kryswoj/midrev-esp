@@ -17,6 +17,7 @@ import { HANDLERY_AUTOMATYZACJI } from "./handlery-automatyzacje";
 import { HANDLERY_CYKLICZNE, zarejestrujCykliczne } from "./handlery-cykliczne";
 import { HANDLERY_ODBICIA, ODSTEP_ODBIC_MS, zaplanujOdbicia } from "./handlery-odbicia";
 import { HANDLERY_IMPORTU } from "./handlery-import";
+import { HANDLERY_ZDARZEN, zaplanujZdarzenia } from "./handlery-zdarzenia";
 
 /**
  * Worker: jedna pętla, zajmowanie pojedynczo przez SKIP LOCKED, każdy handler idempotentny
@@ -46,6 +47,7 @@ const HANDLERY: Record<string, (z: Zadanie) => Promise<void>> = {
   ...HANDLERY_CYKLICZNE,
   ...HANDLERY_ODBICIA,
   ...HANDLERY_IMPORTU,
+  ...HANDLERY_ZDARZEN,
   async wyslij_kampanie(z) {
     const campaignId = String(z.payload.campaignId);
     // Kampania mogła zostać wstrzymana albo odwołana MIĘDZY wrzuceniem joba a jego
@@ -250,6 +252,13 @@ coIle("heartbeat zadania", 60_000, async () => {
   const moje = await odswiezHeartbeat(z, workerId);
   if (!moje) console.warn(`[${workerId}] heartbeat: zadanie ${z.kind} nie należy już do tego workera (odzyskane jako zombie?)`);
 });
+
+// Strumień zdarzeń metryk (E1/E2): partycje miesięczne na zapas (job dobowy, alert przy
+// błędzie), dosynchronizowanie zdarzeń zapisanych przez stary kod w oknie deployu,
+// ponawianie zaległych żądań API. Szczegóły w handlery-zdarzenia.ts.
+const zdarzenia = zaplanujZdarzenia({ workerId, wyslijAlert });
+await zdarzenia.start().catch((b: unknown) => console.error(`[${workerId}] zdarzenia (start):`, b));
+for (const { nazwa, ms, praca } of zdarzenia.cykliczne) coIle(nazwa, ms, praca);
 
 // Tik automatyzacji co minutę per tenant: journeys reagują na zdarzenia (zapis z popupu,
 // zamówienie) bez człowieka w pętli. Nakładanie się tików jest bezpieczne: unikalność

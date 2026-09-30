@@ -23,6 +23,12 @@ export interface PozycjaZamowienia {
   ilosc: number;
   /** Cena jednostkowa w groszach (AD-11). Nigdy liczba zmiennoprzecinkowa. */
   cenaMinor: number;
+  /** Id pozycji w zamówieniu ze źródła (unique_id metryki „Ordered Product”); brak = numer pozycji. */
+  lineId?: string | null;
+  /** Id produktu w sklepie (ProductID w metryce, filtr flow Sports-med). */
+  productId?: string | null;
+  /** Wartość pozycji po rabatach w groszach (`$value` metryki „Ordered Product”). */
+  sumaMinor?: number | null;
 }
 
 export interface ZamowienieSklepu {

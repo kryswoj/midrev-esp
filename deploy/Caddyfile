@@ -153,3 +153,52 @@ Disallow: /
 		format json
 	}
 }
+
+# ── api.midrev.pl: API zgodne z Klaviyo (plan metryki-i-profil 2.1, decyzja D2) ────────
+# NIEAKTYWNE. Włączenie wymaga ZGODY Krystiana i dwóch zmian na produkcji (CLAUDE.md,
+# procedura: co, dlaczego, promień rażenia, jak cofnąć):
+#   1. DNS: rekord A/AAAA api.midrev.pl -> IP VPS-a produkcji (Hostido),
+#   2. odkomentowanie bloku niżej, `caddy validate`, `systemctl reload caddy`.
+# Cofnięcie: ponowne zakomentowanie bloku + reload (DNS może zostać).
+#
+# Dlaczego osobny host (jak a.klaviyo.com): klient wkleja klucz API pod adres, na którym
+# panel i jego ciasteczka W OGÓLE nie istnieją; osobne limity ciała i logi. Tylko trasy
+# API (lista z src/trasy-publiczne.ts: TRASY_PUBLICZNE + TRASY_API_Z_UKOSNIKIEM), z
+# ukośnikiem na końcu i bez (n8n woła `/api/events/`; aplikacja przepisuje go bez 308).
+# Metody: tylko POST (i OPTIONS dla przyszłych /client/* z CORS). Reszta = 404 JSON:API.
+# Kolejne trasy E3/E7 (profile-import, profiles, client) dopisywać do @api_klaviyo.
+#
+# api.midrev.pl {
+# 	import wspolne
+#
+# 	# POST /api/events: do 5 MB w aplikacji (przeczytajOgraniczone), tu zapas na nagłówki
+# 	request_body {
+# 		max_size 6MB
+# 	}
+#
+# 	header ?X-Content-Type-Options "nosniff"
+#
+# 	@api_klaviyo {
+# 		path_regexp api ^/api/events/?$
+# 		method POST
+# 	}
+# 	handle @api_klaviyo {
+# 		import upstream
+# 	}
+#
+# 	handle {
+# 		header Content-Type "application/vnd.api+json"
+# 		respond `{"errors":[{"status":404,"code":"not_supported","title":"This endpoint is not supported.","detail":"Only the Klaviyo-compatible subset is available on this host.","source":{}}]}` 404
+# 	}
+#
+# 	log {
+# 		# nagłówek Authorization NIE trafia do logu: Caddy domyślnie go redaguje
+# 		# (log_credentials wyłączone), zostaje metoda, ścieżka, status, IP
+# 		output file /var/log/caddy/api.midrev.pl.access.log {
+# 			roll_size 100MiB
+# 			roll_keep 14
+# 			roll_keep_for 336h
+# 		}
+# 		format json
+# 	}
+# }

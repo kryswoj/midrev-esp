@@ -8,6 +8,7 @@ import { Icon, type NazwaIkony } from "../../ui/ikona";
 const IKONY: Record<string, NazwaIkony> = {
   przeglad: "przeglad",
   sklepy: "sklep",
+  kluczeApi: "ustawienia",
   profile: "profil",
   zamowienia: "zamowienie",
   zgodnosc: "zgodnosc",

@@ -53,6 +53,16 @@ export function hasheAdresow(emaile: Array<string | null | undefined>): string[]
   return emaile.filter((e): e is string => typeof e === "string" && e.length > 0).map(hashAdresu);
 }
 
+/**
+ * Hasz identyfikatora profilu z API (telefon E.164, external_id, anonymous_id) do nagrobkow
+ * RODO (0033). Ten sam klucz co hasze adresow; rodzaj w haszowanym tekscie, zeby ta sama
+ * wartosc w dwoch rolach nie dawala tego samego hasza. Bez zmiany wielkosci liter:
+ * identyfikatory z systemow klienta rozrozniaja wielkosc liter.
+ */
+export function hashIdentyfikatora(rodzaj: string, wartosc: string): string {
+  return createHmac("sha256", klucz()).update(`${rodzaj}:${wartosc}`, "utf8").digest("hex");
+}
+
 /** Zaslepka wpisywana w `suppressions.email` po anonimizacji: bez adresu, ale unikalna. */
 export function zaslepkaWykluczenia(hash: string): string {
   return `anonimizowano:${hash.slice(0, 16)}`;

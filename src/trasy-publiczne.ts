@@ -36,7 +36,19 @@ export const TRASY_PUBLICZNE = [
   "/api/webhooks",
   // monitoring z zewnątrz: bez danych, tylko stan (200/503)
   "/api/zdrowie",
+  // API zgodne z Klaviyo (klucz API tenanta w nagłówku Authorization, nie sesja);
+  // docelowo pod osobnym hostem api.midrev.pl (deploy/Caddyfile)
+  "/api/events",
 ] as const;
+
+/**
+ * Trasy API zgodne z Klaviyo, które klienci wołają Z UKOŚNIKIEM na końcu (`/api/events/`,
+ * tak jak w workflowach n8n). Next domyślnie odpowiada na to 308, a przekierowanie POST-a
+ * z ciałem to ryzyko utraty zdarzenia po stronie klienta. next.config ma
+ * `skipTrailingSlashRedirect`, a middleware przepisuje (rewrite, bez 308) te ścieżki na
+ * wersję bez ukośnika. Pozostałe ścieżki z ukośnikiem dostają dotychczasowe 308.
+ */
+export const TRASY_API_Z_UKOSNIKIEM = ["/api/events"] as const;
 
 export function czyTrasaPubliczna(sciezka: string): boolean {
   return TRASY_PUBLICZNE.some((p) => sciezka === p || sciezka.startsWith(p + "/"));

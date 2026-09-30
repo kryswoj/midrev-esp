@@ -17,6 +17,10 @@ import { SciezkaOsoby } from "../../automatyzacje/sciezka-osoby";
 import { Card, CardHeader, EmptyState, Icon, ResponsiveTable, type NazwaIkony, Table, TBody, Td, Th, THead } from "../../../../ui";
 import { Komunikat, Naglowek, PasekMetryk } from "../../naglowek";
 import { FormularzUsunieciaDanych } from "./formularz-rodo";
+import { RozwinZdarzenie } from "./rozwin-zdarzenie";
+import { MAKS_METRYK_FILTRA, osProfilu, type KursorOsi } from "../../../../../usecases/zdarzenia/odczyt";
+import { metrykiProfilu, wlasciwosciProfilu } from "../../../../../usecases/profil-wlasciwosci";
+import { wykladnikWaluty } from "../../../../../domain/zdarzenia/limity";
 
 export const dynamic = "force-dynamic";
 
@@ -81,6 +85,42 @@ function opiszZdarzenie(z: ZdarzenieOsi): { tekst: string; drugiWiersz?: string 
   }
 }
 
+/** Etykiety PL metryk wbudowanych (AD-37: nazwa w bazie jak w Klaviyo, po polsku tylko w UI). */
+const ETYKIETY_METRYK: Record<string, string> = {
+  "Submitted Form": "Zapis przez formularz",
+  "Placed Order": "Złożone zamówienie",
+  "Ordered Product": "Zamówiony produkt",
+  "customer.created": "Konto w sklepie założone",
+  "customer.updated": "Konto w sklepie zmienione",
+  "rodo.eksport": "Eksport danych osoby",
+  "rodo.anonimizacja": "Usunięcie danych osobowych",
+};
+const ZRODLA_ZDARZEN: Record<string, string> = {
+  api: "API", client: "przeglądarka", webhook: "sklep", system: "system", import: "import historii",
+};
+
+function jedenLubWiele(w: string | string[] | undefined): string[] {
+  if (w === undefined) return [];
+  return Array.isArray(w) ? w : [w];
+}
+
+/** Kwota z jednostek minor wg wykładnika waluty (JPY 0, KWD 3), bez liczb zmiennoprzecinkowych. */
+function kwotaWaluty(minor: string, waluta: string): string {
+  const exp = wykladnikWaluty(waluta);
+  if (exp === 2) return zGroszy(Number(minor), waluta);
+  const ujemna = minor.startsWith("-");
+  const cyfry = (ujemna ? minor.slice(1) : minor).padStart(exp + 1, "0");
+  const calosc = cyfry.slice(0, cyfry.length - exp).replace(/\B(?=(\d{3})+(?!\d))/g, "\u00a0");
+  return `${ujemna ? "-" : ""}${calosc}${exp ? "," + cyfry.slice(-exp) : ""}\u00a0${waluta}`;
+}
+
+function kursorZParametru(w: string | undefined): KursorOsi | null {
+  if (!w) return null;
+  const i = w.lastIndexOf("|");
+  if (i < 1) return null;
+  return { occurredAt: w.slice(0, i), id: w.slice(i + 1) };
+}
+
 function PlakietkaZgody({ kanal }: { kanal: StanKanalu }) {
   if (kanal.stan === null) return <span className="plakietka plakietka-szkic">brak wpisu</span>;
   if (kanal.stan === "granted") return <span className="plakietka plakietka-ok">zgoda</span>;
@@ -98,13 +138,28 @@ export async function generateMetadata({ params }: { params: Promise<{ tenantId:
 
 export default async function Profil({ params, searchParams }: {
   params: Promise<{ tenantId: string; profileId: string }>;
-  searchParams: Promise<{ ok?: string; blad?: string }>;
+  searchParams: Promise<{ ok?: string; blad?: string; m?: string | string[]; od?: string; do?: string; po?: string }>;
 }) {
   const { tenantId, profileId } = await params;
   await wymaganyTenant(tenantId);
-  const { ok, blad } = await searchParams;
+  const sp = await searchParams;
+  const { ok, blad } = sp;
   const widok = await widokProfilu(tenantId, profileId);
   if (!widok) notFound();
+  // Oś ze strumienia metryk (6.4, MVP): filtr do 5 metryk, zakres dat, kursor po 50.
+  const filtrMetryk = jedenLubWiele(sp.m).slice(0, MAKS_METRYK_FILTRA);
+  const [strumien, metrykiOsi, wlasne] = await Promise.all([
+    osProfilu(tenantId, profileId, { metryki: filtrMetryk, odDnia: sp.od, doDnia: sp.do, kursor: kursorZParametru(sp.po) }),
+    metrykiProfilu(tenantId, profileId),
+    wlasciwosciProfilu(tenantId, profileId),
+  ]);
+  const parametryFiltra = new URLSearchParams();
+  for (const m of filtrMetryk) parametryFiltra.append("m", m);
+  if (sp.od) parametryFiltra.set("od", sp.od);
+  if (sp.do) parametryFiltra.set("do", sp.do);
+  const nastepnaStrona = strumien.nastepna
+    ? `?${new URLSearchParams([...parametryFiltra, ["po", `${strumien.nastepna.occurredAt}|${strumien.nastepna.id}`]]).toString()}#zdarzenia`
+    : null;
   const { profil, kanaly, zgody, wykluczenia, bramka, os, wysylki, listy, segmenty } = widok;
 
   const nazwa = [profil.first_name, profil.last_name].filter(Boolean).join(" ");
@@ -204,6 +259,52 @@ export default async function Profil({ params, searchParams }: {
               )}
             </Card>
 
+            <Card id="zdarzenia">
+              <CardHeader title="Zdarzenia" description="Strumień metryk tej osoby: formularze, zamówienia ze sklepu i zdarzenia z API (n8n). Rozwiń wpis, żeby zobaczyć jego właściwości." />
+              <form method="get" action={`/t/${tenantId}/profile/${profileId}#zdarzenia`} className="flex flex-wrap items-end gap-3 border-b border-[var(--color-linia-0)] px-6 py-4 max-md:px-4">
+                {metrykiOsi.length > 0 ? (
+                  <fieldset className="min-w-0 flex-1">
+                    <legend className="etykieta mb-1">Metryki (najwyżej {MAKS_METRYK_FILTRA})</legend>
+                    <div className="flex flex-wrap gap-x-4 gap-y-1">
+                      {metrykiOsi.map((m) => (
+                        <label key={m.id} className="tekst-pomocniczy inline-flex items-center gap-1.5">
+                          <input type="checkbox" name="m" value={m.id} defaultChecked={filtrMetryk.includes(m.id)} />
+                          {ETYKIETY_METRYK[m.nazwa] ?? m.nazwa}
+                        </label>
+                      ))}
+                    </div>
+                  </fieldset>
+                ) : null}
+                <label className="tekst-pomocniczy">Od<input type="date" name="od" defaultValue={sp.od ?? ""} className="pole mt-1 block" /></label>
+                <label className="tekst-pomocniczy">Do<input type="date" name="do" defaultValue={sp.do ?? ""} className="pole mt-1 block" /></label>
+                <button type="submit" className="przycisk przycisk-wtorny przycisk-maly">Filtruj</button>
+              </form>
+              {strumien.wpisy.length === 0 ? (
+                <p className="tekst-pomocniczy p-6 max-md:p-4">{filtrMetryk.length || sp.od || sp.do || sp.po ? "Brak zdarzeń dla tego filtra." : "Ta osoba nie ma jeszcze zdarzeń w strumieniu metryk."}</p>
+              ) : (
+                <ul className="divide-y divide-[var(--color-linia-0)]">
+                  {strumien.wpisy.map((z) => (
+                    <li key={z.id} className="px-6 py-3 max-md:px-4">
+                      <div className="flex items-start justify-between gap-3">
+                        <span className="min-w-0 text-[14px] leading-5 font-semibold">{ETYKIETY_METRYK[z.nazwa] ?? z.nazwa}</span>
+                        {z.valueMinor !== null ? <span className="liczba shrink-0 font-semibold">{kwotaWaluty(z.valueMinor, z.valueCurrency ?? "PLN")}</span> : null}
+                      </div>
+                      <div className="tekst-pomocniczy mt-0.5 !text-[var(--color-tekst-3)]">
+                        <span className="liczba">{formatujDateICzas(z.occurredAt)}</span> · {ZRODLA_ZDARZEN[z.source] ?? z.source}
+                      </div>
+                      <RozwinZdarzenie tenantId={tenantId} profileId={profileId} id={z.id} occurredAt={z.occurredAt.toISOString()} ile={z.wlasciwosci} />
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {nastepnaStrona || sp.po ? (
+                <div className="flex gap-3 border-t border-[var(--color-linia-0)] px-6 py-3 max-md:px-4">
+                  {sp.po ? <Link className="przycisk przycisk-wtorny przycisk-maly" href={`?${parametryFiltra.toString()}#zdarzenia`}>Od najnowszych</Link> : null}
+                  {nastepnaStrona ? <Link className="przycisk przycisk-wtorny przycisk-maly" href={nastepnaStrona}>Starsze</Link> : null}
+                </div>
+              ) : null}
+            </Card>
+
             <SciezkaOsoby tenantId={tenantId} profileId={profileId} />
 
             <Card>
@@ -248,6 +349,45 @@ export default async function Profil({ params, searchParams }: {
                 <summary className="karta-naglowek cursor-pointer list-none md:hidden"><div><h2>Dane profilu</h2><div className="karta-opis">Kontakt, listy i segmenty tej osoby.</div></div><span className="ml-auto inline-flex items-center gap-1.5 text-[13px] font-semibold text-[var(--color-akcent)]">Pokaż<Icon name="chevronDown" size={17} className="profil-szczegoly-chevron text-[var(--color-akcent)]" /></span></summary>
                 {szczegolyProfilu}
               </details>
+            </Card>
+
+            <Card>
+              <CardHeader title="Właściwości" description="Właściwości niestandardowe profilu (import, API, n8n). Tylko do odczytu." action={<span className="karta-naglowek-licznik">{odmien(wlasne?.wlasciwosci.length ?? 0, "właściwość", "właściwości", "właściwości")}</span>} />
+              {wlasne && (wlasne.identyfikatory.externalId || wlasne.identyfikatory.organizacja || wlasne.identyfikatory.jezyk || Object.keys(wlasne.identyfikatory.lokalizacja).length) ? (
+                <dl className="space-y-2 border-b border-[var(--color-linia-0)] px-6 py-4 max-md:px-4 text-[13px]">
+                  {wlasne.identyfikatory.externalId ? <div><dt className="etykieta">Identyfikator zewnętrzny</dt><dd className="break-all">{wlasne.identyfikatory.externalId}</dd></div> : null}
+                  {wlasne.identyfikatory.organizacja ? <div><dt className="etykieta">Organizacja</dt><dd>{wlasne.identyfikatory.organizacja}{wlasne.identyfikatory.stanowisko ? `, ${wlasne.identyfikatory.stanowisko}` : ""}</dd></div> : null}
+                  {wlasne.identyfikatory.jezyk ? <div><dt className="etykieta">Język</dt><dd>{wlasne.identyfikatory.jezyk}</dd></div> : null}
+                  {Object.keys(wlasne.identyfikatory.lokalizacja).length ? <div><dt className="etykieta">Lokalizacja</dt><dd className="break-words">{Object.entries(wlasne.identyfikatory.lokalizacja).filter(([, w]) => w !== null && w !== "").map(([k, w]) => `${k}: ${String(w)}`).join(", ")}</dd></div> : null}
+                </dl>
+              ) : null}
+              {!wlasne || wlasne.wlasciwosci.length === 0 ? (
+                <p className="tekst-pomocniczy p-6 max-md:p-4">Profil nie ma właściwości niestandardowych.</p>
+              ) : (
+                <>
+                  <dl className="divide-y divide-[var(--color-linia-0)]">
+                    {wlasne.wlasciwosci.slice(0, 20).map((w) => (
+                      <div key={w.klucz} className="px-6 py-2.5 max-md:px-4">
+                        <dt className="tekst-meta break-all">{w.klucz}</dt>
+                        <dd className="mt-0.5 break-all text-[13px]">{w.wartosc === "" ? <span className="text-[var(--color-tekst-3)]">(pusty)</span> : w.wartosc.length > 300 ? `${w.wartosc.slice(0, 300)}…` : w.wartosc}</dd>
+                      </div>
+                    ))}
+                  </dl>
+                  {wlasne.wlasciwosci.length > 20 ? (
+                    <details className="border-t border-[var(--color-linia)]">
+                      <summary className="cursor-pointer px-5 py-3.5 text-[13px] font-medium text-[var(--color-tekst-2)]">Pozostałe ({wlasne.wlasciwosci.length - 20})</summary>
+                      <dl className="divide-y divide-[var(--color-linia-0)]">
+                        {wlasne.wlasciwosci.slice(20).map((w) => (
+                          <div key={w.klucz} className="px-6 py-2.5 max-md:px-4">
+                            <dt className="tekst-meta break-all">{w.klucz}</dt>
+                            <dd className="mt-0.5 break-all text-[13px]">{w.wartosc === "" ? <span className="text-[var(--color-tekst-3)]">(pusty)</span> : w.wartosc.length > 300 ? `${w.wartosc.slice(0, 300)}…` : w.wartosc}</dd>
+                          </div>
+                        ))}
+                      </dl>
+                    </details>
+                  ) : null}
+                </>
+              )}
             </Card>
 
             <Card>
