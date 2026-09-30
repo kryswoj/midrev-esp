@@ -179,10 +179,11 @@ export const zrodloZdarzenMetricEvents: ZrodloZdarzenDoWyzwalaczy = {
   },
   async pobierzWlasciwosci(klient: Wykonawca, tenantId: string, eventId: string, occurredAt: string | null) {
     if (!UUID.test(eventId)) return null;
-    // occurred_at = klucz partycji: z nim odczyt dotyka jednej partycji
+    // occurred_at = klucz partycji: z nim odczyt dotyka jednej partycji. W strumieniu czas jest
+    // uciety do sekundy, a uczestnik wprowadzony ze starej tabeli `events` moze miec ulamki.
     const { rows } = await klient.query(
       `select properties from metric_events
-        where tenant_id = $1 and id = $2 and ($3::timestamptz is null or occurred_at = $3::timestamptz)`,
+        where tenant_id = $1 and id = $2 and ($3::timestamptz is null or occurred_at = date_trunc('second', $3::timestamptz))`,
       [tenantId, eventId, occurredAt],
     );
     const p = rows[0]?.properties;
@@ -267,6 +268,10 @@ export async function wlasciwosciWyzwalacza(klient: Wykonawca, tenantId: string,
   if (zrodloNadpisane && zrodloNadpisane !== zrodloZdarzenEvents && zrodloNadpisane !== zrodloZdarzenMetricEvents) {
     return zrodloNadpisane.pobierzWlasciwosci(klient, tenantId, eventId, occurredAt);
   }
+  // Uczestnik sprzed 0035 nie ma occurred_at zdarzenia: bez klucza partycji odczyt strumienia
+  // dotykalby wszystkich partycji, a takie zdarzenie i tak lezy w `events` (stary ksztalt,
+  // ktorym ta wersja maila byla projektowana).
+  if (!occurredAt) return zrodloZdarzenEvents.pobierzWlasciwosci(klient, tenantId, eventId, null);
   return (
     (await zrodloZdarzenMetricEvents.pobierzWlasciwosci(klient, tenantId, eventId, occurredAt)) ??
     (await zrodloZdarzenEvents.pobierzWlasciwosci(klient, tenantId, eventId, occurredAt))

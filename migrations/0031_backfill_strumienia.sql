@@ -198,6 +198,10 @@ end $$;
 -- Stary panel (popupy) moze jeszcze pisac do `events` w trakcie tej migracji (deploy.sh
 -- restartuje panel po migracjach). Blokada SHARE wstrzymuje takie inserty na czas kopii
 -- i asercji (sekundy), zamiast wywracac deploy rozjazdem licznosci (review integracji R1).
+-- Limit czekania: porzucona sesja z otwarta transakcja na `events` nie moze zawiesic deployu
+-- bez konca (migrator ma lock_timeout tylko na polaczeniu blokady). Po 2 min migracja pada
+-- i jest wycofana w calosci; deploy.sh konczy sie bledem przed przelaczeniem wydania.
+set local lock_timeout = '2min';
 lock table events in share mode;
 
 do $$

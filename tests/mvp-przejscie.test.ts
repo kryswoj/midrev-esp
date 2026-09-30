@@ -327,6 +327,16 @@ describe("Integracja MVP: flaga wyłączona i przejście events → metric_event
     await tik();
     const { rows } = await getPool().query("select subject from messages where tenant_id = $1 and profile_id = $2 and source_id = $3", [tenantId, profil.gosia, w.id]);
     expect(rows.map((r) => r.subject)).toEqual(["Formularz Popup"]);
+    // wiersz STAREGO kodu (occurred_at z ułamkami sekundy), dosynchronizowany do strumienia
+    // (czas ucięty do sekundy), wprowadzony ze starej tabeli: zmienne i tak z metric_events
+    await getPool().query(
+      `insert into events (tenant_id, profile_id, event_type, payload, occurred_at) values ($1, $2, 'popup.submitted', '{"popup_id":"p","popup_name":"Popup"}', now() - interval '0.3 seconds')`,
+      [tenantId, profil.edek],
+    );
+    await dosynchronizujOknoDeployu();
+    await tik();
+    const { rows: stary } = await getPool().query("select subject from messages where tenant_id = $1 and profile_id = $2 and source_id = $3", [tenantId, profil.edek, w.id]);
+    expect(stary.map((r) => r.subject)).toEqual(["Formularz Popup"]);
   });
 
   it("reguła czasu: zdarzenie z sekundy włączenia liczy się, gdy DOTARŁO po włączeniu", () => {
