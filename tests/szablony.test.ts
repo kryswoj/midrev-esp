@@ -129,6 +129,16 @@ describe("Adresy w treści: javascript: nie przejdzie także bez zmiennych (prze
       .toBe(`<td >a</td><video ></video><form ><button >`);
   });
 
+  it("tryb łagodny (każda treść): jawne złe schematy odpadają, względne i kotwice zostają jak dotąd", () => {
+    expect(adresBezpieczny("/lokalny", false)).toBe(true);
+    expect(adresBezpieczny("//cdn.pl/x", false)).toBe(true);
+    expect(adresBezpieczny("javascript:x", false)).toBe(false);
+    expect(adresBezpieczny("java&#115;cript:x", false)).toBe(false);
+    expect(adresBezpieczny("java&shy;script:x", false)).toBe(false);
+    expect(zrodloBezpieczne("/logo.png", false)).toBe(true);
+    expect(sanityzujAdresy(`<a href="/lokalny">1</a><a href="javascript:x">2</a>`, { scisle: false })).toBe(`<a href="/lokalny">1</a><a >2</a>`);
+  });
+
   it("kampania i automatyzacja: link javascript: znika niezależnie od śledzenia kliknięć", () => {
     const tresc = `<p><a href="javascript:alert(1)">zły</a> <a href="https://sklep.pl">dobry</a></p>`;
     expect(przepiszLinki(tresc, "tok").html).not.toMatch(/javascript/i);

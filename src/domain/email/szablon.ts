@@ -355,29 +355,44 @@ function schemat(v: string): string | null {
 }
 
 /**
- * Czy wartosc atrybutu NAWIGACYJNEGO (href, action, formaction, xlink:href) jest dozwolona
- * (AD-43): wylacznie jawny schemat http, https, mailto, tel albo kotwica `#...`. Adres
- * wzgledny i `//host` odpadaja: w mailu nie maja bazy, a omijaja sledzenie klikniec.
+ * Adres bez schematu: wzgledny, kotwica, `//host`. Dwukropek po `/ ? #` nie jest schematem.
+ * Nierozpoznana encja albo znak spoza skladni schematu przed dwukropkiem = NIE jest "bez
+ * schematu" (przegladarka mogla by go zdekodowac inaczej niz my).
  */
-export function adresBezpieczny(surowy: string): boolean {
+function bezSchematu(v: string): boolean {
+  const d = v.indexOf(":");
+  return d === -1 || /[/?#]/.test(v.slice(0, d));
+}
+
+/**
+ * Czy wartosc atrybutu NAWIGACYJNEGO (href, action, formaction, xlink:href) jest dozwolona.
+ *  - `scisle` (tresc po podstawieniu zmiennych, AD-43): wylacznie http, https, mailto, tel
+ *    albo kotwica `#...`; wzgledny i `//host` odpadaja (w mailu nie maja bazy, omijaja
+ *    sledzenie klikniec, a zmienna mogla je zbudowac);
+ *  - lagodnie (kazda tresc, takze kampanie bez zmiennych): odpada kazdy JAWNY schemat spoza
+ *    listy (javascript:, vbscript:, data: ...), adres wzgledny zostaje jak dotad.
+ */
+export function adresBezpieczny(surowy: string, scisle = true): boolean {
   const v = normalnyAdres(surowy);
   if (v.startsWith("#")) return true;
   const s = schemat(v);
-  return s !== null && SCHEMATY_LINKOW.has(s);
+  if (s !== null) return SCHEMATY_LINKOW.has(s);
+  return !scisle && bezSchematu(v);
 }
 
-/** Zrodlo obrazka/tla: http(s), zalacznik `cid:` albo rastrowy `data:image/...` (bez SVG). */
-export function zrodloBezpieczne(surowy: string): boolean {
+/** Zrodlo obrazka/tla: http(s), zalacznik `cid:`, rastrowy `data:image/...` (bez SVG); lagodnie tez wzgledne. */
+export function zrodloBezpieczne(surowy: string, scisle = true): boolean {
   const v = normalnyAdres(surowy);
   const s = schemat(v);
   if (s === "http" || s === "https" || s === "cid") return true;
-  return /^data:image\/(png|jpe?g|gif|webp);/.test(v);
+  if (/^data:image\/(png|jpe?g|gif|webp);/.test(v)) return true;
+  return s === null && !scisle && bezSchematu(v);
 }
 
 /** srcset: kazdy kandydat (URL [deskryptor]) musi byc bezpiecznym zrodlem. */
-function srcsetBezpieczny(surowy: string): boolean {
+function srcsetBezpieczny(surowy: string, scisle: boolean): boolean {
   const kandydaci = dekodujAtrybut(surowy).split(",").map((k) => k.trim()).filter(Boolean);
-  return kandydaci.length > 0 && kandydaci.every((k) => zrodloBezpieczne(k.split(/\s+/)[0]));
+  return kandydaci.length > 0 && kandydaci.every((k) => zrodloBezpieczne(k.split(/\s+/)[0], scisle));
 }
 
 const ATRYBUTY_NAWIGACJI = new Set(["href", "xlink:href", "action", "formaction"]);
@@ -389,13 +404,14 @@ const ATRYBUTY_NAWIGACJI = new Set(["href", "xlink:href", "action", "formaction"
  * Zmienne szablonu nie moga dopisac nowego atrybutu (`"` i `=` sa escapowane), wiec to
  * zamyka jedyna droge z danych zdarzenia do adresu: wartosc istniejacego atrybutu.
  */
-export function sanityzujAdresy(html: string): string {
+export function sanityzujAdresy(html: string, opcje: { scisle?: boolean } = {}): string {
+  const scisle = opcje.scisle !== false;
   return html.replace(
     /([\s/])(href|xlink:href|action|formaction|src|srcset|background|poster)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/gi,
     (calosc, odstep: string, nazwa: string, a?: string, b?: string, c?: string) => {
       const wartosc = a ?? b ?? c ?? "";
       const n = nazwa.toLowerCase();
-      const ok = ATRYBUTY_NAWIGACJI.has(n) ? adresBezpieczny(wartosc) : n === "srcset" ? srcsetBezpieczny(wartosc) : zrodloBezpieczne(wartosc);
+      const ok = ATRYBUTY_NAWIGACJI.has(n) ? adresBezpieczny(wartosc, scisle) : n === "srcset" ? srcsetBezpieczny(wartosc, scisle) : zrodloBezpieczne(wartosc, scisle);
       return ok ? calosc : odstep.trimEnd() + " ";
     },
   );
