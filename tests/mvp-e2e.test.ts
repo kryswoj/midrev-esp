@@ -24,7 +24,7 @@ import { wstawWezel, type Graf, type Wezel } from "../src/domain/automatyzacje/g
 import type { DostawcaWysylki } from "../src/domain/email/port";
 import { HANDLERY_AUTOMATYZACJI } from "../src/jobs/handlery-automatyzacje";
 import { HANDLERY_ZDARZEN } from "../src/jobs/handlery-zdarzenia";
-import { domknijZadanie, type Zadanie } from "../src/jobs/kolejka";
+import { domknijZadanie, zajmijZadanie, zwolnijZadanie, type Zadanie } from "../src/jobs/kolejka";
 import { utworzKlucz } from "../src/usecases/api/klucze";
 import { wyczyscLimity } from "../src/usecases/api/limity";
 import { RODZAJ_JOBA } from "../src/usecases/api/przyjmij-zdarzenie";
@@ -92,19 +92,28 @@ describe("MVP end-to-end: n8n → /api/events → flow z filtrem → mail ze zmi
   const profil: Record<string, string> = {};
   const d = new DostawcaAtrapa();
 
-  /** Worker: wykonuje zadania TEGO tenanta tymi samymi handlerami co src/jobs/worker.ts. */
+  /**
+   * Worker: produkcyjne zajmowanie (`zajmijZadanie`, globalna kolejka, SKIP LOCKED), handler
+   * z mapy workera i domknięcie z tokenem. Zadania innych tenantów (resztki innych plików
+   * testów) są oddawane nietknięte przez `zwolnijZadanie`.
+   */
   async function worker(t: string) {
-    const { rows } = await getPool().query(
-      `update jobs set status = 'running', attempts = attempts + 1, locked_at = now(), locked_by = 'e2e'
-        where tenant_id = $1 and status = 'pending' and kind = any($2::text[])
-        returning id, created_at::text as token, tenant_id, kind, payload, attempts, max_attempts`,
-      [t, [RODZAJ_JOBA]],
-    );
-    for (const z of rows as Zadanie[]) {
+    const WORKER = `e2e-${znak}`;
+    const moje: Zadanie[] = [];
+    const cudze: Zadanie[] = [];
+    for (let z = await zajmijZadanie(WORKER); z; z = await zajmijZadanie(WORKER)) {
+      if (z.tenant_id !== t || !HANDLERY_ZDARZEN[z.kind]) {
+        cudze.push(z);
+        continue;
+      }
       await HANDLERY_ZDARZEN[z.kind](z);
-      await domknijZadanie(z, "e2e");
+      await domknijZadanie(z, WORKER);
+      moje.push(z);
     }
-    return rows as Zadanie[];
+    for (const z of cudze) await zwolnijZadanie(z, WORKER);
+    const { rows } = await getPool().query("select count(*)::int as n from jobs where tenant_id = $1 and kind = $2 and status <> 'done'", [t, RODZAJ_JOBA]);
+    expect(rows[0].n).toBe(0);
+    return moje;
   }
   /** Tik automatyzacji: ta sama funkcja co handler `automatyzacje_tik`, z atrapą dostawcy. */
   async function tik() {

@@ -28,7 +28,7 @@ import {
 } from "../../domain/automatyzacje/wyzwalanie";
 import { BladSzablonu, oczyscTemat, renderujHtml, renderujTemat, zbudujKontekst } from "../../domain/email/szablon";
 import { ponowneWejscieDostepne } from "./ponowne-wejscie";
-import { zrodloZdarzen } from "./zrodlo-zdarzen";
+import { wlasciwosciWyzwalacza, zrodloZdarzen } from "./zrodlo-zdarzen";
 import { canSendTo } from "../wysylka/can-send-to";
 import { zlozWiadomosc, type DaneStopki } from "../wysylka/renderuj";
 import { wyslijPartie } from "../wysylka/wyslij-kampanie";
@@ -126,6 +126,9 @@ async function przejscie(
 export const LIMIT_SKANU = 5000;
 /** Bezpiecznik stronicowania zakladki (MAX_STRON_ZAKLADKI x limit zdarzen w 15 min jednej metryki). */
 const MAX_STRON_ZAKLADKI = 20;
+
+/** Dlawik alertu „metryka nieznana biezacemu zrodlu” (flow -> ostatni alert, ms). */
+const alertNieznanejMetryki = new Map<string, number>();
 
 /** Kandydat do wejscia, niezaleznie od rodzaju wyzwalacza. */
 interface KandydatWejscia {
@@ -282,6 +285,18 @@ async function kandydaciMetryczni(
     alerty.push(`automatyzacja ${flowId}: skan wyzwalacza zaległy o ponad dobę (worker nie działał?). Zdarzenia zarejestrowane wcześniej niż 24 h temu nie uruchomią automatyzacji.`);
   }
   const port = zrodloZdarzen();
+  if (port.obsluguje && !port.obsluguje(zrodlo.metryka)) {
+    // Flow na metryce, ktorej biezace zrodlo nie zna (np. metryka z API przy wylaczonej
+    // MIDREV_GRAF_V2): bez skanu i BEZ przesuwania kursora, zeby po wlaczeniu flagi
+    // zdarzenia z tego okresu weszly (w granicy doby zaleglosci), a nie przepadly.
+    // alert najwyzej raz na godzine na flow (tik jest co minute)
+    const ostatni = alertNieznanejMetryki.get(flowId) ?? 0;
+    if (Date.now() - ostatni > 3600_000) {
+      alertNieznanejMetryki.set(flowId, Date.now());
+      alerty.push(`automatyzacja ${flowId}: metryka wyzwalacza „${zrodlo.metryka.nazwa}” wymaga MIDREV_GRAF_V2 (źródło ${port.nazwa} jej nie zna); wejścia wstrzymane do włączenia flagi`);
+    }
+    return { kandydaci: [], alerty, zapiszZnacznik: async () => {} };
+  }
   const nowe = await port.kandydaci(klient, {
     tenantId, metryka: zrodlo.metryka, limit: limitSkanu, zaszlePo: s.zaszle_nowe,
     zakres: { rodzaj: "nowe", kursor, nieWczesniejNiz: s.nie_wczesniej },
@@ -506,7 +521,7 @@ async function zbudujWiadomoscWezla(
       // (id, occurred_at) = pelna tozsamosc wiersza metric_events (klucz partycji)
       const klucz = `${u.trigger_event_id}|${u.trigger_event_occurred_at ?? ""}`;
       if (!oto.zdarzenia.has(klucz)) {
-        oto.zdarzenia.set(klucz, await zrodloZdarzen().pobierzWlasciwosci(klient, tenantId, u.trigger_event_id, u.trigger_event_occurred_at));
+        oto.zdarzenia.set(klucz, await wlasciwosciWyzwalacza(klient, tenantId, u.trigger_event_id, u.trigger_event_occurred_at));
       }
       wlasciwosci = oto.zdarzenia.get(klucz) ?? null;
     }

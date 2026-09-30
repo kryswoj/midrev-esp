@@ -76,6 +76,9 @@ export function zakresSkanu(alias: string, z: ZapytanieKandydatow, parametry: un
 
 export const zrodloZdarzenEvents: ZrodloZdarzenDoWyzwalaczy = {
   nazwa: "events",
+  obsluguje(m: MetrykaRef) {
+    return zdarzenieV1(m) !== null;
+  },
   async kandydaci(klient: Wykonawca, z: ZapytanieKandydatow) {
     const typ = zdarzenieV1(z.metryka);
     if (!typ) return [];
@@ -251,6 +254,23 @@ export function zrodloZdarzen(): ZrodloZdarzenDoWyzwalaczy {
 
 export function katalogMetryk(): KatalogMetryk {
   return katalogNadpisany ?? (config().MIDREV_GRAF_V2 ? katalogMetrykTabela : katalogMetrykWbudowanych);
+}
+
+/**
+ * Wlasciwosci zdarzenia, ktore wprowadzilo uczestnika ({{ event.X }}), NIEZALEZNIE od
+ * biezacej flagi: najpierw strumien metric_events (ksztalt Klaviyo, jedyny dla metryk z API),
+ * potem stara tabela `events` (uczestnicy sprzed backfillu). Lustro ma to samo id, wiec to
+ * samo zdarzenie daje te same zmienne przed i po przelaczeniu flagi.
+ */
+export async function wlasciwosciWyzwalacza(klient: Wykonawca, tenantId: string, eventId: string, occurredAt: string | null): Promise<Record<string, unknown> | null> {
+  // atrapa zrodla w testach ma wlasne dane; prawdziwe adaptery ida sciezka kanoniczna
+  if (zrodloNadpisane && zrodloNadpisane !== zrodloZdarzenEvents && zrodloNadpisane !== zrodloZdarzenMetricEvents) {
+    return zrodloNadpisane.pobierzWlasciwosci(klient, tenantId, eventId, occurredAt);
+  }
+  return (
+    (await zrodloZdarzenMetricEvents.pobierzWlasciwosci(klient, tenantId, eventId, occurredAt)) ??
+    (await zrodloZdarzenEvents.pobierzWlasciwosci(klient, tenantId, eventId, occurredAt))
+  );
 }
 
 /** Wylacznie dla testow (atrapa zrodla na kontrakcie A). `null` przywraca domyslne. */

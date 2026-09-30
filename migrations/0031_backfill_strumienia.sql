@@ -35,8 +35,14 @@ language plpgsql
 as $$
 declare
   zakres record;
+  -- tenanci zamrozeni RAZ (review Codeksa, integracja R1): kolejne polecenia w READ COMMITTED
+  -- widza swieze commity, wiec bez tego wiersz tenanta bez blokady limitu moglby utworzyc
+  -- metryke obok rownoleglego metrykaPoKluczu. Wiersze innych tenantow wezmie kolejny przebieg.
+  v_tenanty uuid[];
   wstawione integer;
 begin
+  select coalesce(array_agg(distinct e.tenant_id order by e.tenant_id), '{}') into v_tenanty
+    from events e where e.recorded_at >= p_od;
   -- limit 200 metryk na tenanta (AD-37) obowiazuje tez tutaj (review Codeksa R1). Ta sama
   -- blokada doradcza per tenant co metrykaPoKluczu (R2b), w stalej kolejnosci tenantow,
   -- i liczenie po ZMAPOWANYM kluczu metryki, nie po surowym event_type.
@@ -45,7 +51,7 @@ begin
   -- a kopiowanie zdarzen sprawdza FK do profili - blokada do konca transakcji dawalaby
   -- cykl (review Codeksa R3).
   perform pg_advisory_lock(hashtextextended('metrics:limit:' || t.tenant_id::text, 0))
-     from (select distinct e.tenant_id from events e where e.recorded_at >= p_od order by 1) t;
+     from unnest(v_tenanty) t(tenant_id);
   begin
   if exists (
     select 1 from (
@@ -55,7 +61,7 @@ begin
                      case e.event_type when 'popup.submitted' then 'Submitted Form'
                                        when 'order.created' then 'Placed Order'
                                        else left(e.event_type, 127) end as nazwa
-                from events e where e.recorded_at >= p_od) k
+                from events e where e.recorded_at >= p_od and e.tenant_id = any(v_tenanty)) k
        where not exists (select 1 from metrics m
                           where m.tenant_id = k.tenant_id and m.integration_key = k.integracja and m.name = k.nazwa)
        group by k.tenant_id
@@ -81,21 +87,21 @@ begin
          min(date_trunc('second', e.occurred_at)), max(date_trunc('second', e.occurred_at)),
          min(e.recorded_at)
     from events e
-   where e.recorded_at >= p_od
+   where e.recorded_at >= p_od and e.tenant_id = any(v_tenanty)
    group by e.tenant_id, e.event_type
   on conflict (tenant_id, integration_key, name) do nothing;
 
   exception when others then
     -- blokada sesyjna nie znika z rollbackiem: zwolnic przed przekazaniem bledu dalej
     perform pg_advisory_unlock(hashtextextended('metrics:limit:' || t.tenant_id::text, 0))
-     from (select distinct e.tenant_id from events e where e.recorded_at >= p_od order by 1) t;
+     from unnest(v_tenanty) t(tenant_id);
     raise;
   end;
   perform pg_advisory_unlock(hashtextextended('metrics:limit:' || t.tenant_id::text, 0))
-     from (select distinct e.tenant_id from events e where e.recorded_at >= p_od order by 1) t;
+     from unnest(v_tenanty) t(tenant_id);
 
   select min(e.occurred_at) as od, max(e.occurred_at) as do_ into zakres
-    from events e where e.recorded_at >= p_od;
+    from events e where e.recorded_at >= p_od and e.tenant_id = any(v_tenanty);
   if zakres.od is not null then
     perform metric_events_zapewnij_partycje(zakres.od, zakres.do_);
   end if;
@@ -111,7 +117,7 @@ begin
             and o.tenant_id = e.tenant_id
             -- porownanie tekstowe, nie rzutowanie: smiec w payloadzie nie wywraca migracji
             and o.id::text = (e.payload ->> 'orderId')
-     where e.recorded_at >= p_od
+     where e.recorded_at >= p_od and e.tenant_id = any(v_tenanty)
   ), mapa as (
     select z.*,
            case z.event_type when 'popup.submitted' then 'Submitted Form'
@@ -182,12 +188,17 @@ begin
     from events e
     -- po kluczu glownym strumienia (tenant, occurred_at, id): bez skanu wszystkich partycji
     join metric_events me on me.tenant_id = e.tenant_id and me.occurred_at = date_trunc('second', e.occurred_at) and me.id = e.id
-   where e.recorded_at >= p_od
+   where e.recorded_at >= p_od and e.tenant_id = any(v_tenanty)
      and me.source in ('api', 'client', 'webhook', 'import')
   on conflict do nothing;
 
   return wstawione;
 end $$;
+
+-- Stary panel (popupy) moze jeszcze pisac do `events` w trakcie tej migracji (deploy.sh
+-- restartuje panel po migracjach). Blokada SHARE wstrzymuje takie inserty na czas kopii
+-- i asercji (sekundy), zamiast wywracac deploy rozjazdem licznosci (review integracji R1).
+lock table events in share mode;
 
 do $$
 declare

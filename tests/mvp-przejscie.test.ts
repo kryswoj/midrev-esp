@@ -13,7 +13,7 @@ import { closePool, getPool } from "../src/adapters/db/pool";
 import { config } from "../src/config";
 import { nowyBlok, pustyDokument } from "../src/domain/email/bloki";
 import { regulaCzasu } from "../src/domain/automatyzacje/wyzwalanie";
-import { wstawWezel, type Graf } from "../src/domain/automatyzacje/graf";
+import { grafDoZapisu, wstawWezel, type Graf } from "../src/domain/automatyzacje/graf";
 import type { DostawcaWysylki } from "../src/domain/email/port";
 import { METRYKI_WBUDOWANE } from "../src/domain/zdarzenia/kontrakt";
 import type { ZamowienieSklepu } from "../src/domain/store/contract";
@@ -279,6 +279,54 @@ describe("Integracja MVP: flaga wyłączona i przejście events → metric_event
       expect(po.exit_reason, zrodlo).toBe("zakup");
       await getPool().query("update flows set status = 'wstrzymany' where id = $1", [flow]);
     }
+  });
+
+  it("metryka nieznana staremu źródłu (API przy fladze wyłączonej): kursor stoi, alert; po włączeniu zdarzenie z tego okresu wchodzi", async () => {
+    const flow = await flowV1(PREFIKS + "api przy fladze off", "popup.submitted", (g, e) => wstawWezel(g, { po: "wyzwalacz", port: "next" }, { id: "m", typ: "email", emailId: e, links: { next: null } }));
+    // definicja v2 na metryce z API (tak zostaje w bazie po wyłączeniu flagi)
+    const g = (await pobierzAutomatyzacje(tenantId, flow))!.graf;
+    const v2 = { ...g, wezly: g.wezly.map((w) => (w.typ === "wyzwalacz" ? { ...w, zrodlo: { rodzaj: "metryka" as const, metryka: { integracja: "api", nazwa: "Lead z formularza" } } } : w)) };
+    await getPool().query("update flows set live = $3 where tenant_id = $1 and id = $2", [tenantId, flow, JSON.stringify(grafDoZapisu(v2 as Graf))]);
+    await getPool().query("update flows set status = 'wstrzymany' where tenant_id = $1 and id <> $2 and status = 'wlaczony'", [tenantId, flow]);
+    const kursor = async () => (await getPool().query("select scanned_to::text as s from flow_trigger_state where flow_id = $1", [flow])).rows[0]?.s;
+    naEvents();
+    expect((await tik()).alerty.some((a) => a.includes("wymaga MIDREV_GRAF_V2"))).toBe(true);
+    const przed = await kursor();
+    // lead z API zapisany, gdy flaga jest wyłączona; kursor nie może przeskoczyć za niego
+    // (bez poprawki tik starego źródła ustawiał scanned_to = now() i po > 15 min zdarzenie przepadało)
+    const klient = await getPool().connect();
+    try {
+      await klient.query("begin");
+      await zapiszZdarzenie(klient, { tenantId, metryka: { integracja: "api", nazwa: "Lead z formularza" }, profileId: profil.anna, occurredAt: new Date(), uniqueId: "lead-off", properties: { cel: "x" }, source: "api" });
+      await klient.query("commit");
+    } finally {
+      klient.release();
+    }
+    expect((await tik()).alerty.some((a) => a.includes("wymaga MIDREV_GRAF_V2"))).toBe(false); // dławik: raz na godzinę
+    expect(await kursor()).toBe(przed);
+    naMetricEvents();
+    await tik();
+    expect(await wejscia(flow, "anna")).toHaveLength(1);
+    await getPool().query("update flows set status = 'wstrzymany' where id = $1", [flow]);
+    await getPool().query("update flows set status = 'wlaczony' where id = $1", [powitanie]);
+  });
+
+  it("{{ event.X }} ma ten sam kształt (Klaviyo, z metric_events) niezależnie od flagi: lustro ma to samo id", async () => {
+    naEvents();
+    await getPool().query("update flows set status = 'wstrzymany' where tenant_id = $1 and status = 'wlaczony'", [tenantId]);
+    const f = await utworzAutomatyzacje(tenantId, { name: PREFIKS + "zmienne", zdarzenie: "popup.submitted" });
+    if (!f.ok) throw new Error(f.blad);
+    const w = await utworzWiadomosc(tenantId, f.id, "Mail");
+    if (!w.ok) throw new Error(w.blad);
+    await zapiszWiadomosc(tenantId, f.id, w.id, { temat: "Formularz {{ event.form_name }}", dokumentJson: JSON.stringify({ ...pustyDokument(), bloki: [{ ...nowyBlok("tekst"), html: "<p>{{ event.form_id }}</p>" }] }) });
+    const widok = (await pobierzAutomatyzacje(tenantId, f.id))!;
+    await zapiszSzkic(tenantId, f.id, { graf: wstawWezel(widok.graf, { po: "wyzwalacz", port: "next" }, { id: "m", typ: "email", emailId: w.id, links: { next: null } }), oczekiwanaWersja: widok.draftVersion });
+    expect((await zmienStatus(tenantId, f.id, "wlaczony")).ok).toBe(true);
+    await getPool().query("update flows set active_since = now() - interval '1 minute' where id = $1", [f.id]);
+    await popupNowymKodem("gosia");
+    await tik();
+    const { rows } = await getPool().query("select subject from messages where tenant_id = $1 and profile_id = $2 and source_id = $3", [tenantId, profil.gosia, w.id]);
+    expect(rows.map((r) => r.subject)).toEqual(["Formularz Popup"]);
   });
 
   it("reguła czasu: zdarzenie z sekundy włączenia liczy się, gdy DOTARŁO po włączeniu", () => {

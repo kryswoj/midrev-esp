@@ -127,6 +127,13 @@ export interface ZapytanieKandydatow {
  */
 export interface ZrodloZdarzenDoWyzwalaczy {
   readonly nazwa: string;
+  /**
+   * Czy zrodlo w ogole zna zdarzenia tej metryki (stara tabela `events` zna tylko metryki
+   * z lustrem v1). Brak = zna wszystkie. Silnik NIE przesuwa kursora flow, ktorego metryki
+   * zrodlo nie zna: inaczej zdarzenia z metric_events zapisane, gdy flaga byla wylaczona,
+   * wypadlyby przed kursor i przepadly po jej ponownym wlaczeniu.
+   */
+  obsluguje?(metryka: MetrykaRef): boolean;
   kandydaci(klient: Wykonawca, z: ZapytanieKandydatow): Promise<ZdarzenieWyzwalajace[]>;
   /** properties zdarzenia wyzwalajacego do szablonu maila (null = brak / nie tego tenanta) */
   pobierzWlasciwosci(klient: Wykonawca, tenantId: string, eventId: string, occurredAt: string | null): Promise<Record<string, unknown> | null>;
