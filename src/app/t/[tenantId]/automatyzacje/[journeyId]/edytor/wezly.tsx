@@ -187,6 +187,7 @@ export function PanelWezla({
   listy,
   segmenty,
   metryki = [],
+  grafV2Dostepny = false,
   emaile,
   bledy,
   ostrzezenia = [],
@@ -202,6 +203,7 @@ export function PanelWezla({
   listy: { id: string; name: string }[];
   segmenty: { id: string; name: string }[];
   metryki?: MetrykaDoWyboru[];
+  grafV2Dostepny?: boolean;
   emaile: Record<string, { nazwa: string; temat: string; maTresc: boolean }>;
   bledy: string[];
   ostrzezenia?: string[];
@@ -235,7 +237,7 @@ export function PanelWezla({
       ) : null}
       {wezel.typ === "wyzwalacz" ? (
         <Sekcja tytul="Kiedy osoba wchodzi">
-          <PanelZrodla zrodlo={wezel.zrodlo} metryki={metryki} listy={listy} onZmiana={(zrodlo) => onZmiana({ zrodlo } as Partial<Wezel>)} />
+          <PanelZrodla zrodlo={wezel.zrodlo} metryki={metryki} listy={listy} grafV2Dostepny={grafV2Dostepny} onZmiana={(zrodlo) => onZmiana({ zrodlo } as Partial<Wezel>)} />
         </Sekcja>
       ) : null}
 

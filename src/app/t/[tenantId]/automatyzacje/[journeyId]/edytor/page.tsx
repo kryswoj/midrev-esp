@@ -42,6 +42,7 @@ export default async function EdytorAutomatyzacji({
         segmenty: widok.segmenty,
         metryki: widok.metryki,
         ponowneWejscieDostepne: widok.ponowneWejscieDostepne,
+        grafV2Dostepny: widok.grafV2Dostepny,
         bramka: widok.bramka,
         niepublikowane: widok.niepublikowane,
         liveVersion: widok.liveVersion,

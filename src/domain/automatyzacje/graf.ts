@@ -505,6 +505,21 @@ export interface KontekstWalidacji {
   metryki?: Map<string, { canTrigger: boolean }>;
   /** Czy tryby "zawsze" / "po X" sa juz dostepne (po 0036 i fladze). Brak = niedostepne. */
   ponowneWejscieDostepne?: boolean;
+  /** Czy wolno zapisywac funkcje wymagajace grafu v2 (filtr wyzwalacza, metryka spoza wbudowanych). Brak = nie. */
+  grafV2Dostepny?: boolean;
+}
+
+/**
+ * Funkcje grafu, ktorych nie da sie zapisac w v1 (poza ponownym wejsciem, ktore ma wlasna
+ * bramke). Pusta lista = graf zapisze sie jako v1 i przetrwa rollback kodu.
+ */
+export function funkcjeWymagajaceV2(g: Graf): string[] {
+  const w = wyzwalaczGrafu(g);
+  if (!w || w.zrodlo.rodzaj !== "metryka") return [];
+  const wynik: string[] = [];
+  if (!zdarzenieV1(w.zrodlo.metryka)) wynik.push(`metryka „${w.zrodlo.metryka.nazwa}”`);
+  if (w.zrodlo.filtr && w.zrodlo.filtr.grupy.length) wynik.push("filtr wyzwalacza");
+  return wynik;
 }
 
 export function zwalidujGraf(surowy: unknown, ctx: KontekstWalidacji = {}): { graf: Graf | null; bledy: BladGrafu[] } {
@@ -524,6 +539,10 @@ export function zwalidujGraf(surowy: unknown, ctx: KontekstWalidacji = {}): { gr
   if (wyzwalacze.length !== 1) bledy.push({ wezelId: null, tresc: "Automatyzacja musi mieć dokładnie jeden wyzwalacz." });
   const start = wezel(g, g.start);
   if (!start || start.typ !== "wyzwalacz") bledy.push({ wezelId: null, tresc: "Pierwszym krokiem musi być wyzwalacz." });
+  const v2 = funkcjeWymagajaceV2(g);
+  if (v2.length && ctx.grafV2Dostepny !== true) {
+    bledy.push({ wezelId: g.start, tresc: `${v2.join(" i ")}: ta funkcja będzie dostępna po włączeniu nowych automatyzacji (MIDREV_GRAF_V2). Na razie wyzwalaczem może być zapis z formularza, zamówienie albo lista, bez filtra.` });
+  }
   if (g.ustawienia.ponowneWejscie.tryb !== "raz" && ctx.ponowneWejscieDostepne !== true) {
     // Do czasu migracji 0036 baza wciaz pilnuje jednego wejscia na osobe. Po cichu zamienione
     // "zawsze" na "raz" = operator mysli, ze ludzie wracaja, a nie wracaja.

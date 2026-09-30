@@ -17,6 +17,7 @@ import {
   type ZrodloWyzwalacza,
 } from "../../domain/automatyzacje/graf";
 import {
+  type ZdarzenieWyzwalajace,
   kluczWejscia,
   MAX_SPOZNIENIE_MS,
   MAX_ZALEGLOSC_SKANU_MIN,
@@ -123,6 +124,8 @@ async function przejscie(
 
 /** Ile zdarzen jeden skan jednego flow bierze naraz (reszta w trybie nadrabiania w kolejnym tiku). */
 export const LIMIT_SKANU = 5000;
+/** Bezpiecznik stronicowania zakladki (MAX_STRON_ZAKLADKI x limit zdarzen w 15 min jednej metryki). */
+const MAX_STRON_ZAKLADKI = 20;
 
 /** Kandydat do wejscia, niezaleznie od rodzaju wyzwalacza. */
 interface KandydatWejscia {
@@ -283,13 +286,25 @@ async function kandydaciMetryczni(
     tenantId, metryka: zrodlo.metryka, limit: limitSkanu, zaszlePo: s.zaszle_nowe,
     zakres: { rodzaj: "nowe", kursor, nieWczesniejNiz: s.nie_wczesniej },
   });
-  const limitZakladki = limitSkanu * 4;
-  const zakladka = await port.kandydaci(klient, {
-    tenantId, metryka: zrodlo.metryka, limit: limitZakladki, zaszlePo: s.zaszle_zakladka,
-    zakres: { rodzaj: "zakladka", od: s.zakladka_od, kursor },
-  });
-  if (zakladka.length >= limitZakladki) {
-    alerty.push(`automatyzacja ${flowId}: w zakładce skanu (15 min przed kursorem) ponad ${limitZakladki} zdarzeń; sprawdzono najnowsze ${limitZakladki}, starsze transakcje zatwierdzone z opóźnieniem mogły nie wejść`);
+  // Zakladka stronami (malejaco, keyset) az do wyczerpania 15-minutowego okna: przy duzym
+  // wolumenie spozniony commit nie moze zostac wypchniety poza limit jednego odczytu.
+  const zakladka: ZdarzenieWyzwalajace[] = [];
+  let gorna = kursor;
+  let wlacznie = true;
+  for (let strona = 0; ; strona++) {
+    if (strona >= MAX_STRON_ZAKLADKI) {
+      alerty.push(`automatyzacja ${flowId}: zakładka skanu (15 min przed kursorem) ma ponad ${MAX_STRON_ZAKLADKI * limitSkanu} zdarzeń; starsze transakcje zatwierdzone z opóźnieniem mogły nie wejść`);
+      break;
+    }
+    const s2 = await port.kandydaci(klient, {
+      tenantId, metryka: zrodlo.metryka, limit: limitSkanu, zaszlePo: s.zaszle_zakladka,
+      zakres: { rodzaj: "zakladka", od: s.zakladka_od, kursor: gorna, wlacznie },
+    });
+    zakladka.push(...s2);
+    if (s2.length < limitSkanu) break;
+    const ost = s2[s2.length - 1];
+    gorna = { recordedAt: ost.recordedAt, id: ost.id };
+    wlacznie = false;
   }
   const teraz = new Date(Number(s.teraz_ms));
   const activeMs = Number(s.active_ms);

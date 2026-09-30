@@ -139,11 +139,14 @@ export function PanelZrodla({
   zrodlo,
   metryki,
   listy,
+  grafV2Dostepny = false,
   onZmiana,
 }: {
   zrodlo: ZrodloWyzwalacza;
   metryki: MetrykaDoWyboru[];
   listy: { id: string; name: string }[];
+  /** false: tylko metryki wbudowane v1 i bez filtra (zapis w v1, bezpieczny rollback kodu) */
+  grafV2Dostepny?: boolean;
   onZmiana: (z: ZrodloWyzwalacza) => void;
 }) {
   const wybrana = zrodlo.rodzaj === "metryka" ? kluczMetryki(zrodlo.metryka) : "";
@@ -176,16 +179,20 @@ export function PanelZrodla({
               if (m) onZmiana({ ...zrodlo, metryka: { integracja: m.integracja, nazwa: m.nazwa } });
             }}>
               {opcje.map((m) => (
-                <option key={kluczMetryki(m)} value={kluczMetryki(m)} disabled={!m.canTrigger}>
-                  {m.etykieta}{m.etykieta !== m.nazwa ? ` (${m.nazwa})` : ""}{m.canTrigger ? "" : " — nie może uruchamiać"}
+                <option key={kluczMetryki(m)} value={kluczMetryki(m)} disabled={!m.canTrigger || (!grafV2Dostepny && !zdarzenieV1(m))}>
+                  {m.etykieta}{m.etykieta !== m.nazwa ? ` (${m.nazwa})` : ""}{m.canTrigger ? (!grafV2Dostepny && !zdarzenieV1(m) ? " — po włączeniu nowych automatyzacji" : "") : " — nie może uruchamiać"}
                 </option>
               ))}
             </select>
           </label>
           <div>
             <span className="etykieta mb-1 block">Filtr wyzwalacza</span>
+            {!grafV2Dostepny && !zrodlo.filtr ? (
+              <p className="text-[12px] leading-4 text-[var(--color-tekst-3)]">Filtr wyzwalacza będzie dostępny po włączeniu nowych automatyzacji.</p>
+            ) : (
             <EdytorFiltraWyzwalacza filtr={zrodlo.filtr} onZmiana={(filtr) => onZmiana(filtr ? { ...zrodlo, filtr } : { rodzaj: "metryka", metryka: zrodlo.metryka })} />
-            <p className="mt-1.5 text-[12px] leading-4 text-[var(--color-tekst-3)]">Tylko zdarzenia spełniające filtr uruchamiają automatyzację. Tekst porównujemy dokładnie, z wielkością liter.</p>
+            )}
+            {grafV2Dostepny || zrodlo.filtr ? <p className="mt-1.5 text-[12px] leading-4 text-[var(--color-tekst-3)]">Tylko zdarzenia spełniające filtr uruchamiają automatyzację. Tekst porównujemy dokładnie, z wielkością liter.</p> : null}
           </div>
         </>
       ) : (

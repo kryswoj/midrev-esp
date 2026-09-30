@@ -96,6 +96,14 @@ const schemat = z.object({
   /* Ponowne wejscie do automatyzacji ("za kazdym razem", "po uplywie czasu"), AD-41.
      Wlaczac DOPIERO po migracji 0036 (osobne wydanie, >= 7 dni po 0035). Kod i tak
      sprawdza w bazie, ze stare unikalnosci zniknely; sama flaga ich nie zdejmie. */
+  /* Funkcje automatyzacji zapisywane w grafie v2: filtr wyzwalacza i metryki spoza
+     wbudowanych (popup, zamowienie). Stary kod (sprzed tego wydania) nie czyta v2, wiec
+     wlaczac PO weryfikacji wydania, gdy rollback kodu nie jest juz planowany. Do tego czasu
+     wszystko zapisuje sie w v1 (grafDoZapisu), a rollback jest bezpieczny. */
+  MIDREV_GRAF_V2: z
+    .string()
+    .optional()
+    .transform((w) => TAK.has(String(w ?? "").trim().toLowerCase())),
   MIDREV_PONOWNE_WEJSCIE: z
     .string()
     .optional()

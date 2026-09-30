@@ -1,6 +1,8 @@
 import { getPool } from "../../adapters/db/pool";
+import { config } from "../../config";
 import {
   etykietaMetryki,
+  funkcjeWymagajaceV2,
   grafDoZapisu,
   kluczMetryki,
   noweIdWezla,
@@ -10,6 +12,7 @@ import {
   triggerEventGrafu,
   wstawWezel,
   wyzwalaczGrafu,
+  zdarzenieV1,
   zrodloZV1,
   zwalidujGraf,
   ZDARZENIA_WYZWALACZA,
@@ -210,6 +213,7 @@ export async function utworzAutomatyzacje(
     const znana = (await katalogMetryk().lista(getPool(), tenantId)).find((x) => kluczMetryki(x) === kluczMetryki(m.data));
     if (!znana) return { ok: false, blad: "Tej metryki nie ma w koncie." };
     if (!znana.canTrigger) return { ok: false, blad: "Ta metryka nie może uruchamiać automatyzacji." };
+    if (!zdarzenieV1(m.data) && !config().MIDREV_GRAF_V2) return { ok: false, blad: "Ta metryka będzie dostępna jako wyzwalacz po włączeniu nowych automatyzacji." };
     zrodlo = { rodzaj: "metryka", metryka: m.data };
   } else {
     if (!dane.zdarzenie || !(dane.zdarzenie in ZDARZENIA_WYZWALACZA)) return { ok: false, blad: "Nieznany wyzwalacz." };
@@ -243,6 +247,8 @@ export function rozbierzKluczMetryki(klucz: string): MetrykaRef | null {
 export async function metrykiDoWyzwalacza(tenantId: string): Promise<(MetrykaKatalogu & { klucz: string; etykieta: string })[]> {
   const lista = await katalogMetryk().lista(getPool(), tenantId);
   return lista
+    // bez MIDREV_GRAF_V2 wyzwalaczem moga byc tylko metryki wbudowane v1 (rollback kodu)
+    .filter((m) => config().MIDREV_GRAF_V2 || zdarzenieV1(m) !== null)
     .map((m) => ({ ...m, klucz: kluczMetryki(m), etykieta: etykietaMetryki(m) }))
     .sort((a, b) => a.etykieta.localeCompare(b.etykieta, "pl"));
 }
@@ -446,6 +452,8 @@ export interface WidokAutomatyzacji {
   metryki: { integracja: string; nazwa: string; canTrigger: boolean; etykieta: string }[];
   /** tryby ponownego wejscia inne niz "raz" (po 0036 i fladze) */
   ponowneWejscieDostepne: boolean;
+  /** filtr wyzwalacza i metryki spoza wbudowanych (flaga MIDREV_GRAF_V2) */
+  grafV2Dostepny: boolean;
   bramka: BladGrafu[];
   updatedAt: Date;
 }
@@ -470,8 +478,9 @@ async function kontekstWalidacji(klient: Klient, tenantId: string, flowId: strin
     segmenty: new Set(segmenty.rows.map((s) => s.id)),
     metryki: new Map(metryki.map((m) => [kluczMetryki(m), { canTrigger: m.canTrigger }])),
     ponowneWejscieDostepne: ponowne,
+    grafV2Dostepny: config().MIDREV_GRAF_V2,
   };
-  return { mapaEmaili, listy: listy.rows, segmenty: segmenty.rows, metryki, ponowneWejscieDostepne: ponowne, ctx };
+  return { mapaEmaili, listy: listy.rows, segmenty: segmenty.rows, metryki, ponowneWejscieDostepne: ponowne, grafV2Dostepny: config().MIDREV_GRAF_V2, ctx };
 }
 
 async function pobierzAutomatyzacjeKlientem(klient: Klient, tenantId: string, flowId: string): Promise<WidokAutomatyzacji | null> {
@@ -487,8 +496,9 @@ async function pobierzAutomatyzacjeKlientem(klient: Klient, tenantId: string, fl
   const draft = schematGrafu.safeParse(f.draft);
   if (!draft.success) return null;
   const live = f.live ? schematGrafu.safeParse(f.live) : null;
-  const { mapaEmaili, listy, segmenty, metryki, ponowneWejscieDostepne: ponowne, ctx } = await kontekstWalidacji(klient, tenantId, flowId);
+  const { mapaEmaili, listy, segmenty, metryki, ponowneWejscieDostepne: ponowne, grafV2Dostepny, ctx } = await kontekstWalidacji(klient, tenantId, flowId);
   return {
+    grafV2Dostepny,
     metryki: metryki.map((m) => ({ integracja: m.integracja, nazwa: m.nazwa, canTrigger: m.canTrigger, etykieta: etykietaMetryki(m) })),
     ponowneWejscieDostepne: ponowne,
     id: f.id,
@@ -546,6 +556,12 @@ export async function zapiszSzkic(
     return { ok: false, blad: `Definicja nie przeszła walidacji (${p?.path.join(".") || "graf"}: ${p?.message ?? "błąd"}).` };
   }
   const graf: Graf = parsed.data;
+  // Szkic w v2 przed wlaczeniem MIDREV_GRAF_V2 = definicja, ktorej stary kod po rollbacku nie
+  // przeczyta. Ponowne wejscie ma osobna bramke (publikacja), bo zapisuje sie w ustawieniach.
+  const v2 = funkcjeWymagajaceV2(graf);
+  if (v2.length && !config().MIDREV_GRAF_V2) {
+    return { ok: false, blad: `${v2.join(" i ")} będzie dostępne po włączeniu nowych automatyzacji. Zmiana nie została zapisana.` };
+  }
   const klient = await getPool().connect();
   try {
     await klient.query("begin");

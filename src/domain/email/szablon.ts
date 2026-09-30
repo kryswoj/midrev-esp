@@ -391,8 +391,13 @@ export function zrodloBezpieczne(surowy: string, scisle = true): boolean {
 
 /** srcset: kazdy kandydat (URL [deskryptor]) musi byc bezpiecznym zrodlem. */
 function srcsetBezpieczny(surowy: string, scisle: boolean): boolean {
-  const kandydaci = dekodujAtrybut(surowy).split(",").map((k) => k.trim()).filter(Boolean);
-  return kandydaci.length > 0 && kandydaci.every((k) => zrodloBezpieczne(k.split(/\s+/)[0], scisle));
+  // kandydaci rozdzieleni przecinkiem i BIALYM ZNAKIEM (przecinek wewnatrz data:image/...;base64,
+  // nie jest separatorem); ostatni kandydat moze konczyc sie samym przecinkiem
+  const kandydaci = dekodujAtrybut(surowy).split(/,\s+/).map((k) => k.trim().replace(/,$/, "")).filter(Boolean);
+  // kazdy token kandydata poza deskryptorem (2x, 480w) musi byc bezpiecznym zrodlem: zlepione
+  // bez spacji "a.png 1x,javascript:x 2x" tez odpada
+  return kandydaci.length > 0 && kandydaci.every((k) =>
+    k.split(/\s+/).every((t, i) => (i > 0 && /^\d+(\.\d+)?[wx]$/i.test(t)) || zrodloBezpieczne(t, scisle)));
 }
 
 const ATRYBUTY_NAWIGACJI = new Set(["href", "xlink:href", "action", "formaction"]);

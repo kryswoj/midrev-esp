@@ -698,6 +698,20 @@ describe("Silnik flow", () => {
     expect(u.status === "w_toku" ? rows[0].swiezy : u.status === "zakonczony").toBe(true);
   });
 
+  it("bez MIDREV_GRAF_V2 szkicu z filtrem wyzwalacza nie da się zapisać (rollback kodu czyta tylko v1)", async () => {
+    const f = await utworzAutomatyzacje(tenantId, { name: "FLOW v2 zablokowane", zdarzenie: "popup.submitted" });
+    if (!f.ok) throw new Error(f.blad);
+    const g = (await pobierzAutomatyzacje(tenantId, f.id))!.graf;
+    const zFiltrem = { ...g, wezly: g.wezly.map((w) => (w.typ === "wyzwalacz" && w.zrodlo.rodzaj === "metryka"
+      ? ({ ...w, zrodlo: { ...w.zrodlo, filtr: { grupy: [{ warunki: [{ typ: "wlasciwosc_zdarzenia", pole: "popup_id", typPola: "string", operator: "rowna", wartosc: "x" }] }] } } } as Wezel)
+      : w)) };
+    const z = await zapisz(f.id, zFiltrem as Graf);
+    expect(z.ok).toBe(false);
+    const { rows } = await getPool().query("select draft->>'wersja' as w from flows where tenant_id = $1 and id = $2", [tenantId, f.id]);
+    expect(rows[0].w).toBe("1");
+    expect((await utworzAutomatyzacje(tenantId, { name: "FLOW metryka api", metryka: "api|Cokolwiek" })).ok).toBe(false);
+  });
+
   it("R2#4: błędy systemowe są rozpoznawane, a alert o nich idzie najwyżej raz na godzinę", () => {
     expect(jestBledemSystemowym(Object.assign(new Error("column x does not exist"), { code: "42703" }))).toBe(true);
     expect(jestBledemSystemowym(Object.assign(new Error("conn"), { code: "08006" }))).toBe(true);

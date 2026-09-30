@@ -143,9 +143,18 @@ describe("Graf v2: walidacja wyzwalacza metrycznego i ponownego wejścia", () =>
   });
 
   it("metryka spoza katalogu tenanta blokuje; wbudowana v1 jest zawsze dozwolona", () => {
-    expect(zwalidujGraf(pustyGraf({ rodzaj: "metryka", metryka: { integracja: "api", nazwa: "Inny tenant" } }), { metryki }).bledy.some((b) => b.tresc.includes("nie ma w tym koncie"))).toBe(true);
-    expect(zwalidujGraf(pustyGraf({ rodzaj: "metryka", metryka: { integracja: "api", nazwa: "Quiz Ukończony" } }), { metryki }).bledy).toEqual([]);
+    expect(zwalidujGraf(pustyGraf({ rodzaj: "metryka", metryka: { integracja: "api", nazwa: "Inny tenant" } }), { metryki, grafV2Dostepny: true }).bledy.some((b) => b.tresc.includes("nie ma w tym koncie"))).toBe(true);
+    expect(zwalidujGraf(pustyGraf({ rodzaj: "metryka", metryka: { integracja: "api", nazwa: "Quiz Ukończony" } }), { metryki, grafV2Dostepny: true }).bledy).toEqual([]);
     expect(zwalidujGraf(pustyGraf("order.created"), { metryki }).bledy).toEqual([]);
+  });
+
+  it("bez MIDREV_GRAF_V2: filtr wyzwalacza i metryka spoza wbudowanych blokują (definicja musi zostać v1 na wypadek rollbacku kodu)", () => {
+    const wlasna = pustyGraf({ rodzaj: "metryka", metryka: { integracja: "api", nazwa: "Quiz Ukończony" } });
+    const zFiltrem = pustyGraf({ rodzaj: "metryka", metryka: { integracja: "midrev", nazwa: "Submitted Form" }, filtr: { grupy: [{ warunki: [{ typ: "wlasciwosc_zdarzenia", pole: "form_id", typPola: "string", operator: "rowna", wartosc: "x" }] }] } });
+    expect(zwalidujGraf(wlasna, { metryki }).bledy.some((b) => b.tresc.includes("MIDREV_GRAF_V2"))).toBe(true);
+    expect(zwalidujGraf(zFiltrem).bledy.some((b) => b.tresc.includes("filtr wyzwalacza"))).toBe(true);
+    expect(zwalidujGraf(zFiltrem, { grafV2Dostepny: true }).bledy).toEqual([]);
+    expect(zwalidujGraf(pustyGraf("popup.submitted")).bledy).toEqual([]);
   });
 
   it("ponowne wejście inne niż „raz” blokuje włączenie, dopóki nie jest dostępne (przed 0036)", () => {

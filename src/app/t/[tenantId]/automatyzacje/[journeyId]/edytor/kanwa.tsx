@@ -82,6 +82,7 @@ export interface DaneStartowe {
   segmenty: { id: string; name: string }[];
   metryki: MetrykaDoWyboru[];
   ponowneWejscieDostepne: boolean;
+  grafV2Dostepny: boolean;
   bramka: BladGrafu[];
   niepublikowane: boolean;
   liveVersion: number | null;
@@ -235,11 +236,12 @@ export function Kanwa({
       segmenty: new Set(start.segmenty.map((s) => s.id)),
       metryki: new Map(start.metryki.map((m) => [kluczMetryki(m), { canTrigger: m.canTrigger }])),
       ponowneWejscieDostepne: start.ponowneWejscieDostepne,
+      grafV2Dostepny: start.grafV2Dostepny,
     }).bledy;
     // serwer moze wiedziec wiecej (np. tresc maila zapisana w innej karcie): laczymy bez duplikatow
     const klucze = new Set(lokalne.map((b) => `${b.wezelId}|${b.tresc}`));
     return [...lokalne, ...bramkaSerwera.filter((b) => !klucze.has(`${b.wezelId}|${b.tresc}`))];
-  }, [g, emaile, start.listy, start.segmenty, start.metryki, start.ponowneWejscieDostepne, bramkaSerwera]);
+  }, [g, emaile, start.listy, start.segmenty, start.metryki, start.ponowneWejscieDostepne, start.grafV2Dostepny, bramkaSerwera]);
   const bledyWezla = useCallback((id: string) => bledy.filter((b) => b.wezelId === id).map((b) => b.tresc), [bledy]);
   const ostrzezenia = useMemo(() => ostrzezeniaGrafu(g), [g]);
 
@@ -777,6 +779,7 @@ export function Kanwa({
                 listy={start.listy}
                 segmenty={start.segmenty}
                 metryki={start.metryki}
+                grafV2Dostepny={start.grafV2Dostepny}
                 emaile={emaile}
                 bledy={bledyWezla(wezelZaznaczony.id)}
                 ostrzezenia={ostrzezenia.filter((o) => o.wezelId === wezelZaznaczony.id).map((o) => o.tresc)}

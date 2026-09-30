@@ -1,6 +1,7 @@
 // Flaga ponownego wejscia dla CALEGO pliku (config() jest buforowany per plik testow).
 // Dostepnosc i tak zalezy od schematu: do czasu 0036 kod odmawia mimo flagi.
 process.env.MIDREV_PONOWNE_WEJSCIE = "1";
+process.env.MIDREV_GRAF_V2 = "1";
 
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -274,11 +275,15 @@ describe("Automatyzacje E4a: wyzwalacz metryczny, ponowne wejście, zmienne", ()
         );
         const k = Number(rows[0].k), g = Number(rows[0].g), zaszle = Number(rows[0].zaszle);
         const poKursorze = (e: ZdarzenieAtrapy) => e.recorded.getTime() > k || (e.recorded.getTime() === k && e.id > zk.kursor.id);
+        const naKursorze = (e: ZdarzenieAtrapy) => e.recorded.getTime() === k && e.id === zk.kursor.id;
+        // kontrakt portu: `nowe` rosnaco po kursorze; `zakladka` malejaco, <= kursor (kolejne strony <)
+        const wZakladce = (e: ZdarzenieAtrapy) => !poKursorze(e) && (zk.rodzaj === "zakladka" && zk.wlacznie === false ? !naKursorze(e) : true);
+        const kier = zk.rodzaj === "nowe" ? 1 : -1;
         return baza
           .filter((e) => e.tenantId === z.tenantId && e.integracja === z.metryka.integracja && e.nazwa === z.metryka.nazwa)
           .filter((e) => e.occurred.getTime() >= zaszle && e.recorded.getTime() > g)
-          .filter((e) => (zk.rodzaj === "nowe" ? poKursorze(e) : !poKursorze(e)))
-          .sort((a, b) => a.recorded.getTime() - b.recorded.getTime() || a.id.localeCompare(b.id))
+          .filter((e) => (zk.rodzaj === "nowe" ? poKursorze(e) : wZakladce(e)))
+          .sort((a, b) => kier * (a.recorded.getTime() - b.recorded.getTime() || a.id.localeCompare(b.id)))
           .slice(0, z.limit)
           .map((e) => ({
             id: e.id, profileId: e.profileId,
@@ -350,6 +355,20 @@ describe("Automatyzacje E4a: wyzwalacz metryczny, ponowne wejście, zmienne", ()
       expect(rows[0]).toEqual({ n: 5, osoby: 5 });
       const { rows: st } = await getPool().query("select kursor_id from flow_trigger_state where tenant_id = $1 and flow_id = $2", [tenantId, f.id]);
       expect(st[0].kursor_id).toBeNull();
+    });
+
+    it("zakładka: spóźnione commity przed kursorem wchodzą, także gdy jest ich więcej niż limit jednej strony", async () => {
+      const f = await prosty("REENTRY metryka zakladka", { tryb: "raz" }, QUIZ);
+      await wlacz(f.id);
+      baza.length = 0;
+      await wprowadzUczestnikow(tenantId, { limitSkanu: 2 }); // kursor = teraz
+      const t = Date.now() - 30_000; // zarejestrowane PRZED kursorem, zatwierdzone po nim
+      for (let i = 0; i < 5; i++) {
+        baza.push({ id: idZdarzenia(), tenantId, profileId: profile[`p${i}`], integracja: "api", nazwa: "Ordered Product", occurred: new Date(t - 1000), recorded: new Date(t + i), properties: {}, backfill: false, source: "api" });
+      }
+      const w = await wprowadzUczestnikow(tenantId, { limitSkanu: 2 });
+      expect(w.wprowadzeni).toBe(5);
+      expect(w.alerty.some((a) => a.includes("zakładka"))).toBe(false);
     });
 
     it("{{ event.X }} i {{ person.X }} w KAŻDYM mailu przebiegu; XSS z właściwości escapowany, javascript: usunięty, CR/LF z tematu", async () => {

@@ -89,6 +89,12 @@ describe("zrodloZdarzenMetricEvents / katalogMetrykTabela (kontrakt A↔B)", () 
     });
     // zakladka malejaco: najpierw zdarzenia tuz przed kursorem (tam laduja spoznione commity)
     expect(z.map((e) => e.id)).toEqual([id(5), id(1)]);
+    // kolejna strona zakladki: ostro ponizej ostatniego przeczytanego
+    const z2 = await zrodloZdarzenMetricEvents.kandydaci(k, {
+      ...zapytanie(1),
+      zakres: { rodzaj: "zakladka", od: "2000-01-01T00:00:00Z", kursor: { recordedAt: z[0].recordedAt, id: z[0].id }, wlacznie: false },
+    });
+    expect(z2.map((e) => e.id)).toEqual([id(1)]);
   });
 
   it("właściwości zdarzenia do szablonu: w granicach tenanta, z kluczem partycji i bez", async () => {

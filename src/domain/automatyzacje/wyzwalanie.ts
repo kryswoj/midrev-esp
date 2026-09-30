@@ -97,17 +97,17 @@ export const UUID_ZERO = "00000000-0000-0000-0000-000000000000";
  * Dwa rodzaje odczytu (plan 2.6):
  *  - `nowe`: (recorded_at, id) > kursor, rosnaco, z limitem. Zawsze posuwa kursor naprzod,
  *    wiec duzy wolumen nie zapetla skanu; `nieWczesniejNiz` = teraz - 24 h (worker lezal);
- *  - `zakladka`: recorded_at w (kursor - 15 min, kursor], MALEJACO: transakcje zatwierdzone
- *    poza kolejnoscia (niewidoczne przy poprzednim skanie) leza przy samym kursorze, wiec przy
- *    limicie czytamy najpierw je. Ponowne przetworzenie jest bezpieczne (unikalnosc wejscia),
- *    kursor sie nie rusza.
+ *  - `zakladka`: recorded_at w (kursor - 15 min, kursor], MALEJACO, stronami az do
+ *    wyczerpania okna: transakcje zatwierdzone poza kolejnoscia (niewidoczne przy poprzednim
+ *    skanie). Ponowne przetworzenie jest bezpieczne (unikalnosc wejscia), kursor sie nie rusza.
  */
 export interface ZapytanieKandydatow {
   tenantId: string;
   metryka: MetrykaRef;
   zakres:
     | { rodzaj: "nowe"; kursor: KursorSkanu; nieWczesniejNiz: string }
-    | { rodzaj: "zakladka"; od: string; kursor: KursorSkanu };
+    /** `wlacznie` = czy gorna granica (kursor) nalezy do zakresu; kolejne strony: false */
+    | { rodzaj: "zakladka"; od: string; kursor: KursorSkanu; wlacznie?: boolean };
   /** dolna granica zajscia (przycina partycje metric_events) */
   zaszlePo: string;
   limit: number;

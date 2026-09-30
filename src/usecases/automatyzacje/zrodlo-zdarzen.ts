@@ -65,9 +65,9 @@ export function zakresSkanu(alias: string, z: ZapytanieKandydatow, parametry: un
     return `(${alias}.recorded_at, ${alias}.id) > (${p(kursor.recordedAt)}::timestamptz, ${p(kursor.id)}::uuid)
             and ${alias}.recorded_at > ${p(nieWczesniejNiz)}::timestamptz`;
   }
-  const { od, kursor } = z.zakres;
+  const { od, kursor, wlacznie } = z.zakres;
   return `${alias}.recorded_at > ${p(od)}::timestamptz
-          and (${alias}.recorded_at, ${alias}.id) <= (${p(kursor.recordedAt)}::timestamptz, ${p(kursor.id)}::uuid)`;
+          and (${alias}.recorded_at, ${alias}.id) ${wlacznie === false ? "<" : "<="} (${p(kursor.recordedAt)}::timestamptz, ${p(kursor.id)}::uuid)`;
 }
 
 export const zrodloZdarzenEvents: ZrodloZdarzenDoWyzwalaczy = {

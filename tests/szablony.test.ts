@@ -125,6 +125,8 @@ describe("Adresy w treści: javascript: nie przejdzie także bez zmiennych (prze
     expect(zrodloBezpieczne("javascript:x")).toBe(false);
     expect(sanityzujAdresy(`<img srcset="https://a.pl/1.png 1x, data:image/svg+xml,<svg/> 2x"><img srcset="https://a.pl/1.png 1x, https://a.pl/2.png 2x">`))
       .toBe(`<img ><img srcset="https://a.pl/1.png 1x, https://a.pl/2.png 2x">`);
+    expect(sanityzujAdresy(`<img srcset="data:image/png;base64,AAAA 1x, https://a.pl/2.png 2x">`)).toContain("srcset=");
+    expect(sanityzujAdresy(`<img srcset="https://a.pl/1.png 1x,javascript:x 2x">`)).toBe(`<img >`);
     expect(sanityzujAdresy(`<td background="javascript:x">a</td><video poster='vbscript:x'></video><form action="javascript:x"><button formaction=javascript:x>`))
       .toBe(`<td >a</td><video ></video><form ><button >`);
   });
