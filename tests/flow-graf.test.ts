@@ -10,7 +10,9 @@ import {
   wstawWezel,
   zapiszGraf,
   zwalidujGraf,
+  podniesDoV2,
   type Graf,
+  type GrafV1,
   type Wezel,
 } from "../src/domain/automatyzacje/graf";
 import { sciezkaSvg, ulozGraf, SZEROKOSC_KARTY } from "../src/domain/automatyzacje/uklad";
@@ -22,11 +24,12 @@ const SEG_ID = "01a00000-0000-7000-8000-000000000002";
 const LIST_ID = "01a00000-0000-7000-8000-000000000003";
 const EMAIL_ID_2 = "01a00000-0000-7000-8000-000000000004";
 
-function email(id: string, next: string | null, emailId = EMAIL_ID): Wezel {
+function email(id: string, next: string | null, emailId = EMAIL_ID): Extract<Wezel, { typ: "email" }> {
   return { id, typ: "email", emailId, links: { next } };
 }
 
-function powitalny(): Graf {
+/** Definicja w formacie v1 (tak lezy w istniejacych flow_versions); testy dzialaja na jej v2. */
+function powitalnyV1(): GrafV1 {
   // wyzwalacz -> email1 -> opoznienie -> warunek(kupil?) -> [Tak: koniec] [Nie: email2 -> koniec]
   return {
     wersja: 1,
@@ -42,6 +45,10 @@ function powitalny(): Graf {
       { id: "k2", typ: "koniec" },
     ],
   };
+}
+
+function powitalny(): Graf {
+  return podniesDoV2(powitalnyV1());
 }
 
 const ctx = { emaile: { [EMAIL_ID]: { temat: "Witaj", maTresc: true }, [EMAIL_ID_2]: { temat: "Drugi", maTresc: true } }, listy: new Set([LIST_ID]), segmenty: new Set([SEG_ID]) };
