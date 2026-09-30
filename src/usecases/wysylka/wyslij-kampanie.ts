@@ -289,7 +289,9 @@ export async function zbudujWiadomosciKampanii(tenantId: string, campaignId: str
               case when z.klikniecia then $17::jsonb else '[]'::jsonb end,
               $18, z.otwarcia, z.klikniecia
          from odbiorca o join zgody z on z.profile_id = o.profile_id
-       on conflict (tenant_id, source_type, source_id, profile_id) do nothing`,
+       -- cel z predykatem: do 0036 arbitrem jest tez stary constraint (te same kolumny),
+       -- po 0036 tylko unikalnosc czesciowa messages_zrodlo_uq; semantyka bez zmian
+       on conflict (tenant_id, source_type, source_id, profile_id) where source_type <> 'journey' do nothing`,
       [
         tenantId, campaignId, ids, clickTokeny, unsubTokeny, pixelTokeny,
         kampania.subject,

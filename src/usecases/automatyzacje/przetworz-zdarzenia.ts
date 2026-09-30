@@ -7,11 +7,27 @@ import {
   minutNaStarcie,
   minutOpoznienia,
   schematGrafu,
+  triggerEventGrafu,
   wezel,
+  wyzwalaczGrafu,
   ZRODLA_POJEDYNCZE,
   type Graf,
+  type PonowneWejscie,
   type Wezel,
+  type ZrodloWyzwalacza,
 } from "../../domain/automatyzacje/graf";
+import {
+  kluczWejscia,
+  MAX_SPOZNIENIE_MS,
+  MAX_ZALEGLOSC_SKANU_MIN,
+  minutPonownegoWejscia,
+  ocenKandydata,
+  UUID_ZERO,
+  ZAKLADKA_SKANU_MIN,
+} from "../../domain/automatyzacje/wyzwalanie";
+import { BladSzablonu, oczyscTemat, renderujHtml, renderujTemat, zbudujKontekst } from "../../domain/email/szablon";
+import { ponowneWejscieDostepne } from "./ponowne-wejscie";
+import { zrodloZdarzen } from "./zrodlo-zdarzen";
 import { canSendTo } from "../wysylka/can-send-to";
 import { zlozWiadomosc, type DaneStopki } from "../wysylka/renderuj";
 import { wyslijPartie } from "../wysylka/wyslij-kampanie";
@@ -49,7 +65,8 @@ import { najblizszyTermin, ocenWarunek } from "./warunki";
  * Wstrzymany flow: nikt nie wchodzi i nikt sie nie przesuwa (uczestnicy stoja).
  */
 
-const OKNO_SKANU_MIN = 7 * 1440;
+/** okno skanu wejsc z list (dodanie do listy nie ma znacznika skanu ani reguly 4 h) */
+const OKNO_SKANU_LIST_MIN = 7 * 1440;
 /** bezpiecznik na przebieg jednego uczestnika w jednym tiku (graf i tak jest acykliczny) */
 const MAX_KROKOW = 60;
 /** opoznienie przeterminowane o wiecej (np. po dlugim wstrzymaniu) nie wypycha maila fala */
@@ -58,8 +75,6 @@ const PRZETERMINOWANE_OPOZNIENIE = "24 hours";
 const PRZETERMINOWANE_CZEKAJ_DO = "1 hour";
 /** po tylu bledach silnika na jednym uczestniku jego sciezka jest przerywana z alertem */
 const MAX_BLEDOW_UCZESTNIKA = 3;
-
-const UUID_SQL = "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$";
 
 function token(): string {
   return randomBytes(18).toString("base64url");
@@ -79,9 +94,11 @@ interface Uczestnik {
   przeterminowany: boolean;
   przeterminowany_czekaj: boolean;
   context: Record<string, unknown>;
+  trigger_event_id: string | null;
+  trigger_event_occurred_at: string | null;
   flow_status: string;
   definition: unknown;
-  emails: Record<string, { subject?: string; html?: string }>;
+  emails: Record<string, { subject?: string; html?: string; szablon?: string }>;
   wyjscie_po_zakupie: boolean;
 }
 
@@ -103,29 +120,94 @@ async function przejscie(
 
 // ── Faza 1: wejscia ─────────────────────────────────────────────────────────
 
+/** Ile zdarzen jeden skan jednego flow bierze naraz (reszta w trybie nadrabiania w kolejnym tiku). */
+export const LIMIT_SKANU = 5000;
+
+/** Kandydat do wejscia, niezaleznie od rodzaju wyzwalacza. */
+interface KandydatWejscia {
+  profileId: string;
+  /** occurred_at zdarzenia (tekst z bazy, AD-10): data wejscia */
+  occurredAt: string;
+  occurredAtMs: number;
+  eventId: string | null;
+  eventOccurredAt: string | null;
+  context: Record<string, unknown>;
+  entryKey: string;
+}
+
 /**
- * CTE wejscia: insert uczestnika i jego przejscie "wejscie" jednym poleceniem. Zrodlo
- * kandydatow (`$ZRODLO`) zwraca kolumny profile_id, occurred_at, event_id, context.
+ * Wstawienie wejsc: uczestnik i jego przejscie "wejscie" jednym poleceniem (CTE), wiec osoba
+ * nie istnieje w flow bez sladu wejscia. Idempotencja w bazie: unikalnosc (flow, profil,
+ * entry_key) (AD-41). Tryb "po X": kazdy kandydat osobno, pod blokada doradcza (flow, profil),
+ * ze sprawdzeniem ostatniego wejscia - dwa tiki naraz nie wpuszcza osoby dwa razy.
  */
-function sqlWejscia(zrodlo: string): string {
-  return `with kandydaci as (${zrodlo}),
+async function wstawWejscia(
+  klient: Klient,
+  tenantId: string,
+  flowId: string,
+  wersja: number,
+  startId: string,
+  detail: string,
+  kandydaci: KandydatWejscia[],
+  tryb: PonowneWejscie,
+): Promise<number> {
+  if (!kandydaci.length) return 0;
+  const wstaw = async (k: KandydatWejscia[]) => {
+    const { rowCount } = await klient.query(
+      `with k as (
+         select * from unnest($5::uuid[], $6::timestamptz[], $7::uuid[], $8::timestamptz[], $9::text[]::jsonb[], $10::text[])
+           as k(profile_id, occurred_at, event_id, event_occurred_at, context, entry_key)
+       ),
        wstawieni as (
-         insert into flow_participants (tenant_id, flow_id, profile_id, version, node_id, status,
-                                        entered_at, node_since, trigger_event_id, context)
-         select $1, $2, k.profile_id, $3, $4, 'w_toku', k.occurred_at, k.occurred_at, k.event_id, k.context
-           from kandydaci k
+         insert into flow_participants (tenant_id, flow_id, profile_id, version, node_id, status, entered_at, node_since,
+                                        trigger_event_id, trigger_event_occurred_at, context, entry_key)
+         select $1, $2, k.profile_id, $3, $4, 'w_toku', k.occurred_at, k.occurred_at,
+                k.event_id, k.event_occurred_at, k.context, k.entry_key
+           from k
            join profiles p on p.tenant_id = $1 and p.id = k.profile_id
           where p.email is not null
-         on conflict (tenant_id, flow_id, profile_id) do nothing
+         on conflict (tenant_id, flow_id, profile_id, entry_key) do nothing
          returning id, profile_id, entered_at, node_id, version
        )
        insert into flow_transitions (tenant_id, participant_id, flow_id, profile_id, version, from_node, to_node, kind, detail, occurred_at)
-       select $1, w.id, $2, w.profile_id, w.version, null, w.node_id, 'wejscie', $5::jsonb, w.entered_at
+       select $1, w.id, $2, w.profile_id, w.version, null, w.node_id, 'wejscie', $11::jsonb, w.entered_at
          from wstawieni w
-       returning participant_id`;
+       returning participant_id`,
+      [tenantId, flowId, wersja, startId,
+       k.map((x) => x.profileId), k.map((x) => x.occurredAt), k.map((x) => x.eventId), k.map((x) => x.eventOccurredAt),
+       k.map((x) => JSON.stringify(x.context)), k.map((x) => x.entryKey), detail],
+    );
+    return rowCount ?? 0;
+  };
+
+  const posortowani = [...kandydaci].sort((x, y) => x.occurredAtMs - y.occurredAtMs || x.occurredAt.localeCompare(y.occurredAt) || String(x.eventId).localeCompare(String(y.eventId)));
+  if (tryb.tryb === "raz") {
+    // pierwsze pasujace zdarzenie osoby decyduje o dacie wejscia (AD-10), jak dotad
+    const pierwsze = new Map<string, KandydatWejscia>();
+    for (const k of posortowani) if (!pierwsze.has(k.profileId)) pierwsze.set(k.profileId, k);
+    return wstaw([...pierwsze.values()]);
+  }
+  if (tryb.tryb === "zawsze") return wstaw(posortowani);
+
+  const minut = minutPonownegoWejscia(tryb)!;
+  let n = 0;
+  for (const k of posortowani) {
+    await klient.query("select pg_advisory_xact_lock(hashtextextended($1, 7150415))", [`flow-wejscie:${tenantId}:${flowId}:${k.profileId}`]);
+    const { rows } = await klient.query(
+      `select exists (
+         select 1 from flow_participants
+          where tenant_id = $1 and flow_id = $2 and profile_id = $3
+            and entered_at > $4::timestamptz - make_interval(mins => $5::int)
+       ) as za_wczesnie`,
+      [tenantId, flowId, k.profileId, k.occurredAt, minut],
+    );
+    if (rows[0].za_wczesnie) continue;
+    n += await wstaw([k]);
+  }
+  return n;
 }
 
-export async function wprowadzUczestnikow(tenantId: string): Promise<{ wprowadzeni: number; alerty: string[] }> {
+export async function wprowadzUczestnikow(tenantId: string, opcje: { limitSkanu?: number } = {}): Promise<{ wprowadzeni: number; alerty: string[] }> {
   const pool = getPool();
   const { rows: flowy } = await pool.query(
     "select id from flows where tenant_id = $1 and status = 'wlaczony' and live is not null",
@@ -136,7 +218,9 @@ export async function wprowadzUczestnikow(tenantId: string): Promise<{ wprowadze
   for (const { id: flowId } of flowy) {
     // blad jednej automatyzacji (np. zepsuta definicja) nie zatrzymuje wejsc do pozostalych
     try {
-      wprowadzeni += await wprowadzDoFlow(tenantId, flowId);
+      const w = await wprowadzDoFlow(tenantId, flowId, opcje.limitSkanu ?? LIMIT_SKANU);
+      wprowadzeni += w.wprowadzeni;
+      alerty.push(...w.alerty);
     } catch (blad) {
       if (jestBledemSystemowym(blad)) throw blad; // awaria bazy: jeden dlawiony alert w tiku, nie po jednym na flow
       console.error(`[automatyzacje] flow ${flowId}: wejścia`, blad);
@@ -146,86 +230,182 @@ export async function wprowadzUczestnikow(tenantId: string): Promise<{ wprowadze
   return { wprowadzeni, alerty };
 }
 
-async function wprowadzDoFlow(tenantId: string, flowId: string): Promise<number> {
-  const pool = getPool();
-  {
-    const klient = await pool.connect();
-    try {
-      await klient.query("begin");
-      // `for share`: zmiana statusu trzyma `for update` na tym wierszu, wiec wejscie
-      // i wylaczenie sa rozdzielone - nikt nie wejdzie do flow, ktory wlasnie gasnie
-      // (review: wejscie w wyscigu z wylaczeniem zostawialo osobe `w_toku` w szkicu).
-      const { rows } = await klient.query(
-        `select live, live_version, active_since::text as active_since
-           from flows where tenant_id = $1 and id = $2 and status = 'wlaczony' and live is not null
-          for share`,
-        [tenantId, flowId],
+/**
+ * Wyzwalacz metryczny: zdarzenia ze zrodla (port) od kursora skanu, regula czasu (backfill,
+ * import, > 4 h spoznienia, sprzed wlaczenia: nie wchodza, AD-39), filtr wyzwalacza, klucz
+ * wejscia wg trybu ponownego wejscia (AD-41).
+ *
+ * Skan (plan 2.6): `nowe` = (recorded_at, id) > kursor z limitem (zawsze posuwa sie naprzod,
+ * nawet przy tysiacach zdarzen w kwadransie) + `zakladka` = 15 min przed kursorem (transakcje
+ * zatwierdzone poza kolejnoscia; ponowne przetworzenie jest idempotentne). Zdarzenia
+ * zarejestrowane ponad dobe przed tikiem nie wchodza (worker lezal) - alert.
+ *
+ * Kursor zapisywany w TEJ SAMEJ transakcji co wejscia, a wiersz znacznika zablokowany
+ * `for update`: dwa tiki tego samego flow ida po kolei, nie obok siebie.
+ */
+async function kandydaciMetryczni(
+  klient: Klient,
+  tenantId: string,
+  flowId: string,
+  activeSince: string,
+  zrodlo: Extract<ZrodloWyzwalacza, { rodzaj: "metryka" }>,
+  tryb: PonowneWejscie,
+  limitSkanu: number,
+): Promise<{ kandydaci: KandydatWejscia[]; alerty: string[]; zapiszZnacznik: () => Promise<void> }> {
+  const alerty: string[] = [];
+  await klient.query(
+    `insert into flow_trigger_state (tenant_id, flow_id, scanned_to) values ($1, $2, $3::timestamptz)
+     on conflict (tenant_id, flow_id) do nothing`,
+    [tenantId, flowId, activeSince],
+  );
+  const { rows: st } = await klient.query(
+    `select s.scanned_to::text as scanned_to, coalesce(s.kursor_id, $7::uuid)::text as kursor_id,
+            now()::text as teraz, extract(epoch from now()) * 1000 as teraz_ms,
+            extract(epoch from $3::timestamptz) * 1000 as active_ms,
+            (s.scanned_to < now() - make_interval(mins => $4::int)) as zalegly,
+            (now() - make_interval(mins => $4::int))::text as nie_wczesniej,
+            (s.scanned_to - make_interval(mins => $5::int))::text as zakladka_od,
+            greatest($3::timestamptz, greatest(s.scanned_to, now() - make_interval(mins => $4::int)) - make_interval(mins => $6::int))::text as zaszle_nowe,
+            greatest($3::timestamptz, s.scanned_to - make_interval(mins => $5::int) - make_interval(mins => $6::int))::text as zaszle_zakladka
+       from flow_trigger_state s
+      where s.tenant_id = $1 and s.flow_id = $2
+      for update`,
+    [tenantId, flowId, activeSince, MAX_ZALEGLOSC_SKANU_MIN, ZAKLADKA_SKANU_MIN, MAX_SPOZNIENIE_MS / 60_000 + 5, UUID_ZERO],
+  );
+  const s = st[0];
+  const kursor = { recordedAt: s.scanned_to as string, id: s.kursor_id as string };
+  if (s.zalegly) {
+    alerty.push(`automatyzacja ${flowId}: skan wyzwalacza zaległy o ponad dobę (worker nie działał?). Zdarzenia zarejestrowane wcześniej niż 24 h temu nie uruchomią automatyzacji.`);
+  }
+  const port = zrodloZdarzen();
+  const nowe = await port.kandydaci(klient, {
+    tenantId, metryka: zrodlo.metryka, limit: limitSkanu, zaszlePo: s.zaszle_nowe,
+    zakres: { rodzaj: "nowe", kursor, nieWczesniejNiz: s.nie_wczesniej },
+  });
+  const zakladka = await port.kandydaci(klient, {
+    tenantId, metryka: zrodlo.metryka, limit: limitSkanu, zaszlePo: s.zaszle_zakladka,
+    zakres: { rodzaj: "zakladka", od: s.zakladka_od, kursor },
+  });
+  if (zakladka.length >= limitSkanu) {
+    alerty.push(`automatyzacja ${flowId}: w zakładce skanu (15 min) ponad ${limitSkanu} zdarzeń; zdarzenia zatwierdzone z opóźnieniem mogły nie wejść`);
+  }
+  const teraz = new Date(Number(s.teraz_ms));
+  const activeMs = Number(s.active_ms);
+  const kandydaci: KandydatWejscia[] = [];
+  const widziane = new Set<string>();
+  for (const e of [...zakladka, ...nowe]) {
+    if (widziane.has(e.id)) continue;
+    widziane.add(e.id);
+    if (ocenKandydata(e, activeMs, zrodlo.filtr, teraz) !== null) continue;
+    kandydaci.push({
+      profileId: e.profileId,
+      occurredAt: e.occurredAt,
+      occurredAtMs: e.occurredAtMs,
+      eventId: e.id,
+      eventOccurredAt: e.occurredAt,
+      context: e.context,
+      entryKey: kluczWejscia(tryb.tryb, { id: e.id }),
+    });
+  }
+  const obciety = nowe.length >= limitSkanu;
+  if (obciety) alerty.push(`automatyzacja ${flowId}: w jednym skanie ponad ${limitSkanu} zdarzeń wyzwalacza; reszta wejdzie w kolejnych tikach (nadrabianie)`);
+  const ostatnie = nowe[nowe.length - 1];
+  return {
+    kandydaci,
+    alerty,
+    zapiszZnacznik: async () => {
+      // obciety: kursor na ostatnim przetworzonym; inaczej na poczatku tej transakcji (wszystko
+      // zatwierdzone wczesniej juz przeczytalismy, spoznione zlapie zakladka kolejnego tiku)
+      await klient.query(
+        `update flow_trigger_state set scanned_to = $3::timestamptz, kursor_id = $4::uuid, updated_at = now()
+          where tenant_id = $1 and flow_id = $2`,
+        obciety ? [tenantId, flowId, ostatnie.recordedAt, ostatnie.id] : [tenantId, flowId, s.teraz, null],
       );
-      const f = rows[0];
-      const parsed = f ? schematGrafu.safeParse(f.live) : null;
-      if (!f || !parsed?.success) {
-        await klient.query("rollback");
-        if (f) throw new Error("opublikowana definicja nie przechodzi schematu");
-        return 0;
-      }
-      const g = parsed.data;
-      const start = wezel(g, g.start);
-      if (!start || start.typ !== "wyzwalacz") {
-        await klient.query("rollback");
-        return 0;
-      }
-      const okno = `${OKNO_SKANU_MIN + minutNaStarcie(g)} minutes`;
-      const detail = JSON.stringify({ zdarzenie: start.zdarzenie });
-      let wynik;
-      if (start.zdarzenie === "list.joined") {
-        if (!start.listId) {
-          await klient.query("rollback");
-            return 0;
-        }
-        // Tylko dodania POJEDYNCZE (reczne, formularz), chyba ze operator jawnie wlaczyl
-        // masowe. Import 20 tys. adresow na liste z powitaniem nie moze wyslac 20 tys.
-        // powitan. Dodania przez inne automatyzacje nigdy: dwa flowy przerzucajace osobe
-        // miedzy listami krecilyby sie w kolko.
-        wynik = await klient.query(
-          sqlWejscia(`
-            select m.profile_id, m.added_at as occurred_at, null::uuid as event_id,
-                   jsonb_build_object('listId', m.list_id, 'zrodlo', m.source) as context
-              from list_members m
-             where m.tenant_id = $1 and m.list_id = $6
-               and m.added_at >= now() - $7::interval
-               and m.added_at >= $8::timestamptz
-               and split_part(m.source, ':', 1) <> 'automatyzacja'
-               and ($9::boolean or split_part(m.source, ':', 1) = any($10::text[]))`),
-          [tenantId, flowId, f.live_version, g.start, detail, start.listId, okno, f.active_since,
-           start.takzeMasowe === true, [...ZRODLA_POJEDYNCZE]],
-        );
-      } else {
-        // Pierwsze pasujace zdarzenie osoby decyduje o dacie wejscia (AD-10). Zdarzenia
-        // z importu historii (payload.kanal = 'import') nie sa nowymi zakupami: import
-        // sprzed roku nie moze uruchomic podziekowania za zakup.
-        wynik = await klient.query(
-          sqlWejscia(`
-            select distinct on (e.profile_id) e.profile_id, e.occurred_at, e.id as event_id,
-                   jsonb_strip_nulls(jsonb_build_object(
-                     'orderId', case when e.payload->>'orderId' ~ '${UUID_SQL}' then e.payload->>'orderId' end,
-                     'totalMinor', e.payload->'totalMinor')) as context
-              from events e
-             where e.tenant_id = $1 and e.event_type = $6 and e.profile_id is not null
-               and coalesce(e.payload->>'kanal', 'webhook') <> 'import'
-               and e.occurred_at >= now() - $7::interval
-               and e.occurred_at >= $8::timestamptz
-             order by e.profile_id, e.occurred_at, e.id`),
-          [tenantId, flowId, f.live_version, g.start, detail, start.zdarzenie, okno, f.active_since],
-        );
-      }
-      await klient.query("commit");
-      return wynik.rowCount ?? 0;
-    } catch (blad) {
-      await klient.query("rollback").catch(() => {});
-      throw blad;
-    } finally {
-      klient.release();
+    },
+  };
+}
+
+async function wprowadzDoFlow(tenantId: string, flowId: string, limitSkanu: number): Promise<{ wprowadzeni: number; alerty: string[] }> {
+  const pool = getPool();
+  const klient = await pool.connect();
+  const alerty: string[] = [];
+  try {
+    await klient.query("begin");
+    // `for share`: zmiana statusu trzyma `for update` na tym wierszu, wiec wejscie
+    // i wylaczenie sa rozdzielone - nikt nie wejdzie do flow, ktory wlasnie gasnie
+    // (review: wejscie w wyscigu z wylaczeniem zostawialo osobe `w_toku` w szkicu).
+    const { rows } = await klient.query(
+      `select live, live_version, active_since::text as active_since
+         from flows where tenant_id = $1 and id = $2 and status = 'wlaczony' and live is not null
+        for share`,
+      [tenantId, flowId],
+    );
+    const f = rows[0];
+    const parsed = f ? schematGrafu.safeParse(f.live) : null;
+    if (!f || !parsed?.success) {
+      await klient.query("rollback");
+      if (f) throw new Error("opublikowana definicja nie przechodzi schematu");
+      return { wprowadzeni: 0, alerty };
     }
+    const g = parsed.data;
+    const start = wyzwalaczGrafu(g);
+    if (!start) {
+      await klient.query("rollback");
+      return { wprowadzeni: 0, alerty };
+    }
+    let tryb: PonowneWejscie = g.ustawienia.ponowneWejscie;
+    if (tryb.tryb !== "raz" && !(await ponowneWejscieDostepne(klient))) {
+      // Definicja z ponownym wejsciem, a baza jeszcze go nie obsluguje (flaga zdjeta po
+      // publikacji, rollback 0036): bezpieczny tryb "raz" i alert, nigdy blad unikalnosci.
+      alerty.push(`automatyzacja ${flowId}: ponowne wejście „${tryb.tryb}” jest niedostępne (flaga MIDREV_PONOWNE_WEJSCIE albo migracja 0036); osoby wchodzą tylko raz`);
+      tryb = { tryb: "raz" };
+    }
+    const z = start.zrodlo;
+    const detail = JSON.stringify(z.rodzaj === "lista" ? { zdarzenie: "list.joined" } : { zdarzenie: triggerEventGrafu(g), metryka: z.metryka });
+    let kandydaci: KandydatWejscia[];
+    let zapiszZnacznik: (() => Promise<void>) | null = null;
+    if (z.rodzaj === "lista") {
+      if (!z.listId) {
+        await klient.query("rollback");
+        return { wprowadzeni: 0, alerty };
+      }
+      // Tylko dodania POJEDYNCZE (reczne, formularz), chyba ze operator jawnie wlaczyl
+      // masowe. Import 20 tys. adresow na liste z powitaniem nie moze wyslac 20 tys.
+      // powitan. Dodania przez inne automatyzacje nigdy: dwa flowy przerzucajace osobe
+      // miedzy listami krecilyby sie w kolko.
+      const okno = `${OKNO_SKANU_LIST_MIN + minutNaStarcie(g)} minutes`;
+      const { rows: lm } = await klient.query(
+        `select m.profile_id, m.added_at::text as occurred_at, extract(epoch from m.added_at) * 1000 as occurred_ms,
+                floor(extract(epoch from m.added_at) * 1000000)::bigint::text as epoka,
+                jsonb_build_object('listId', m.list_id, 'zrodlo', m.source) as context
+           from list_members m
+          where m.tenant_id = $1 and m.list_id = $2
+            and m.added_at >= now() - $3::interval
+            and m.added_at >= $4::timestamptz
+            and split_part(m.source, ':', 1) <> 'automatyzacja'
+            and ($5::boolean or split_part(m.source, ':', 1) = any($6::text[]))`,
+        [tenantId, z.listId, okno, f.active_since, z.takzeMasowe === true, [...ZRODLA_POJEDYNCZE]],
+      );
+      kandydaci = lm.map((r) => ({
+        profileId: r.profile_id, occurredAt: r.occurred_at, occurredAtMs: Number(r.occurred_ms),
+        eventId: null, eventOccurredAt: null, context: r.context,
+        entryKey: kluczWejscia(tryb.tryb, { listId: z.listId!, addedAtEpoch: r.epoka }),
+      }));
+    } else {
+      const m = await kandydaciMetryczni(klient, tenantId, flowId, f.active_since, z, tryb, limitSkanu);
+      kandydaci = m.kandydaci;
+      alerty.push(...m.alerty);
+      zapiszZnacznik = m.zapiszZnacznik;
+    }
+    const n = await wstawWejscia(klient, tenantId, flowId, f.live_version, g.start, detail, kandydaci, tryb);
+    if (zapiszZnacznik) await zapiszZnacznik();
+    await klient.query("commit");
+    return { wprowadzeni: n, alerty };
+  } catch (blad) {
+    await klient.query("rollback").catch(() => {});
+    throw blad;
+  } finally {
+    klient.release();
   }
 }
 
@@ -233,6 +413,10 @@ async function wprowadzDoFlow(tenantId: string, flowId: string): Promise<number>
 
 interface Otoczenie {
   nazwaSklepu: string;
+  /** organization.name w szablonach: nazwa firmy nadawcy, a bez niej nazwa sklepu */
+  organizacja: string;
+  /** properties zdarzen wyzwalajacych wczytane w tym tiku (zdarzenie jest niezmienne) */
+  zdarzenia: Map<string, Record<string, unknown> | null>;
   /** dane nadawcy do stopki (0029): firma, adres pocztowy, NIP */
   nadawca: DaneStopki;
   sendingDomainId: string | null;
@@ -252,6 +436,8 @@ async function otoczenieTenanta(tenantId: string): Promise<Otoczenie> {
     : { rows: [] as { id: string }[] };
   return {
     nazwaSklepu: String(rows[0]?.name ?? ""),
+    organizacja: String(rows[0]?.sender_company_name || rows[0]?.name || ""),
+    zdarzenia: new Map(),
     nadawca: { firma: rows[0]?.sender_company_name ?? null, adres: rows[0]?.sender_postal_address ?? null, nip: rows[0]?.sender_tax_id ?? null },
     sendingDomainId: sd[0]?.id ?? null, polityka: await politykaSledzenia(pool, tenantId) };
 }
@@ -263,7 +449,12 @@ type WynikWiadomosci =
 
 /**
  * Wezel e-mail: buduje wiadomosc `queued` dla uczestnika Z MIGAWKI jego wersji.
- * `nowa: false` = ta osoba dostala juz kiedys wiadomosc z tego kroku (AD-26).
+ * Idempotencja per PRZEBIEG (AD-41): (tenant, zrodlo, profil, journey_run_id). `nowa: false`
+ * = ta wiadomosc juz powstala w TYM przebiegu (ponowienie), nie "kiedys tej osobie".
+ *
+ * Zmienne `{{ event.X }}` / `{{ person.X }}` (AD-43) renderuja sie wylacznie dla migawek
+ * opublikowanych po wprowadzeniu szablonow (`szablon: "liquid"`, zwalidowane przy publikacji).
+ * Starsze wersje wychodza bajt w bajt jak dotad, nawet jesli tekst zawiera `{{`.
  */
 async function zbudujWiadomoscWezla(
   klient: Klient,
@@ -274,11 +465,14 @@ async function zbudujWiadomoscWezla(
 ): Promise<WynikWiadomosci> {
   const migawka = u.emails?.[emailId];
   if (!migawka) return { ok: false, powod: "brak migawki treści w tej wersji", wyjscie: false };
-  const temat = String(migawka.subject ?? "");
-  const tresc = String(migawka.html ?? "");
-  if (!temat.trim() || !tresc.trim()) return { ok: false, powod: "wiadomość bez tematu albo treści", wyjscie: false };
+  const tematZrodlo = String(migawka.subject ?? "");
+  const trescZrodlo = String(migawka.html ?? "");
+  if (!tematZrodlo.trim() || !trescZrodlo.trim()) return { ok: false, powod: "wiadomość bez tematu albo treści", wyjscie: false };
 
-  const { rows: prof } = await klient.query("select email from profiles where tenant_id = $1 and id = $2", [tenantId, u.profile_id]);
+  const { rows: prof } = await klient.query(
+    "select email, first_name, last_name, phone, properties from profiles where tenant_id = $1 and id = $2",
+    [tenantId, u.profile_id],
+  );
   if (!prof[0]?.email) return { ok: false, powod: "brak_adresu", wyjscie: true };
 
   // Bramka zgod PRZED zbudowaniem wiadomosci: osoba bez zgody WYCHODZI z automatyzacji
@@ -286,6 +480,31 @@ async function zbudujWiadomoscWezla(
   // Wiazaca bramka i tak stoi w transakcji wysylki (AD-25); ta jest dodatkowa.
   const bramka = await canSendTo(klient, tenantId, u.profile_id);
   if (!bramka.wolno) return { ok: false, powod: bramka.powod ?? "brak_zgody", wyjscie: true };
+
+  let temat: string;
+  let tresc: string;
+  if (migawka.szablon === "liquid") {
+    let wlasciwosci: Record<string, unknown> | null = null;
+    if (u.trigger_event_id) {
+      const klucz = u.trigger_event_id;
+      if (!oto.zdarzenia.has(klucz)) {
+        oto.zdarzenia.set(klucz, await zrodloZdarzen().pobierzWlasciwosci(klient, tenantId, u.trigger_event_id, u.trigger_event_occurred_at));
+      }
+      wlasciwosci = oto.zdarzenia.get(klucz) ?? null;
+    }
+    const ctx = zbudujKontekst({ zdarzenie: wlasciwosci, profil: prof[0], organizacja: oto.organizacja });
+    try {
+      temat = renderujTemat(tematZrodlo, ctx);
+      tresc = renderujHtml(trescZrodlo, ctx);
+    } catch (e) {
+      if (e instanceof BladSzablonu) return { ok: false, powod: `błąd w zmiennych (${e.message})`, wyjscie: false };
+      throw e;
+    }
+    if (!temat) return { ok: false, powod: "temat po podstawieniu zmiennych jest pusty", wyjscie: false };
+  } else {
+    temat = oczyscTemat(tematZrodlo);
+    tresc = trescZrodlo;
+  }
 
   const zgody = await zgodyNaSledzenie(klient, tenantId, u.profile_id, oto.polityka);
   const clickToken = token();
@@ -299,20 +518,25 @@ async function zbudujWiadomoscWezla(
     sledzKlikniecia: zgody.klikniecia,
     sledzOtwarcia: zgody.otwarcia,
   });
+  // Cel `on conflict` = nowa unikalnosc per przebieg (0035). Do czasu 0036 stoi tez stara
+  // (bez przebiegu): wtedy drugi przebieg nie istnieje (ponowne wejscie wylaczone), a gdyby
+  // jednak zaistnial, insert wywroci sie glosno zamiast cicho "pominac" mail.
   const wstaw = await klient.query(
     `insert into messages (tenant_id, profile_id, source_type, source_id, email, subject,
                            body_html, click_token, unsubscribe_token, links,
-                           sending_domain_id, open_tracking_allowed, click_tracking_allowed)
-     values ($1, $2, 'journey', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-     on conflict (tenant_id, source_type, source_id, profile_id) do nothing
+                           sending_domain_id, open_tracking_allowed, click_tracking_allowed, journey_run_id)
+     values ($1, $2, 'journey', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+     on conflict (tenant_id, source_id, profile_id, journey_run_id)
+       where source_type = 'journey' and journey_run_id is not null do nothing
      returning id`,
     [tenantId, u.profile_id, emailId, prof[0].email, temat, html, clickToken, unsubToken,
-     JSON.stringify(linki), oto.sendingDomainId, zgody.otwarcia, zgody.klikniecia],
+     JSON.stringify(linki), oto.sendingDomainId, zgody.otwarcia, zgody.klikniecia, u.id],
   );
   if (wstaw.rows[0]) return { ok: true, messageId: wstaw.rows[0].id, nowa: true };
   const { rows: istniejaca } = await klient.query(
-    `select id from messages where tenant_id = $1 and source_type = 'journey' and source_id = $2 and profile_id = $3`,
-    [tenantId, emailId, u.profile_id],
+    `select id from messages
+      where tenant_id = $1 and source_type = 'journey' and source_id = $2 and profile_id = $3 and journey_run_id = $4`,
+    [tenantId, emailId, u.profile_id, u.id],
   );
   return { ok: true, messageId: istniejaca[0].id, nowa: false };
 }
@@ -325,7 +549,8 @@ async function zajmijUczestnika(klient: Klient, tenantId: string, id: string): P
             p.entered_at::text as entered_at, p.node_since::text as node_since, p.resume_at::text as resume_at,
             (p.resume_at is not null and p.resume_at < now() - $3::interval) as przeterminowany,
             (p.resume_at is not null and p.resume_at < now() - $4::interval) as przeterminowany_czekaj,
-            p.context, f.status as flow_status, v.definition, v.emails,
+            p.context, p.trigger_event_id, p.trigger_event_occurred_at::text as trigger_event_occurred_at,
+            f.status as flow_status, v.definition, v.emails,
             coalesce((v.definition->'ustawienia'->>'wyjsciePoZakupie')::boolean, false) as wyjscie_po_zakupie
        from flow_participants p
        join flows f on f.tenant_id = p.tenant_id and f.id = p.flow_id
@@ -505,8 +730,8 @@ async function przesunJednego(tenantId: string, id: string, oto: Otoczenie): Pro
             zbudowane++;
             await przejscie(klient, tenantId, u, "wyslano", w.id, w.id, { emailId: w.emailId, messageId: wynik.messageId });
           } else {
-            // ta osoba dostala juz kiedys ten mail (AD-26): sciezka mowi prawde, ze tym razem nie
-            await przejscie(klient, tenantId, u, "pominieto", w.id, w.id, { emailId: w.emailId, messageId: wynik.messageId, powod: "wiadomość z tego kroku już wcześniej wyszła do tej osoby" });
+            // wiadomosc z tego kroku juz powstala W TYM PRZEBIEGU (AD-41): sciezka mowi prawde
+            await przejscie(klient, tenantId, u, "pominieto", w.id, w.id, { emailId: w.emailId, messageId: wynik.messageId, powod: "wiadomość z tego kroku już powstała w tym przebiegu" });
           }
           nowyContext = { ...u.context, ostatniaWiadomoscId: wynik.messageId };
           dalej = cel(w, "next");

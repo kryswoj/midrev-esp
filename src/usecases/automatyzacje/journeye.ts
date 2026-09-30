@@ -1,17 +1,30 @@
 import { getPool } from "../../adapters/db/pool";
 import {
+  etykietaMetryki,
+  grafDoZapisu,
+  kluczMetryki,
   noweIdWezla,
   pustyGraf,
   schematGrafu,
+  schematMetrykiRef,
+  triggerEventGrafu,
   wstawWezel,
+  wyzwalaczGrafu,
+  zrodloZV1,
   zwalidujGraf,
   ZDARZENIA_WYZWALACZA,
   type BladGrafu,
   type Graf,
   type KontekstWalidacji,
+  type MetrykaRef,
   type Wezel,
   type ZdarzenieWyzwalacza,
+  type ZrodloWyzwalacza,
 } from "../../domain/automatyzacje/graf";
+import type { MetrykaKatalogu } from "../../domain/automatyzacje/wyzwalanie";
+import { sprawdzSzablon } from "../../domain/email/szablon";
+import { ponowneWejscieDostepne } from "./ponowne-wejscie";
+import { katalogMetryk, zrodloZdarzen } from "./zrodlo-zdarzen";
 import { nowyBlok, pustyDokument, wczytajDokument, type DokumentMaila } from "../../domain/email/bloki";
 import { renderujDokument } from "../tresc/render-blokow";
 import { kanonicznyJson, przygotujDokument } from "../tresc/zapisz-tresc";
@@ -26,6 +39,14 @@ import type { PoolClient } from "pg";
  */
 
 export const TRIGGERY: Record<string, string> = ZDARZENIA_WYZWALACZA;
+
+/** Etykieta wyzwalacza do listy automatyzacji: zdarzenie v1, `list.joined` albo `metryka:<integracja>:<nazwa>`. */
+export function etykietaWyzwalacza(zdarzenie: string | null | undefined): string {
+  if (!zdarzenie) return "—";
+  if (zdarzenie in TRIGGERY) return TRIGGERY[zdarzenie];
+  const m = /^metryka:([^:]+):(.+)$/.exec(zdarzenie);
+  return m ? etykietaMetryki({ integracja: m[1], nazwa: m[2] }) : zdarzenie;
+}
 
 import { STATUSY, type StatusAutomatyzacji } from "../../domain/automatyzacje/statusy";
 export { STATUSY, type StatusAutomatyzacji };
@@ -87,7 +108,12 @@ export async function automatyzacjeTenanta(tenantId: string): Promise<{ lista: A
   const [{ rows }, atrybucja] = await Promise.all([
     pool.query(
       `select f.id, f.name, f.status, f.created_at, f.updated_at,
-              coalesce(f.trigger_event, f.draft->'wezly'->0->>'zdarzenie') as zdarzenie,
+              coalesce(f.trigger_event, f.draft->'wezly'->0->>'zdarzenie',
+                       case f.draft->'wezly'->0->'zrodlo'->>'rodzaj'
+                         when 'lista' then 'list.joined'
+                         when 'metryka' then 'metryka:' || (f.draft->'wezly'->0->'zrodlo'->'metryka'->>'integracja')
+                                               || ':' || (f.draft->'wezly'->0->'zrodlo'->'metryka'->>'nazwa')
+                       end) as zdarzenie,
               ${SQL_NIEPUBLIKOWANE} as niepublikowane,
               (select count(*)::int from flow_participants p
                 where p.tenant_id = f.tenant_id and p.flow_id = f.id and p.status = 'w_toku') as w_toku,
@@ -172,27 +198,53 @@ function sprawdzNazwe(name: string): string | null {
 
 export async function utworzAutomatyzacje(
   tenantId: string,
-  dane: { name: string; zdarzenie: string; listId?: string | null },
+  dane: { name: string; zdarzenie?: string; metryka?: unknown; listId?: string | null },
 ): Promise<Wynik<{ id: string }>> {
   const bladNazwy = sprawdzNazwe(dane.name);
   if (bladNazwy) return { ok: false, blad: bladNazwy };
-  if (!(dane.zdarzenie in ZDARZENIA_WYZWALACZA)) return { ok: false, blad: "Nieznany wyzwalacz." };
-  const zdarzenie = dane.zdarzenie as ZdarzenieWyzwalacza;
-  let listId: string | undefined;
-  if (zdarzenie === "list.joined") {
-    if (!dane.listId || !UUID.test(dane.listId)) return { ok: false, blad: "Wyzwalacz „dołączenie do listy” wymaga wybrania listy." };
-    const { rows } = await getPool().query("select 1 from lists where tenant_id = $1 and id = $2", [tenantId, dane.listId]);
-    if (!rows[0]) return { ok: false, blad: "Wybrana lista nie istnieje." };
-    listId = dane.listId;
+  let zrodlo: ZrodloWyzwalacza;
+  if (dane.metryka !== undefined && dane.metryka !== null && dane.metryka !== "") {
+    // metryka z listy wyboru: klucz naturalny (integracja, nazwa) z katalogu TEGO tenanta
+    const m = schematMetrykiRef.safeParse(typeof dane.metryka === "string" ? rozbierzKluczMetryki(dane.metryka) : dane.metryka);
+    if (!m.success) return { ok: false, blad: "Nieznana metryka." };
+    const znana = (await katalogMetryk().lista(getPool(), tenantId)).find((x) => kluczMetryki(x) === kluczMetryki(m.data));
+    if (!znana) return { ok: false, blad: "Tej metryki nie ma w koncie." };
+    if (!znana.canTrigger) return { ok: false, blad: "Ta metryka nie może uruchamiać automatyzacji." };
+    zrodlo = { rodzaj: "metryka", metryka: m.data };
+  } else {
+    if (!dane.zdarzenie || !(dane.zdarzenie in ZDARZENIA_WYZWALACZA)) return { ok: false, blad: "Nieznany wyzwalacz." };
+    const zdarzenie = dane.zdarzenie as ZdarzenieWyzwalacza;
+    let listId: string | undefined;
+    if (zdarzenie === "list.joined") {
+      if (!dane.listId || !UUID.test(dane.listId)) return { ok: false, blad: "Wyzwalacz „dołączenie do listy” wymaga wybrania listy." };
+      const { rows } = await getPool().query("select 1 from lists where tenant_id = $1 and id = $2", [tenantId, dane.listId]);
+      if (!rows[0]) return { ok: false, blad: "Wybrana lista nie istnieje." };
+      listId = dane.listId;
+    }
+    zrodlo = zrodloZV1(zdarzenie, listId);
   }
-  const graf = pustyGraf(zdarzenie, listId);
+  const graf = pustyGraf(zrodlo, undefined, { ponowneWejscieDostepne: await ponowneWejscieDostepne(getPool()) });
   const { rows } = await getPool().query(
     `insert into flows (tenant_id, name, draft) values ($1, $2, $3)
      on conflict (tenant_id, name) do nothing returning id`,
-    [tenantId, dane.name.trim(), JSON.stringify(graf)],
+    [tenantId, dane.name.trim(), JSON.stringify(grafDoZapisu(graf))],
   );
   if (!rows[0]) return { ok: false, blad: "Automatyzacja o tej nazwie już istnieje." };
   return { ok: true, id: rows[0].id };
+}
+
+/** `integracja|nazwa` z pola formularza -> klucz naturalny metryki. */
+export function rozbierzKluczMetryki(klucz: string): MetrykaRef | null {
+  const i = klucz.indexOf("|");
+  return i > 0 ? { integracja: klucz.slice(0, i), nazwa: klucz.slice(i + 1) } : null;
+}
+
+/** Metryki tenanta do wyboru wyzwalacza (port katalogu; po scaleniu A: tabela metrics). */
+export async function metrykiDoWyzwalacza(tenantId: string): Promise<(MetrykaKatalogu & { klucz: string; etykieta: string })[]> {
+  const lista = await katalogMetryk().lista(getPool(), tenantId);
+  return lista
+    .map((m) => ({ ...m, klucz: kluczMetryki(m), etykieta: etykietaMetryki(m) }))
+    .sort((a, b) => a.etykieta.localeCompare(b.etykieta, "pl"));
 }
 
 // ── Biblioteka gotowych automatyzacji ───────────────────────────────────────
@@ -238,11 +290,11 @@ export const BIBLIOTEKA: SzablonBiblioteki[] = [
       { nazwa: "Mail 3: historia marki", temat: "Kim jesteśmy i dlaczego to robimy", akapity: ["Cześć!", "Kilka słów o tym, skąd się wzięliśmy i co jest dla nas ważne. Jeśli masz pytanie, po prostu odpisz na tego maila."], przycisk: { tekst: "Poznaj nas", sciezka: "" } },
     ],
     zbuduj: (email) => ({
-      wersja: 1,
+      wersja: 2,
       start: "wyzwalacz",
-      ustawienia: { wyjsciePoZakupie: false },
+      ustawienia: { wyjsciePoZakupie: false, ponowneWejscie: { tryb: "raz" } },
       wezly: [
-        { id: "wyzwalacz", typ: "wyzwalacz", zdarzenie: "popup.submitted", links: { next: N("email", 1) } },
+        { id: "wyzwalacz", typ: "wyzwalacz", zrodlo: zrodloZV1("popup.submitted"), links: { next: N("email", 1) } },
         { id: N("email", 1), typ: "email", emailId: email(0), links: { next: N("opoznienie", 1) } },
         { id: N("opoznienie", 1), typ: "opoznienie", ilosc: 2, jednostka: "dni", links: { next: N("warunek", 1) } },
         { id: N("warunek", 1), typ: "warunek", etykieta: "Kupił po zapisie?", regula: { rodzaj: "kupil_od_wejscia" }, links: { next_if_true: N("koniec", 1), next_if_false: N("email", 2) } },
@@ -265,11 +317,11 @@ export const BIBLIOTEKA: SzablonBiblioteki[] = [
       { nazwa: "Polecane produkty", temat: "Do tego zamówienia klienci dobierają…", akapity: ["Cześć!", "Zobacz, co klienci najczęściej dobierają do takiego zamówienia jak Twoje."], przycisk: { tekst: "Zobacz polecane", sciezka: "/polecane" } },
     ],
     zbuduj: (email) => ({
-      wersja: 1,
+      wersja: 2,
       start: "wyzwalacz",
-      ustawienia: { wyjsciePoZakupie: false },
+      ustawienia: { wyjsciePoZakupie: false, ponowneWejscie: { tryb: "raz" } },
       wezly: [
-        { id: "wyzwalacz", typ: "wyzwalacz", zdarzenie: "order.created", links: { next: N("opoznienie", 1) } },
+        { id: "wyzwalacz", typ: "wyzwalacz", zrodlo: zrodloZV1("order.created"), links: { next: N("opoznienie", 1) } },
         { id: N("opoznienie", 1), typ: "opoznienie", ilosc: 1, jednostka: "godziny", links: { next: N("email", 1) } },
         { id: N("email", 1), typ: "email", emailId: email(0), links: { next: N("opoznienie", 2) } },
         { id: N("opoznienie", 2), typ: "opoznienie", ilosc: 7, jednostka: "dni", links: { next: N("warunek", 1) } },
@@ -291,11 +343,11 @@ export const BIBLIOTEKA: SzablonBiblioteki[] = [
     ],
     wyjsciePoZakupie: true,
     zbuduj: (email) => ({
-      wersja: 1,
+      wersja: 2,
       start: "wyzwalacz",
-      ustawienia: { wyjsciePoZakupie: true },
+      ustawienia: { wyjsciePoZakupie: true, ponowneWejscie: { tryb: "raz" } },
       wezly: [
-        { id: "wyzwalacz", typ: "wyzwalacz", zdarzenie: "order.created", links: { next: N("opoznienie", 1) } },
+        { id: "wyzwalacz", typ: "wyzwalacz", zrodlo: zrodloZV1("order.created"), links: { next: N("opoznienie", 1) } },
         { id: N("opoznienie", 1), typ: "opoznienie", ilosc: 90, jednostka: "dni", links: { next: N("warunek", 1) } },
         { id: N("warunek", 1), typ: "warunek", etykieta: "Kupił ponownie?", regula: { rodzaj: "kupil_od_wejscia" }, links: { next_if_true: N("koniec", 1), next_if_false: N("email", 1) } },
         { id: N("koniec", 1), typ: "koniec" },
@@ -323,7 +375,7 @@ export async function utworzZBiblioteki(tenantId: string, klucz: string, opcje: 
       if (zajete.has(name)) continue;
       const { rows: f } = await klient.query(
         "insert into flows (tenant_id, name, draft) values ($1, $2, $3) on conflict (tenant_id, name) do nothing returning id",
-        [tenantId, name, JSON.stringify(pustyGraf(szablon.zdarzenie))],
+        [tenantId, name, JSON.stringify(grafDoZapisu(pustyGraf(szablon.zdarzenie)))],
       );
       flowId = f[0]?.id ?? null;
     }
@@ -350,7 +402,7 @@ export async function utworzZBiblioteki(tenantId: string, klucz: string, opcje: 
     for (const w of graf.wezly) {
       if (w.typ === "email") await klient.query("update journeys set node_id = $3 where tenant_id = $1 and id = $2", [tenantId, w.emailId, w.id]);
     }
-    await klient.query("update flows set draft = $3, updated_at = now() where tenant_id = $1 and id = $2", [tenantId, flowId, JSON.stringify(graf)]);
+    await klient.query("update flows set draft = $3, updated_at = now() where tenant_id = $1 and id = $2", [tenantId, flowId, JSON.stringify(grafDoZapisu(graf))]);
     // odczyt zwrotny: graf w bazie przechodzi bramke z realnymi wiadomosciami
     const widok = await pobierzAutomatyzacjeKlientem(klient, tenantId, flowId);
     if (!widok || widok.bramka.length) {
@@ -390,6 +442,10 @@ export interface WidokAutomatyzacji {
   emaile: Record<string, WiadomoscFlow>;
   listy: { id: string; name: string }[];
   segmenty: { id: string; name: string }[];
+  /** metryki tenanta do wyboru wyzwalacza */
+  metryki: { integracja: string; nazwa: string; canTrigger: boolean; etykieta: string }[];
+  /** tryby ponownego wejscia inne niz "raz" (po 0036 i fladze) */
+  ponowneWejscieDostepne: boolean;
   bramka: BladGrafu[];
   updatedAt: Date;
 }
@@ -404,12 +460,18 @@ async function kontekstWalidacji(klient: Klient, tenantId: string, flowId: strin
   ]);
   const mapaEmaili: Record<string, WiadomoscFlow> = {};
   for (const e of emaile.rows) mapaEmaili[e.id] = { id: e.id, nazwa: e.name, temat: e.subject ?? "", maTresc: e.ma_tresc, wersja: e.draft_version };
+  const [metryki, ponowne] = await Promise.all([
+    katalogMetryk().lista(klient as unknown as Parameters<ReturnType<typeof katalogMetryk>["lista"]>[0], tenantId),
+    ponowneWejscieDostepne(klient),
+  ]);
   const ctx: KontekstWalidacji = {
     emaile: Object.fromEntries(emaile.rows.map((e) => [e.id, { temat: e.subject ?? "", maTresc: e.ma_tresc }])),
     listy: new Set(listy.rows.map((l) => l.id)),
     segmenty: new Set(segmenty.rows.map((s) => s.id)),
+    metryki: new Map(metryki.map((m) => [kluczMetryki(m), { canTrigger: m.canTrigger }])),
+    ponowneWejscieDostepne: ponowne,
   };
-  return { mapaEmaili, listy: listy.rows, segmenty: segmenty.rows, ctx };
+  return { mapaEmaili, listy: listy.rows, segmenty: segmenty.rows, metryki, ponowneWejscieDostepne: ponowne, ctx };
 }
 
 async function pobierzAutomatyzacjeKlientem(klient: Klient, tenantId: string, flowId: string): Promise<WidokAutomatyzacji | null> {
@@ -425,8 +487,10 @@ async function pobierzAutomatyzacjeKlientem(klient: Klient, tenantId: string, fl
   const draft = schematGrafu.safeParse(f.draft);
   if (!draft.success) return null;
   const live = f.live ? schematGrafu.safeParse(f.live) : null;
-  const { mapaEmaili, listy, segmenty, ctx } = await kontekstWalidacji(klient, tenantId, flowId);
+  const { mapaEmaili, listy, segmenty, metryki, ponowneWejscieDostepne: ponowne, ctx } = await kontekstWalidacji(klient, tenantId, flowId);
   return {
+    metryki: metryki.map((m) => ({ integracja: m.integracja, nazwa: m.nazwa, canTrigger: m.canTrigger, etykieta: etykietaMetryki(m) })),
+    ponowneWejscieDostepne: ponowne,
     id: f.id,
     name: f.name,
     status: f.status,
@@ -513,9 +577,9 @@ export async function zapiszSzkic(
     const { rows: zapis } = await klient.query(
       `update flows set draft = $3, draft_version = draft_version + 1, updated_at = now()
         where tenant_id = $1 and id = $2 and draft_version = $4 returning draft, draft_version`,
-      [tenantId, flowId, JSON.stringify(graf), zmiany.oczekiwanaWersja],
+      [tenantId, flowId, JSON.stringify(grafDoZapisu(graf)), zmiany.oczekiwanaWersja],
     );
-    if (!zapis[0] || kanonicznyJson(zapis[0].draft) !== kanonicznyJson(graf)) {
+    if (!zapis[0] || kanonicznyJson(zapis[0].draft) !== kanonicznyJson(grafDoZapisu(graf))) {
       await klient.query("rollback");
       return { ok: false, blad: "Zapis nie zgadza się z odczytem z bazy. Odśwież stronę." };
     }
@@ -681,7 +745,11 @@ export function dokumentWiadomosci(content: unknown) {
 
 // ── Migawka tresci i publikacja ─────────────────────────────────────────────
 
-type Migawka = Record<string, { subject: string; html: string }>;
+/**
+ * `szablon: "liquid"`: migawka opublikowana PO wprowadzeniu zmiennych i zwalidowana
+ * (`sprawdzSzablon`). Tylko takie silnik renderuje; starsze wersje wychodza jak dotad.
+ */
+type Migawka = Record<string, { subject: string; html: string; szablon?: "liquid" }>;
 
 /** Temat i HTML kazdej wiadomosci wskazanej w grafie, w chwili publikacji (0025). */
 async function migawkaTresci(klient: Kl, tenantId: string, flowId: string, graf: Graf): Promise<Migawka> {
@@ -692,7 +760,7 @@ async function migawkaTresci(klient: Kl, tenantId: string, flowId: string, graf:
        from journeys where tenant_id = $1 and flow_id = $2 and id = any($3::uuid[])`,
     [tenantId, flowId, ids],
   );
-  return Object.fromEntries(rows.map((r) => [r.id, { subject: r.subject, html: r.html }]));
+  return Object.fromEntries(rows.map((r) => [r.id, { subject: r.subject, html: r.html, szablon: "liquid" as const }]));
 }
 
 /**
@@ -721,23 +789,35 @@ async function opublikujWTransakcji(
   const { graf, bledy } = zwalidujGraf(f.draft, ctx);
   if (!graf || bledy.length) return { ok: false, bledy };
   const migawka = await migawkaTresci(klient, tenantId, flowId, graf);
+  // zmienne {{ }} w temacie i tresci: blad skladni, nieznany filtr, zablokowany znacznik
+  // wychodza TERAZ, na kanwie, a nie jako przerwane sciezki ludzi przy wysylce
+  const bledySzablonu: BladGrafu[] = [];
+  for (const w of graf.wezly) {
+    if (w.typ !== "email" || !migawka[w.emailId]) continue;
+    const b = sprawdzSzablon(migawka[w.emailId].subject, migawka[w.emailId].html);
+    if (b) bledySzablonu.push({ wezelId: w.id, tresc: `Błąd w zmiennych wiadomości: ${b}` });
+  }
+  if (bledySzablonu.length) return { ok: false, bledy: bledySzablonu };
   let staraMigawka: Migawka | null = null;
   if (f.live_version) {
     const { rows } = await klient.query("select emails from flow_versions where tenant_id = $1 and flow_id = $2 and version = $3", [tenantId, flowId, f.live_version]);
     staraMigawka = rows[0]?.emails ?? null;
   }
-  const nowa = !f.live || kanonicznyJson(f.live) !== kanonicznyJson(graf) || kanonicznyJson(staraMigawka) !== kanonicznyJson(migawka);
+  // porownanie po normalizacji (v1 w bazie vs v2 w pamieci to ten sam graf)
+  const staryLive = f.live ? schematGrafu.safeParse(f.live) : null;
+  const nowa = !staryLive?.success || kanonicznyJson(staryLive.data) !== kanonicznyJson(graf) || kanonicznyJson(staraMigawka) !== kanonicznyJson(migawka);
   const wersja: number = nowa ? (f.live_version ?? 0) + 1 : (f.live_version as number);
   if (nowa) {
     await klient.query(
       "insert into flow_versions (tenant_id, flow_id, version, definition, emails) values ($1, $2, $3, $4, $5)",
-      [tenantId, flowId, wersja, JSON.stringify(graf), JSON.stringify(migawka)],
+      [tenantId, flowId, wersja, JSON.stringify(grafDoZapisu(graf)), JSON.stringify(migawka)],
     );
   }
-  const start = graf.wezly.find((w) => w.typ === "wyzwalacz") as Extract<Wezel, { typ: "wyzwalacz" }>;
+  const start = wyzwalaczGrafu(graf)!;
+  const metricId = start.zrodlo.rodzaj === "metryka" ? await zrodloZdarzen().idMetryki(klient, tenantId, start.zrodlo.metryka) : null;
   await klient.query(
-    "update flows set live = $3, live_version = $4, trigger_event = $5, updated_at = now() where tenant_id = $1 and id = $2",
-    [tenantId, flowId, JSON.stringify(graf), wersja, start.zdarzenie],
+    "update flows set live = $3, live_version = $4, trigger_event = $5, trigger_metric_id = $6, updated_at = now() where tenant_id = $1 and id = $2",
+    [tenantId, flowId, JSON.stringify(grafDoZapisu(graf)), wersja, triggerEventGrafu(graf), metricId],
   );
   // odczyt zwrotny: wersja w bazie ma dokladnie te migawke
   const { rows: po } = await klient.query(
