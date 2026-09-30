@@ -40,15 +40,20 @@ export async function dodajZadanie(
 
 export async function zajmijZadanie(workerId: string): Promise<Zadanie | null> {
   const { rows } = await getPool().query(
-    `update jobs set status = 'running', locked_at = now(), locked_by = $1, attempts = attempts + 1
-      where (id, created_at) in (
+    // CTE MATERIALIZED zamiast `in (subquery)`: przy planie z Nested Loop podzapytanie z
+    // LIMIT + SKIP LOCKED wykonuje sie wielokrotnie i zajmuje wiecej niz jedno zadanie;
+    // nadmiarowe zostawaly `running` bez wykonawcy az do odzyskania zombie.
+    `with kandydat as materialized (
         select id, created_at from jobs
          where status = 'pending' and run_after <= now()
          order by run_after
          for update skip locked
          limit 1
       )
-     returning id, created_at::text as token, tenant_id, kind, payload, attempts, max_attempts`,
+     update jobs set status = 'running', locked_at = now(), locked_by = $1, attempts = jobs.attempts + 1
+       from kandydat k
+      where jobs.id = k.id and jobs.created_at = k.created_at
+     returning jobs.id, jobs.created_at::text as token, jobs.tenant_id, jobs.kind, jobs.payload, jobs.attempts, jobs.max_attempts`,
     [workerId],
   );
   return (rows[0] as Zadanie) ?? null;
