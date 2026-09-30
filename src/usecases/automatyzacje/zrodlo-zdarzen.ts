@@ -46,6 +46,15 @@ function wiersz(r: Record<string, unknown>, source: ZrodloZdarzenia, backfill: b
  * Wspolny fragment: zakres rejestracji (`nowe` po kursorze albo `zakladka` przed nim)
  * i porzadek. Ten sam fragment ma adapter metric_events (kontrakt portu).
  */
+/**
+ * Porzadek: `nowe` rosnaco (kursor posuwa sie po kolei), `zakladka` MALEJACO - transakcja
+ * zatwierdzona poza kolejnoscia ma recorded_at najwyzej ~60 s (statement_timeout) przed
+ * kursorem, wiec lezy na KONCU zakladki; przy limicie czytamy najpierw wlasnie ten koniec.
+ */
+export function porzadekSkanu(alias: string, z: ZapytanieKandydatow): string {
+  return z.zakres.rodzaj === "nowe" ? `${alias}.recorded_at, ${alias}.id` : `${alias}.recorded_at desc, ${alias}.id desc`;
+}
+
 export function zakresSkanu(alias: string, z: ZapytanieKandydatow, parametry: unknown[]): string {
   const p = (v: unknown) => {
     parametry.push(v);
@@ -81,7 +90,7 @@ export const zrodloZdarzenEvents: ZrodloZdarzenDoWyzwalaczy = {
         where e.tenant_id = $1 and e.event_type = $2 and e.profile_id is not null
           and e.occurred_at >= $3::timestamptz
           and ${okno}
-        order by e.recorded_at, e.id
+        order by ${porzadekSkanu("e", z)}
         limit $4`,
       parametry,
     );
@@ -141,7 +150,7 @@ export const zrodloZdarzenMetricEvents: ZrodloZdarzenDoWyzwalaczy = {
           and e.occurred_at >= $4::timestamptz
           and ${predykatWyzwalaniaSql("e")}
           and ${zakres}
-        order by e.recorded_at, e.id
+        order by ${porzadekSkanu("e", z)}
         limit $5`,
       parametry,
     );

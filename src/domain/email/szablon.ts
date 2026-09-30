@@ -176,16 +176,30 @@ function silnik(html: boolean, strefa: string): Liquid {
 }
 
 // Sparsowane szablony: ten sam mail renderuje sie dla setek osob w jednym tiku
+// Sparsowane szablony (LRU po Map): ten sam mail renderuje sie dla setek osob w tiku.
+// Limit laczny ~20 mln znakow zrodel, pojedyncze zrodlo > 200 kB nie trafia do pamieci.
 const sparsowane = new Map<string, ReturnType<Liquid["parse"]>>();
+let znakowWPamieci = 0;
+const LIMIT_ZNAKOW_PAMIECI = 20_000_000;
+const MAX_ZRODLA_W_PAMIECI = 200_000;
 function parsuj(s: Liquid, klucz: string, zrodlo: string) {
-  const k = `${klucz}\u0000${zrodlo}`;
-  let t = sparsowane.get(k);
-  if (!t) {
-    t = s.parse(zrodlo);
-    if (sparsowane.size > 200) sparsowane.clear();
+  const k = `${klucz}|${zrodlo}`;
+  const t = sparsowane.get(k);
+  if (t) {
+    sparsowane.delete(k);
     sparsowane.set(k, t);
+    return t;
   }
-  return t;
+  const nowy = s.parse(zrodlo);
+  if (zrodlo.length > MAX_ZRODLA_W_PAMIECI) return nowy;
+  sparsowane.set(k, nowy);
+  znakowWPamieci += k.length;
+  for (const [stary] of sparsowane) {
+    if (znakowWPamieci <= LIMIT_ZNAKOW_PAMIECI && sparsowane.size <= 200) break;
+    sparsowane.delete(stary);
+    znakowWPamieci -= stary.length;
+  }
+  return nowy;
 }
 
 const ENCJE_W_ZNACZNIKU: Record<string, string> = {
@@ -328,34 +342,61 @@ function dekodujAtrybut(v: string): string {
   });
 }
 
-const DOZWOLONE_SCHEMATY = new Set(["http", "https", "mailto", "tel"]);
+const SCHEMATY_LINKOW = new Set(["http", "https", "mailto", "tel"]);
 
-/**
- * Czy wartosc href/src jest bezpieczna: schemat (po zdekodowaniu encji i usunieciu bialych
- * i sterujacych znakow, tak jak robi to przegladarka) z listy http/https/mailto/tel, albo
- * adres bez schematu (wzgledny, kotwica). Nierozpoznana encja przed dwukropkiem = odrzucone.
- */
-export function adresBezpieczny(surowy: string): boolean {
-  const v = dekodujAtrybut(surowy).replace(/[\u0000-\u0020\u007f-\u009f\u00ad\u200b-\u200f\u2028\u2029\ufeff]/g, "").toLowerCase();
-  const dwukropek = v.indexOf(":");
-  if (dwukropek === -1) return true;
-  const przed = v.slice(0, dwukropek);
-  // "/sciezka?x=a:b" albo "#a:b" - dwukropek po separatorze nie jest schematem
-  if (/[/?#]/.test(przed)) return true;
-  if (!/^[a-z][a-z0-9+.-]*$/.test(przed)) return false;
-  return DOZWOLONE_SCHEMATY.has(przed);
+/** Adres po zdekodowaniu encji i usunieciu bialych i sterujacych znakow (tak czyta go przegladarka). */
+function normalnyAdres(surowy: string): string {
+  return dekodujAtrybut(surowy).replace(/[\u0000-\u0020\u007f-\u009f\u00ad\u200b-\u200f\u2028\u2029\ufeff]/g, "").toLowerCase();
+}
+
+function schemat(v: string): string | null {
+  const m = /^([a-z][a-z0-9+.-]*):/.exec(v);
+  return m ? m[1] : null;
 }
 
 /**
- * Usuwa atrybuty href/src z niebezpiecznym schematem (javascript:, vbscript:, data: ...).
- * Wszystkie trzy zapisy atrybutu (podwojny, pojedynczy cudzyslow, bez cudzyslowu).
+ * Czy wartosc atrybutu NAWIGACYJNEGO (href, action, formaction, xlink:href) jest dozwolona
+ * (AD-43): wylacznie jawny schemat http, https, mailto, tel albo kotwica `#...`. Adres
+ * wzgledny i `//host` odpadaja: w mailu nie maja bazy, a omijaja sledzenie klikniec.
+ */
+export function adresBezpieczny(surowy: string): boolean {
+  const v = normalnyAdres(surowy);
+  if (v.startsWith("#")) return true;
+  const s = schemat(v);
+  return s !== null && SCHEMATY_LINKOW.has(s);
+}
+
+/** Zrodlo obrazka/tla: http(s), zalacznik `cid:` albo rastrowy `data:image/...` (bez SVG). */
+export function zrodloBezpieczne(surowy: string): boolean {
+  const v = normalnyAdres(surowy);
+  const s = schemat(v);
+  if (s === "http" || s === "https" || s === "cid") return true;
+  return /^data:image\/(png|jpe?g|gif|webp);/.test(v);
+}
+
+/** srcset: kazdy kandydat (URL [deskryptor]) musi byc bezpiecznym zrodlem. */
+function srcsetBezpieczny(surowy: string): boolean {
+  const kandydaci = dekodujAtrybut(surowy).split(",").map((k) => k.trim()).filter(Boolean);
+  return kandydaci.length > 0 && kandydaci.every((k) => zrodloBezpieczne(k.split(/\s+/)[0]));
+}
+
+const ATRYBUTY_NAWIGACJI = new Set(["href", "xlink:href", "action", "formaction"]);
+
+/**
+ * Usuwa atrybuty adresowe z niedozwolona wartoscia: nawigacja tylko http(s)/mailto/tel/#,
+ * zrodla (src, srcset, background, poster) tylko http(s)/cid/raster data:. Wszystkie trzy
+ * zapisy atrybutu (podwojny, pojedynczy cudzyslow, bez cudzyslowu), separator spacja albo `/`.
+ * Zmienne szablonu nie moga dopisac nowego atrybutu (`"` i `=` sa escapowane), wiec to
+ * zamyka jedyna droge z danych zdarzenia do adresu: wartosc istniejacego atrybutu.
  */
 export function sanityzujAdresy(html: string): string {
   return html.replace(
-    /([\s/])(href|src|xlink:href|action|formaction)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/gi,
-    (calosc, odstep: string, _nazwa: string, a?: string, b?: string, c?: string) => {
+    /([\s/])(href|xlink:href|action|formaction|src|srcset|background|poster)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/gi,
+    (calosc, odstep: string, nazwa: string, a?: string, b?: string, c?: string) => {
       const wartosc = a ?? b ?? c ?? "";
-      return adresBezpieczny(wartosc) ? calosc : odstep.trimEnd() + " ";
+      const n = nazwa.toLowerCase();
+      const ok = ATRYBUTY_NAWIGACJI.has(n) ? adresBezpieczny(wartosc) : n === "srcset" ? srcsetBezpieczny(wartosc) : zrodloBezpieczne(wartosc);
+      return ok ? calosc : odstep.trimEnd() + " ";
     },
   );
 }

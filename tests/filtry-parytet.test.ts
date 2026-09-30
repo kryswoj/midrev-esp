@@ -10,6 +10,7 @@ import {
   ocenFiltr,
   Parametry,
   schematFiltra,
+  zapytanieFiltrowane,
   type Filtr,
   type TypPola,
   type Warunek,
@@ -149,9 +150,9 @@ describe("Filtry: parytet TS vs SQL (wygenerowane przypadki)", () => {
   };
 
   async function porownaj(f: Filtr): Promise<string | null> {
-    const p = new Parametry([TENANT]);
-    const warunek = kompilujFiltr(f, zrodlo, p, TERAZ);
-    const { rows } = await klient.query(`select t.id from filtr_parytet t where t.tenant_id = $1 and (${warunek}) order by t.id`, p.wartosci);
+    // produkcyjna droga: predykat tenanta sklada helper (drugi tenant ma te same wiersze)
+    const q = zapytanieFiltrowane({ kolumny: "t.id", zrodloSql: "filtr_parytet t", alias: "t", tenantId: TENANT, filtr: f, zrodlo, teraz: TERAZ, koniec: "order by t.id" });
+    const { rows } = await klient.query(q.sql, q.parametry);
     const sql = rows.map((r) => r.id as number);
     const ts = wiersze.filter((w) => ocenFiltr(f, { zdarzenie: w.properties, profil: w.profil, teraz: TERAZ })).map((w) => w.id);
     if (JSON.stringify(sql) !== JSON.stringify(ts)) return `${JSON.stringify(f)}\n SQL: ${JSON.stringify(sql)}\n TS:  ${JSON.stringify(ts)}`;

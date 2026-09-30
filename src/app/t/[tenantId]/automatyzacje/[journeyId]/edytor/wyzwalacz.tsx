@@ -4,6 +4,7 @@ import { Plus, Trash2 } from "lucide-react";
 import {
   kluczMetryki,
   etykietaMetryki,
+  zdarzenieV1,
   type PonowneWejscie,
   type ZrodloWyzwalacza,
 } from "../../../../../../domain/automatyzacje/graf";
@@ -148,7 +149,8 @@ export function PanelZrodla({
   const wybrana = zrodlo.rodzaj === "metryka" ? kluczMetryki(zrodlo.metryka) : "";
   // biezaca metryka zawsze na liscie (np. wbudowana, ktorej katalog jeszcze nie zna)
   const opcje = zrodlo.rodzaj === "metryka" && !metryki.some((m) => kluczMetryki(m) === wybrana)
-    ? [...metryki, { ...zrodlo.metryka, canTrigger: true, etykieta: etykietaMetryki(zrodlo.metryka) }]
+    // spoza katalogu: wbudowana v1 jest poprawna, kazda inna (usunieta, cudza) jawnie niedostepna
+    ? [...metryki, { ...zrodlo.metryka, canTrigger: zdarzenieV1(zrodlo.metryka) !== null, etykieta: `${etykietaMetryki(zrodlo.metryka)}${zdarzenieV1(zrodlo.metryka) ? "" : " (nie ma w koncie)"}` }]
     : metryki;
   return (
     <>

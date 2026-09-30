@@ -96,6 +96,7 @@ interface Uczestnik {
   context: Record<string, unknown>;
   trigger_event_id: string | null;
   trigger_event_occurred_at: string | null;
+  entry_key: string;
   flow_status: string;
   definition: unknown;
   emails: Record<string, { subject?: string; html?: string; szablon?: string }>;
@@ -282,12 +283,13 @@ async function kandydaciMetryczni(
     tenantId, metryka: zrodlo.metryka, limit: limitSkanu, zaszlePo: s.zaszle_nowe,
     zakres: { rodzaj: "nowe", kursor, nieWczesniejNiz: s.nie_wczesniej },
   });
+  const limitZakladki = limitSkanu * 4;
   const zakladka = await port.kandydaci(klient, {
-    tenantId, metryka: zrodlo.metryka, limit: limitSkanu, zaszlePo: s.zaszle_zakladka,
+    tenantId, metryka: zrodlo.metryka, limit: limitZakladki, zaszlePo: s.zaszle_zakladka,
     zakres: { rodzaj: "zakladka", od: s.zakladka_od, kursor },
   });
-  if (zakladka.length >= limitSkanu) {
-    alerty.push(`automatyzacja ${flowId}: w zakładce skanu (15 min) ponad ${limitSkanu} zdarzeń; zdarzenia zatwierdzone z opóźnieniem mogły nie wejść`);
+  if (zakladka.length >= limitZakladki) {
+    alerty.push(`automatyzacja ${flowId}: w zakładce skanu (15 min przed kursorem) ponad ${limitZakladki} zdarzeń; sprawdzono najnowsze ${limitZakladki}, starsze transakcje zatwierdzone z opóźnieniem mogły nie wejść`);
   }
   const teraz = new Date(Number(s.teraz_ms));
   const activeMs = Number(s.active_ms);
@@ -486,7 +488,8 @@ async function zbudujWiadomoscWezla(
   if (migawka.szablon === "liquid") {
     let wlasciwosci: Record<string, unknown> | null = null;
     if (u.trigger_event_id) {
-      const klucz = u.trigger_event_id;
+      // (id, occurred_at) = pelna tozsamosc wiersza metric_events (klucz partycji)
+      const klucz = `${u.trigger_event_id}|${u.trigger_event_occurred_at ?? ""}`;
       if (!oto.zdarzenia.has(klucz)) {
         oto.zdarzenia.set(klucz, await zrodloZdarzen().pobierzWlasciwosci(klient, tenantId, u.trigger_event_id, u.trigger_event_occurred_at));
       }
@@ -518,6 +521,20 @@ async function zbudujWiadomoscWezla(
     sledzKlikniecia: zgody.klikniecia,
     sledzOtwarcia: zgody.otwarcia,
   });
+  // Wydanie N (do 0036): wiadomosc z tego kroku mogl zbudowac STARY kod w oknie deployu, bez
+  // journey_run_id. Przebieg "raz" to jedyny przebieg tej osoby w tym flow (stara unikalnosc),
+  // wiec przypinamy ja do niego (dopisanie tozsamosci, zawezone do tej jednej wiadomosci)
+  // zamiast wywracac sie na starej unikalnosci albo budowac druga.
+  if (u.entry_key === "raz") {
+    const { rows: stara } = await klient.query(
+      `update messages set journey_run_id = $4
+        where tenant_id = $1 and source_type = 'journey' and source_id = $2 and profile_id = $3
+          and journey_run_id is null
+        returning id`,
+      [tenantId, emailId, u.profile_id, u.id],
+    );
+    if (stara[0]) return { ok: true, messageId: stara[0].id, nowa: false };
+  }
   // Cel `on conflict` = nowa unikalnosc per przebieg (0035). Do czasu 0036 stoi tez stara
   // (bez przebiegu): wtedy drugi przebieg nie istnieje (ponowne wejscie wylaczone), a gdyby
   // jednak zaistnial, insert wywroci sie glosno zamiast cicho "pominac" mail.
@@ -549,7 +566,7 @@ async function zajmijUczestnika(klient: Klient, tenantId: string, id: string): P
             p.entered_at::text as entered_at, p.node_since::text as node_since, p.resume_at::text as resume_at,
             (p.resume_at is not null and p.resume_at < now() - $3::interval) as przeterminowany,
             (p.resume_at is not null and p.resume_at < now() - $4::interval) as przeterminowany_czekaj,
-            p.context, p.trigger_event_id, p.trigger_event_occurred_at::text as trigger_event_occurred_at,
+            p.context, p.trigger_event_id, p.trigger_event_occurred_at::text as trigger_event_occurred_at, p.entry_key,
             f.status as flow_status, v.definition, v.emails,
             coalesce((v.definition->'ustawienia'->>'wyjsciePoZakupie')::boolean, false) as wyjscie_po_zakupie
        from flow_participants p

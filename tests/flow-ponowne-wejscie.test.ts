@@ -200,6 +200,31 @@ describe("Automatyzacje E4a: wyzwalacz metryczny, ponowne wejście, zmienne", ()
       expect(t[0].powod).toContain("w tym przebiegu");
     });
 
+    it("wiadomość zbudowana przez STARY kod w oknie deployu (bez przebiegu) zostaje przypięta, nie ma 23505 ani drugiego maila", async () => {
+      const f = await prosty("REENTRY okno deployu", { tryb: "raz" });
+      await wlacz(f.id);
+      const { rows: v } = await getPool().query("select live_version from flows where tenant_id = $1 and id = $2", [tenantId, f.id]);
+      const { rows: p } = await getPool().query(
+        `insert into flow_participants (tenant_id, flow_id, profile_id, version, node_id, status, entered_at, node_since, context)
+         values ($1, $2, $3, $4, 'm', 'w_toku', now() - interval '1 minute', now() - interval '1 minute', '{}') returning id`,
+        [tenantId, f.id, profile.p1, v[0].live_version],
+      );
+      // stary kod: wiadomosc z tego kroku bez journey_run_id (np. jego transakcja zbudowala ja,
+      // a nowy worker dostaje te sama osobe na tym samym kroku)
+      const { rows: stara } = await getPool().query(
+        `insert into messages (tenant_id, profile_id, source_type, source_id, email, subject, body_html, click_token, unsubscribe_token)
+         values ($1, $2, 'journey', $3, 'reentry-p1@example.test', 'Witaj', '<p>x</p>', md5(random()::text), md5(random()::text)) returning id`,
+        [tenantId, profile.p1, f.emailId],
+      );
+      const d = new DostawcaAtrapa();
+      await uruchomAutomatyzacje(tenantId, { dostawca: d });
+      const m = await wiadomosciOsoby("p1", f.emailId);
+      expect(m).toHaveLength(1);
+      expect(m[0].id).toBe(stara[0].id);
+      expect(m[0].journey_run_id).toBe(p[0].id);
+      expect(d.wyslane.filter((x) => x === "reentry-p1@example.test").length).toBeLessThanOrEqual(1);
+    });
+
     it("backfill 0035: wiadomość w starym kształcie dostaje przebieg; wiadomość osoby bez przebiegu wycofuje migrację", async () => {
       const sql = readFileSync(join(KATALOG, "migrations", "0035_przebiegi_expand.sql"), "utf-8");
       const sekcja = sql.slice(sql.indexOf("-- >>> BACKFILL PRZEBIEGOW"), sql.indexOf("-- <<< BACKFILL PRZEBIEGOW"));

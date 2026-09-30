@@ -22,7 +22,7 @@ import {
   type ZrodloWyzwalacza,
 } from "../../domain/automatyzacje/graf";
 import type { MetrykaKatalogu } from "../../domain/automatyzacje/wyzwalanie";
-import { sprawdzSzablon } from "../../domain/email/szablon";
+import { maZmienne, sprawdzSzablon } from "../../domain/email/szablon";
 import { ponowneWejscieDostepne } from "./ponowne-wejscie";
 import { katalogMetryk, zrodloZdarzen } from "./zrodlo-zdarzen";
 import { nowyBlok, pustyDokument, wczytajDokument, type DokumentMaila } from "../../domain/email/bloki";
@@ -760,7 +760,11 @@ async function migawkaTresci(klient: Kl, tenantId: string, flowId: string, graf:
        from journeys where tenant_id = $1 and flow_id = $2 and id = any($3::uuid[])`,
     [tenantId, flowId, ids],
   );
-  return Object.fromEntries(rows.map((r) => [r.id, { subject: r.subject, html: r.html, szablon: "liquid" as const }]));
+  // znacznik tylko przy uzyciu zmiennych: migawka bez nich jest identyczna jak dotad (brak
+  // zbednej nowej wersji przy publikacji starego flow), a render i tak bylby tozsamoscia
+  return Object.fromEntries(rows.map((r) => [r.id, maZmienne(r.subject) || maZmienne(r.html)
+    ? { subject: r.subject, html: r.html, szablon: "liquid" as const }
+    : { subject: r.subject, html: r.html }]));
 }
 
 /**
@@ -895,6 +899,9 @@ export async function zmienStatus(tenantId: string, flowId: string, docelowy: Do
         "update flows set status = 'wlaczony', active_since = now(), updated_at = now() where tenant_id = $1 and id = $2",
         [tenantId, flowId],
       );
+      // kursor skanu wyzwalacza startuje od nowego active_since: zdarzenia z czasu przerwy i tak
+      // nie wchodza, a stary kursor sprzed doby dawalby falszywy alert "skan zalegly"
+      await klient.query("delete from flow_trigger_state where tenant_id = $1 and flow_id = $2", [tenantId, flowId]);
       if (obecny === "wstrzymany") {
         // Wiadomosc zbudowana przed dluga przerwa nie wychodzi fala po wznowieniu (review #2):
         // starsze niz doba koncza jako `suppressed` z powodem; swiezsze wychodza normalnie.

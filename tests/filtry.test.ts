@@ -7,8 +7,9 @@ import {
   Parametry,
   parsujDate,
   schematFiltra,
+  schematFiltraZdarzenia,
   schematWarunku,
-  zapytanieZPredykatemTenanta,
+  zapytanieFiltrowane,
   type Filtr,
   type Warunek,
 } from "../src/domain/filtry";
@@ -112,10 +113,17 @@ describe("Filtry: kompilacja do SQL", () => {
     expect(p.wartosci).toEqual([zly, zly]);
   });
 
-  it("pełne zapytanie zawsze z predykatem tenant_id = $1 (bez niego odmowa)", () => {
+  it("pełne zapytanie: predykat tenant_id = $1 składa helper (strukturalnie), alias walidowany", () => {
     const f: Filtr = { grupy: [{ warunki: [w({ pole: "a", typPola: "string", operator: "rowna", wartosc: "b" })] }] };
-    const q = zapytanieZPredykatemTenanta((x) => `select id from t where tenant_id = $1 and (${x})`, "01a00000-0000-7000-8000-000000000001", f, { zdarzenie: "t.properties" }, TERAZ);
+    const q = zapytanieFiltrowane({ kolumny: "t.id", zrodloSql: "metric_events t", alias: "t", tenantId: "01a00000-0000-7000-8000-000000000001", filtr: f, zrodlo: { zdarzenie: "t.properties" }, teraz: TERAZ });
+    expect(q.sql).toMatch(/^select t\.id from metric_events t where t\.tenant_id = \$1::uuid and \(/);
     expect(q.parametry[0]).toBe("01a00000-0000-7000-8000-000000000001");
-    expect(() => zapytanieZPredykatemTenanta((x) => `select id from t where (${x})`, "t", f, { zdarzenie: "t.properties" }, TERAZ)).toThrow(/tenant_id/);
+    expect(() => zapytanieFiltrowane({ kolumny: "1", zrodloSql: "x", alias: "t; drop table x", tenantId: "t", filtr: f, zrodlo: { zdarzenie: "t.properties" }, teraz: TERAZ })).toThrow(/alias/);
+  });
+
+  it("filtr wyzwalacza przyjmuje tylko warunki po zdarzeniu", () => {
+    const profilowy = { grupy: [{ warunki: [{ typ: "wlasciwosc_profilu", pole: { rodzaj: "standard", nazwa: "email" }, typPola: "string", operator: "nieustawione" }] }] };
+    expect(schematFiltra.safeParse(profilowy).success).toBe(true);
+    expect(schematFiltraZdarzenia.safeParse(profilowy).success).toBe(false);
   });
 });

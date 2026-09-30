@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   adresBezpieczny,
   dataDjango,
+  zrodloBezpieczne,
   floatformat,
   oczyscTemat,
   przygotujZrodlo,
@@ -106,14 +107,26 @@ describe("Szablony: bezpieczeństwo (AD-43)", () => {
 
 describe("Adresy w treści: javascript: nie przejdzie także bez zmiennych (przepiszLinki, zlozWiadomosc)", () => {
   it("wszystkie warianty zapisu schematu są odrzucane, http(s)/mailto/tel i względne zostają", () => {
-    for (const zly of ["javascript:alert(1)", "JaVaScRiPt:x", " javascript:x", "java\tscript:x", "java&#115;cript:x", "&#106avascript:x", "javascript&colon;x", "vbscript:x", "data:text/html,x", "java&shy;script:x"]) {
+    for (const zly of ["javascript:alert(1)", "JaVaScRiPt:x", " javascript:x", "java\tscript:x", "java&#115;cript:x", "&#106avascript:x", "javascript&colon;x", "vbscript:x", "data:text/html,x", "java&shy;script:x", "/sciezka", "//evil.test/x", "?a=b:c", ""]) {
       expect(adresBezpieczny(zly), zly).toBe(false);
     }
-    for (const dobry of ["https://sklep.pl/a?b=c:d", "http://x.pl", "mailto:a@b.pl", "tel:+48123", "#kotwica", "/sciezka:x", "?a=b:c"]) {
+    for (const dobry of ["https://sklep.pl/a?b=c:d", "http://x.pl", "mailto:a@b.pl", "tel:+48123", "#kotwica", " HTTPS://x.pl"]) {
       expect(adresBezpieczny(dobry), dobry).toBe(true);
     }
-    expect(sanityzujAdresy(`<a href="javascript:x">1</a><a/href=javascript:x>2</a><img src='data:text/html,x'><a href="https://ok.pl">3</a>`))
-      .toBe(`<a >1</a><a/ >2</a><img ><a href="https://ok.pl">3</a>`);
+    expect(sanityzujAdresy(`<a href="javascript:x">1</a><a/href=javascript:x>2</a><img src='data:text/html,x'><a href="https://ok.pl">3</a><a href="//evil.test">4</a>`))
+      .toBe(`<a >1</a><a/ >2</a><img ><a href="https://ok.pl">3</a><a >4</a>`);
+  });
+
+  it("źródła obrazów: http(s), cid, rastrowe data:image; srcset sprawdzany kandydat po kandydacie; background i poster też", () => {
+    expect(zrodloBezpieczne("https://cdn.pl/a.png")).toBe(true);
+    expect(zrodloBezpieczne("cid:logo")).toBe(true);
+    expect(zrodloBezpieczne("data:image/png;base64,AAAA")).toBe(true);
+    expect(zrodloBezpieczne("data:image/svg+xml;base64,AAAA")).toBe(false);
+    expect(zrodloBezpieczne("javascript:x")).toBe(false);
+    expect(sanityzujAdresy(`<img srcset="https://a.pl/1.png 1x, data:image/svg+xml,<svg/> 2x"><img srcset="https://a.pl/1.png 1x, https://a.pl/2.png 2x">`))
+      .toBe(`<img ><img srcset="https://a.pl/1.png 1x, https://a.pl/2.png 2x">`);
+    expect(sanityzujAdresy(`<td background="javascript:x">a</td><video poster='vbscript:x'></video><form action="javascript:x"><button formaction=javascript:x>`))
+      .toBe(`<td >a</td><video ></video><form ><button >`);
   });
 
   it("kampania i automatyzacja: link javascript: znika niezależnie od śledzenia kliknięć", () => {

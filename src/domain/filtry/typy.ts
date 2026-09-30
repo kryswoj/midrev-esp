@@ -119,6 +119,22 @@ export const schematFiltra = z.object({
   grupy: z.array(z.object({ warunki: z.array(schematWarunku).min(1).max(50) })).max(20),
 });
 export type Filtr = z.infer<typeof schematFiltra>;
+
+/**
+ * Filtr WYZWALACZA: wylacznie warunki po wlasciwosciach zdarzenia (jak w Klaviyo "trigger
+ * filters"). Warunek po profilu liczony bez profilu dawalby zawsze to samo (np. "email
+ * nieustawione" = prawda dla kazdego zdarzenia), wiec schemat go nie przyjmuje; filtr
+ * profilu to osobna warstwa (E4b, 4.6).
+ */
+export const schematFiltraZdarzenia = schematFiltra.superRefine((f, ctx) => {
+  f.grupy.forEach((g, gi) =>
+    g.warunki.forEach((w, wi) => {
+      if (w.typ !== "wlasciwosc_zdarzenia") {
+        ctx.addIssue({ code: "custom", message: "Filtr wyzwalacza przyjmuje tylko warunki po właściwościach zdarzenia.", path: ["grupy", gi, "warunki", wi, "typ"] });
+      }
+    }),
+  );
+});
 export type Grupa = Filtr["grupy"][number];
 
 // ── Daty ────────────────────────────────────────────────────────────────────

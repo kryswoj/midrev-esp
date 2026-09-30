@@ -97,9 +97,10 @@ export const UUID_ZERO = "00000000-0000-0000-0000-000000000000";
  * Dwa rodzaje odczytu (plan 2.6):
  *  - `nowe`: (recorded_at, id) > kursor, rosnaco, z limitem. Zawsze posuwa kursor naprzod,
  *    wiec duzy wolumen nie zapetla skanu; `nieWczesniejNiz` = teraz - 24 h (worker lezal);
- *  - `zakladka`: recorded_at w (kursor - 15 min, kursor]: transakcje zatwierdzone poza
- *    kolejnoscia, niewidoczne przy poprzednim skanie. Ponowne przetworzenie jest bezpieczne
- *    (unikalnosc wejscia), kursor sie nie rusza.
+ *  - `zakladka`: recorded_at w (kursor - 15 min, kursor], MALEJACO: transakcje zatwierdzone
+ *    poza kolejnoscia (niewidoczne przy poprzednim skanie) leza przy samym kursorze, wiec przy
+ *    limicie czytamy najpierw je. Ponowne przetworzenie jest bezpieczne (unikalnosc wejscia),
+ *    kursor sie nie rusza.
  */
 export interface ZapytanieKandydatow {
   tenantId: string;

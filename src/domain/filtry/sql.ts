@@ -6,8 +6,8 @@ import { parsujDate, type Filtr, type PoleStandardoweProfilu, type Warunek } fro
  *  - kazda wartosc i KAZDY klucz JSON idzie jako parametr (`properties -> $n::text`),
  *    nic z definicji nie jest sklejane w tekst zapytania;
  *  - wyrazenia kolumn (`zrodlo`) podaje wolajacy kod, nigdy uzytkownik;
- *  - fragment NIE zawiera predykatu tenanta: zapytanie, ktore go uzywa, buduje
- *    `zapytanieZPredykatemTenanta`, ktore wymusza `tenant_id = $1`.
+ *  - fragment NIE zawiera predykatu tenanta: produkcyjne zapytanie buduje wylacznie
+ *    `zapytanieFiltrowane`, ktore sklada `alias.tenant_id = $1` samo.
  *
  * Daty przechodza przez funkcje `filtr_data(text)` z migracji 0035 (ten sam wzorzec co
  * `WZORZEC_DATY`, zly zapis albo 31 lutego = null zamiast bledu calego zapytania).
@@ -138,19 +138,27 @@ export function kompilujFiltr(f: Filtr | null | undefined, z: ZrodloSql, p: Para
 }
 
 /**
- * Jedyna droga do pelnego zapytania z filtrem: predykat tenanta jest pierwszym parametrem
- * i nie da sie go pominac. `szablon` dostaje `$1` jako tenant i miejsce `{FILTR}`.
+ * Jedyna produkcyjna droga do zapytania z filtrem (AD-2, AD-42): predykat tenanta sklada
+ * helper, strukturalnie, jako pierwszy parametr - wolajacy nie moze go pominac ani podmienic.
+ * `zrodloSql` to stala klauzula FROM z kodu (np. `metric_events e`), `alias` wskazuje tabele
+ * z kolumna tenant_id. `kompilujFiltr` zwraca sam fragment i jest do uzytku wewnetrznego
+ * (ten helper, testy parytetu).
  */
-export function zapytanieZPredykatemTenanta(
-  szablon: (filtr: string) => string,
-  tenantId: string,
-  f: Filtr | null | undefined,
-  z: ZrodloSql,
-  teraz: Date,
-): { sql: string; parametry: unknown[] } {
-  const p = new Parametry([tenantId]);
-  const filtr = kompilujFiltr(f, z, p, teraz);
-  const sql = szablon(filtr);
-  if (!/\btenant_id\s*=\s*\$1\b/.test(sql)) throw new Error("filtr: zapytanie bez predykatu tenant_id = $1");
-  return { sql, parametry: p.wartosci };
+export function zapytanieFiltrowane(opcje: {
+  kolumny: string;
+  zrodloSql: string;
+  alias: string;
+  tenantId: string;
+  filtr: Filtr | null | undefined;
+  zrodlo: ZrodloSql;
+  teraz: Date;
+  koniec?: string;
+}): { sql: string; parametry: unknown[] } {
+  if (!/^[a-z_][a-z0-9_]*$/.test(opcje.alias)) throw new Error(`filtr: niedozwolony alias ${opcje.alias}`);
+  const p = new Parametry([opcje.tenantId]);
+  const filtr = kompilujFiltr(opcje.filtr, opcje.zrodlo, p, opcje.teraz);
+  return {
+    sql: `select ${opcje.kolumny} from ${opcje.zrodloSql} where ${opcje.alias}.tenant_id = $1::uuid and (${filtr})${opcje.koniec ? ` ${opcje.koniec}` : ""}`,
+    parametry: p.wartosci,
+  };
 }

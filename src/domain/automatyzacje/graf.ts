@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { filtrPusty, opiszFiltr, schematFiltra } from "../filtry";
+import { filtrPusty, opiszFiltr, schematFiltraZdarzenia } from "../filtry";
 import { METRYKA_ZE_STAREGO_TYPU, METRYKI_WBUDOWANE } from "../zdarzenia/kontrakt";
 
 /**
@@ -202,7 +202,7 @@ export const schematZrodlaWyzwalacza = z.discriminatedUnion("rodzaj", [
     rodzaj: z.literal("metryka"),
     metryka: schematMetrykiRef,
     /** filtr wyzwalacza (Klaviyo: trigger filter) po wlasciwosciach zdarzenia */
-    filtr: schematFiltra.optional(),
+    filtr: schematFiltraZdarzenia.optional(),
   }),
   z.object({
     rodzaj: z.literal("lista"),
