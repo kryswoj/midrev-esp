@@ -1,0 +1,19 @@
+# midrev-esp: reguły łańcucha DOCKER-USER. Porty publikowane przez Dockera omijają ufw;
+# ta reguła odcina ruch Z INTERNETU do kontenerów, niezależnie od tego, co ktoś wpisze
+# w `ports:`. Druga warstwa po "ip": "127.0.0.1" w /etc/docker/daemon.json.
+# Interfejs zewnętrzny: /etc/default/midrev-esp-firewall (ZEWN_IF=...), wpisuje provision.sh.
+[Unit]
+Description=midrev-esp: blokada ruchu z internetu do kontenerow (DOCKER-USER)
+After=docker.service
+Requires=docker.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+EnvironmentFile=/etc/default/midrev-esp-firewall
+ExecStart=/srv/midrev-esp/ops/lib/docker-user.sh ${ZEWN_IF}
+ExecReload=/srv/midrev-esp/ops/lib/docker-user.sh ${ZEWN_IF}
+
+[Install]
+WantedBy=docker.service

@@ -20,8 +20,10 @@ add_filter( 'http_request_host_is_external', static function ( $external, $host 
 }, 10, 2 );
 
 // ...i to samo dotyczy portu: wp_http_validate_url dopuszcza tylko 80/443/8080,
-// a ESP w sandboksie nasluchuje na 3005.
+// a ESP w sandboksie nasluchuje na 3005 (serwer dev, baza midrev_esp), a testowy
+// odbiornik webhookow na 3015 (tests/odbiornik-webhookow.ts, baza midrev_esp_test).
 add_filter( 'http_allowed_safe_ports', static function ( $ports ) {
     $ports[] = 3005;
+    $ports[] = 3015;
     return $ports;
 } );

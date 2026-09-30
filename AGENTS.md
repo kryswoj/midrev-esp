@@ -73,6 +73,60 @@ prawdziwego wdrożenia (Railway/Supabase realny projekt), obowiązują zasady z
 `my-marketingskills/CLAUDE.md` (tokeny infra, zapis do produkcji, Codex review) —
 przeczytać ZANIM padnie pierwsza decyzja o realnym deployu.
 
+## Testy
+
+`npm test` (= `npx vitest run`) chodzi na **osobnej bazie `midrev_esp_test`** w tym samym
+kontenerze Postgresa, nie na `midrev_esp`. Serwera dev :3005 ani workera nie trzeba
+zatrzymywać: nie widzą danych testów, a testy nie widzą ich danych.
+
+- **Zakładanie i migracje — same.** `tests/global-setup.ts` (globalSetup vitest) zakłada bazę,
+  jeśli jej nie ma, i puszcza wszystkie migracje tym samym `scripts/migrate.ts` co dev
+  (z ochroną checksum). Nowa migracja w `migrations/` wchodzi przy następnym `npm test`.
+- **Adres:** `TEST_DATABASE_URL` (środowisko albo `.env`), domyślnie
+  `postgresql://midrev:midrev@localhost:5433/midrev_esp_test`. Nigdy nie jest wyprowadzany
+  z `DATABASE_URL`.
+- **Twarde zabezpieczenie:** `tests/setup-env.ts` bezwarunkowo nadpisuje `DATABASE_URL`
+  adresem bazy testowej, a globalSetup i setup-env odmawiają startu, jeśli nazwa bazy nie
+  kończy się na `_test` (`tests/baza-testowa.ts`). Testy kasują dane (`delete from tenants
+  where name like ...`); na dev albo produkcji by je zniszczyły.
+- **Rozjazd checksum** (ktoś poprawił niezacommitowaną migrację, którą baza testowa już
+  ma): `npm run test:reset` kasuje `midrev_esp_test` i zakłada ją od zera. Działa tylko na
+  bazie `*_test`.
+- Pliki idą po kolei (`fileParallelism: false`), bo dzielą jedną bazę testową. Dwa
+  równoległe `npm test` na tej samej maszynie dalej mogą sobie wchodzić w drogę.
+
+### Testy z żywym WooCommerce (`npm run test:woo`)
+
+`sklepy`, `webhooki-klient` i `import-pelny` rozmawiają z sandboxem Woo (:8091, klucze
+w `sandbox/woo/.woo-credentials`; bez nich się pomijają). Też chodzą na bazie testowej.
+
+Dostawa webhooka ze sklepu **nie idzie na serwer dev :3005** (on pisze do bazy dev, a sklep
+z bazy testowej dostałby tam 404). Na czas testu `tests/odbiornik-webhookow.ts` stawia mały
+serwer HTTP na `172.22.0.1:3015` z **tym samym handlerem trasy** co produkcja
+(`src/app/api/webhooks/woo/[storeId]/route.ts`), piszący do bazy testowej. Kod produkcyjny
+bez zmian; mu-plugin sandboxa (`sandbox/woo/mu-sandbox-ssl.php`) dopuszcza port 3015 obok 3005.
+
+Testy czekające na dostawę (zamówienie/klient z Woo w `raw_events`) są w `npm test`
+**pomijane** i idą tylko w `npm run test:woo` (`TEST_WOO_DOSTAWA=1`), bo wymagają, żeby
+kontener Woo dosięgnął hosta na porcie 3015. Na VPS-ie ufw wpuszcza tylko porty z listy,
+więc potrzebna jest jednorazowa reguła (tylko z sieci dockera sandboxa, nie z internetu):
+
+```bash
+sudo ufw allow in on br-f72b08e32e0b from 172.22.0.0/16 to 172.22.0.1 port 3015 proto tcp \
+  comment 'midrev-esp testowy odbiornik webhookow Woo'
+```
+
+Bez niej `test:woo` padnie na teście „zamowienie zlozone w sklepie dociera webhookiem”.
+Reszta testów Woo (zakładanie webhooków, import historii) idzie w zwykłym `npm test`.
+
+### Resztki starych testów w bazie dev
+
+Do 25.09 testy chodziły na `midrev_esp`. `npm run sprzatnij-resztki-testow` pokazuje
+(podgląd, domyślnie) tenanty testowe po jawnej liście prefiksów nazw; `-- --wykonaj` je
+usuwa (tylko lokalny sandbox, odczyt zwrotny w transakcji). Tenant demo
+`01a043a1-472a-7769-a85f-a919ca2395fd` nie jest usuwany nigdy; kampanie „Test …” w nim
+są tylko raportowane. Nowy prefiks tenanta w testach = dopisz go do `WZORCE` w skrypcie.
+
 <!-- BEGIN:nextjs-agent-rules -->
 
 # This is NOT the Next.js you know

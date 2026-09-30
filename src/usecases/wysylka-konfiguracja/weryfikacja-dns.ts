@@ -37,17 +37,51 @@ export interface WynikRekordu {
   przejsciowy: boolean;
 }
 
+/**
+ * Czy DMARC przejdzie przy tej konfiguracji (0029). DMARC wymaga, żeby SPF albo DKIM
+ * przeszedł Z WYRÓWNANIEM do domeny From: SPF liczony jest na domenie koperty (Return-Path),
+ * DKIM na domenie `d=` podpisu. Przy ścisłym trybie (`aspf=s`, `adkim=s`, midrev.pl ma oba)
+ * „prawie ta sama domena" nie wystarcza — stąd ten wynik jest osobno i ma jasny komunikat.
+ */
+export interface WyrownanieDmarc {
+  aspf: "s" | "r";
+  adkim: "s" | "r";
+  /** domena, na której odbiorca sprawdza SPF (koperta), i domena From */
+  domenaSpf: string;
+  domenaFrom: string;
+  spf: "wyrownany" | "niewyrownany" | "nie_przechodzi";
+  dkim: "wyrownany" | "nie_przechodzi";
+  dmarcPrzejdzie: boolean;
+  /** zdanie dla człowieka, gdy coś jest nie tak (null = obie nogi stoją) */
+  komunikat: string | null;
+}
+
 export interface WynikWeryfikacji {
   spf: WynikRekordu;
   dkim: WynikRekordu;
   dmarc: WynikRekordu & { polityka: PolitykaDmarc | null };
+  /** brak w raportach sprzed 0029 */
+  wyrownanie?: WyrownanieDmarc | null;
+  /** tryb, w którym oceniono SPF (brak w raportach sprzed 0029 = wlasny_serwer) */
+  rodzajSerwera?: RodzajSerwera;
   mx: { rekordy: string[]; uwaga: string | null; przejsciowy: boolean };
   status: StatusDomeny;
   /** czy którykolwiek wynik jest niepewny przez awarię DNS — wtedy nie wolno obniżać statusu */
   awariaDns: boolean;
 }
 
+export type RodzajSerwera = "wlasny_serwer" | "przekaznik";
+
 export interface KontekstSerwera {
+  /**
+   * `wlasny_serwer` (domyślnie): SPF oceniany dla adresów IP hosta SMTP.
+   * `przekaznik` (SES, Brevo, Mailgun): host SMTP nie oddaje poczty odbiorcom, więc jego
+   * IP nic nie mówi; SPF oceniany na domenie koperty (musi zawierać mechanizm dostawcy,
+   * ≤10 zapytań DNS, MX dla odbić), bez porównywania IP.
+   */
+  rodzaj?: RodzajSerwera;
+  /** domena koperty (Return-Path / custom MAIL FROM); null = koperta w domenie From */
+  domenaKoperty?: string | null;
   /** selektor DKIM podany przez klienta */
   selektorDkim: string | null;
   /** mechanizm SPF dostawcy, np. "include:_spf.google.com" */
@@ -297,6 +331,114 @@ export function propozycjaSpf(kontekst: KontekstSerwera): string {
   return `v=spf1 ${mechanizm} ~all`;
 }
 
+/** Adres z bloku dokumentacyjnego (RFC 5737): nie występuje w żadnym prawdziwym SPF. */
+const IP_KONTROLNE = "192.0.2.1";
+
+/**
+ * SPF w trybie przekaźnika: rekord na domenie KOPERTY. Przekaźnik oddaje pocztę ze swoich
+ * serwerów, a nie z hosta, z którym rozmawia panel, więc porównanie IP hosta SMTP
+ * zablokowałoby każdą poprawną konfigurację SES (dotychczasowy błąd: FR45 blokowało SES).
+ */
+async function sprawdzSpfPrzekaznika(k: KontekstSerwera, resolver: ResolverDns): Promise<WynikRekordu> {
+  const koperta = k.domenaKoperty;
+  if (!koperta) {
+    return wynik("niesprawdzony", {
+      problem: "Przy przekaźniku (np. Amazon SES) SPF sprawdzamy na domenie koperty (Return-Path), a nie jest ona podana.",
+      poprawka: "W ustawieniach serwera podaj domenę koperty, np. bounce.twojadomena.pl (u SES: „Custom MAIL FROM domain”).",
+    });
+  }
+  if (!k.mechanizmSpf) {
+    return wynik("niesprawdzony", {
+      problem: "Nie wiemy, jaki mechanizm SPF ma mieć przekaźnik.",
+      poprawka: "Podaj SPF dostawcy przy domenie, np. include:amazonses.com dla Amazon SES.",
+    });
+  }
+  const propozycja = `v=spf1 ${k.mechanizmSpf} ~all`;
+  let rekordy: string[];
+  try {
+    rekordy = await rekordySpf(koperta, resolver);
+  } catch (blad) {
+    return wynik("niesprawdzony", { problem: `Nie udało się odczytać SPF domeny koperty ${koperta}: ${opisAwarii(blad)}.`, poprawka: "Spróbuj ponownie za kilka minut.", przejsciowy: true });
+  }
+  if (rekordy.length === 0) {
+    return wynik("brak", {
+      problem: `Domena koperty ${koperta} nie ma rekordu SPF — odbiorcy sprawdzają SPF właśnie na niej.`,
+      poprawka: `Dodaj rekord TXT na ${koperta}: ${propozycja}`,
+    });
+  }
+  if (rekordy.length > 1) {
+    return wynik("bledny", {
+      znaleziono: rekordy.join("  |  "),
+      problem: `Domena koperty ${koperta} ma ${rekordy.length} rekordy SPF (permerror).`,
+      poprawka: `Zostaw jeden: ${propozycja}`,
+    });
+  }
+  const rekord = rekordy[0].trim();
+  const uwagi: string[] = [
+    `SPF oceniany na domenie koperty ${koperta} (tryb przekaźnika). Adresu hosta SMTP nie porównujemy: pocztę do odbiorców oddają serwery dostawcy.`,
+  ];
+  const all = rekord.match(/\s([+\-~?]?)all(\s|$)/i);
+  if (all && (all[1] === "+" || all[1] === "")) {
+    return wynik("bledny", { znaleziono: rekord, problem: "Rekord kończy się na +all: każdy serwer może wysyłać w imieniu tej domeny.", poprawka: `Zamień rekord na: ${propozycja}` });
+  }
+  if (!(await zawieraMechanizm(koperta, k.mechanizmSpf, resolver))) {
+    return wynik("bledny", {
+      znaleziono: rekord,
+      problem: `Rekord na ${koperta} nie zawiera ${k.mechanizmSpf}, więc serwery przekaźnika nie są dopuszczone.`,
+      poprawka: `Ustaw rekord TXT na ${koperta}: ${propozycja}`,
+    });
+  }
+  // Limit 10 zapytań DNS (RFC 7208): pełna ewaluacja dla adresu, który nie pasuje do
+  // niczego, przechodzi przez wszystkie include — permerror = rekord za ciężki albo zepsuty.
+  const kontrola = await bezpiecznieEwaluuj(IP_KONTROLNE, koperta, resolver);
+  if (kontrola === "permerror") {
+    return wynik("bledny", {
+      znaleziono: rekord,
+      problem: "Rekord SPF domeny koperty jest niepoprawny albo wymaga ponad 10 zapytań DNS (limit RFC 7208).",
+      poprawka: `Uprość rekord do: ${propozycja}`,
+    });
+  }
+  if (kontrola === "temperror") {
+    return wynik("niesprawdzony", { znaleziono: rekord, problem: "Nie udało się rozwinąć wszystkich include w SPF domeny koperty (DNS nie odpowiedział).", poprawka: "Spróbuj ponownie za kilka minut.", przejsciowy: true });
+  }
+  // MX koperty: SES wymaga DOKŁADNIE jednego (feedback-smtp.<region>.amazonses.com). Bez
+  // niego SES po cichu wraca do domyślnego MAIL FROM (amazonses.com) i SPF przestaje
+  // być wyrównany — „ok" byłoby wtedy kłamstwem.
+  let mx: { exchange: string }[] = [];
+  try {
+    mx = await resolver.mx(koperta);
+  } catch (blad) {
+    if (!czyBrakRekordu(blad)) {
+      return wynik("niesprawdzony", { znaleziono: rekord, problem: `Nie udało się odczytać MX domeny koperty: ${opisAwarii(blad)}.`, poprawka: "Spróbuj ponownie za kilka minut.", przejsciowy: true });
+    }
+  }
+  if (mx.length === 0) {
+    return wynik("bledny", {
+      znaleziono: rekord,
+      problem: `Domena koperty ${koperta} nie ma rekordu MX. Przekaźnik nie przyjmie na nią odbić i (SES) wróci do własnej domeny koperty, a SPF przestanie być wyrównany z From.`,
+      poprawka: `Dodaj rekord MX na ${koperta} wskazany przez dostawcę (SES: 10 feedback-smtp.<region>.amazonses.com).`,
+    });
+  }
+  // Amazon SES (include:amazonses.com): custom MAIL FROM działa WYŁĄCZNIE z dokładnie
+  // jednym MX na feedback-smtp.<region>.amazonses.com. Inny albo kilka MX = SES po cichu
+  // wraca do własnej koperty (amazonses.com), SPF przestaje być wyrównany — więc „błędny",
+  // nie uwaga. Inni dostawcy: kilka MX bywa poprawne, zostaje uwaga.
+  const ses = k.mechanizmSpf.toLowerCase() === "include:amazonses.com";
+  if (ses) {
+    const cele = mx.map((m) => m.exchange.toLowerCase().replace(/\.$/, ""));
+    if (mx.length !== 1 || !/^feedback-smtp\.[a-z0-9-]+\.amazonses\.com$/.test(cele[0])) {
+      return wynik("bledny", {
+        znaleziono: `${rekord}  |  MX: ${cele.join(", ")}`,
+        problem: `Amazon SES wymaga na ${koperta} DOKŁADNIE jednego rekordu MX wskazującego feedback-smtp.<region>.amazonses.com (jest: ${cele.join(", ")}). Inaczej SES nie użyje tej domeny jako koperty i SPF nie będzie wyrównany.`,
+        poprawka: `Zostaw jeden rekord MX na ${koperta}: 10 feedback-smtp.<region>.amazonses.com (region tożsamości SES, np. eu-central-1).`,
+      });
+    }
+  } else if (mx.length > 1) {
+    uwagi.push(`Domena koperty ma ${mx.length} rekordy MX — sprawdź u dostawcy, czy to zamierzone.`);
+  }
+  return wynik("ok", { znaleziono: rekord, uwagi });
+}
+
 async function sprawdzSpf(domena: string, k: KontekstSerwera, resolver: ResolverDns): Promise<WynikRekordu> {
   let rekordy: string[];
   try {
@@ -518,11 +660,47 @@ async function rekordyDmarc(nazwa: string, resolver: ResolverDns): Promise<strin
   }
 }
 
+/** Czy dwie domeny są wyrównane w trybie luźnym: ta sama albo jedna jest subdomeną drugiej. */
+function wyrownaneLuzno(a: string, b: string): boolean {
+  return a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
+}
+
+function ocenWyrownanie(
+  domena: string,
+  tagiRekordu: Map<string, string> | null,
+  nogi: { spfOk: boolean; dkimOk: boolean; domenaSpf: string },
+): WyrownanieDmarc {
+  const aspf = tagiRekordu?.get("aspf")?.toLowerCase() === "s" ? "s" : "r";
+  const adkim = tagiRekordu?.get("adkim")?.toLowerCase() === "s" ? "s" : "r";
+  const spfZgodny = aspf === "s" ? nogi.domenaSpf === domena : wyrownaneLuzno(nogi.domenaSpf, domena);
+  const spf = !nogi.spfOk ? "nie_przechodzi" : spfZgodny ? "wyrownany" : "niewyrownany";
+  // Klucz DKIM sprawdzamy pod <selektor>._domainkey.<domena From>, więc podpis tym kluczem
+  // ma d= równe domenie From: wyrównany także przy adkim=s.
+  const dkim = nogi.dkimOk ? "wyrownany" : "nie_przechodzi";
+  const dmarcPrzejdzie = spf === "wyrownany" || dkim === "wyrownany";
+  let komunikat: string | null = null;
+  if (!dmarcPrzejdzie) {
+    komunikat =
+      spf === "niewyrownany"
+        ? `DMARC NIE przejdzie: SPF przechodzi na ${nogi.domenaSpf}, ale przy aspf=${aspf} nie jest wyrównany z ${domena}, a DKIM nie jest poprawny. Skrzynki z polityką quarantine/reject wrzucą pocztę do spamu albo ją odrzucą.`
+        : `DMARC NIE przejdzie: ani SPF (${nogi.domenaSpf}), ani DKIM nie dają wyrównania z ${domena}. Popraw DKIM — to jedyna noga, która działa niezależnie od koperty.`;
+  } else if (spf !== "wyrownany") {
+    komunikat =
+      spf === "niewyrownany"
+        ? `DMARC stoi wyłącznie na DKIM: przy aspf=${aspf} koperta ${nogi.domenaSpf} nie jest wyrównana z ${domena}. Awaria podpisu DKIM oznaczałaby od razu spam albo odrzucenie. Rozwiązanie: własny rekord DMARC dla ${domena} z aspf=r.`
+        : `DMARC stoi wyłącznie na DKIM: SPF koperty ${nogi.domenaSpf} nie przechodzi.`;
+  } else if (dkim !== "wyrownany") {
+    komunikat = `DMARC stoi wyłącznie na SPF (koperta ${nogi.domenaSpf}). Przekazanie maila dalej psuje SPF — popraw DKIM, żeby mieć drugą nogę.`;
+  }
+  return { aspf, adkim, domenaSpf: nogi.domenaSpf, domenaFrom: domena, spf, dkim, dmarcPrzejdzie, komunikat };
+}
+
 async function sprawdzDmarc(
   domena: string,
   dkimOk: boolean,
   resolver: ResolverDns,
-): Promise<WynikRekordu & { polityka: PolitykaDmarc | null }> {
+  nogi: { spfOk: boolean; domenaSpf: string } = { spfOk: false, domenaSpf: domena },
+): Promise<WynikRekordu & { polityka: PolitykaDmarc | null; wyrownanie: WyrownanieDmarc | null }> {
   const propozycja = `v=DMARC1; p=none; rua=mailto:dmarc@${domena}`;
   // Spacer w górę drzewa (DMARCbis): brak rekordu na mail.firma.pl oznacza, że obowiązuje
   // rekord z firma.pl. Zatrzymujemy się przed samą domeną najwyższego poziomu. Przy
@@ -537,7 +715,7 @@ async function sprawdzDmarc(
       if (znalezione.length) break;
     }
   } catch (blad) {
-    return { ...wynik("niesprawdzony", { problem: `Nie udało się odczytać DMARC: ${opisAwarii(blad)}.`, poprawka: "Spróbuj ponownie za kilka minut.", przejsciowy: true }), polityka: null };
+    return { ...wynik("niesprawdzony", { problem: `Nie udało się odczytać DMARC: ${opisAwarii(blad)}.`, poprawka: "Spróbuj ponownie za kilka minut.", przejsciowy: true }), polityka: null, wyrownanie: null };
   }
   if (znalezione.length === 0) {
     return {
@@ -546,12 +724,14 @@ async function sprawdzDmarc(
         poprawka: `Dodaj rekord TXT na _dmarc.${domena}: ${propozycja}`,
       }),
       polityka: null,
+      wyrownanie: null,
     };
   }
   if (znalezione.length > 1) {
     return {
       ...wynik("bledny", { znaleziono: znalezione.join("  |  "), problem: `Pod _dmarc.${zrodlo} są ${znalezione.length} rekordy DMARC — odbiorcy ignorują wtedy wszystkie.`, poprawka: "Zostaw jeden rekord." }),
       polityka: null,
+      wyrownanie: null,
     };
   }
   const rekord = znalezione[0];
@@ -564,6 +744,7 @@ async function sprawdzDmarc(
     return {
       ...wynik("bledny", { znaleziono: rekord, problem: "Rekord nie ma poprawnego tagu p= (none, quarantine albo reject).", poprawka: `Popraw rekord, np.: ${propozycja}` }),
       polityka: null,
+      wyrownanie: null,
     };
   }
   const polityka = surowaPolityka as PolitykaDmarc;
@@ -575,12 +756,18 @@ async function sprawdzDmarc(
     uwagi.push(`adkim=s: serwer musi podpisywać DKIM dokładnie domeną ${domena} (d=${domena}). Podpis domeną nadrzędną albo dostawcy nie wystarczy.`);
   }
   if (t.get("aspf")?.toLowerCase() === "s") {
-    uwagi.push(`aspf=s: SPF da wyrównanie tylko wtedy, gdy adres zwrotny (Return-Path) jest dokładnie w ${domena}. Wysyłamy z kopertą równą adresowi nadawcy, ale część dostawców przepisuje ją na własną domenę — wtedy DMARC stoi wyłącznie na DKIM.`);
+    uwagi.push(
+      nogi.domenaSpf === domena
+        ? `aspf=s: koperta (Return-Path) jest dokładnie w ${domena}, więc SPF daje wyrównanie.`
+        : `aspf=s: SPF liczony jest na kopercie ${nogi.domenaSpf}, która nie jest dokładnie ${domena} — przy ścisłym trybie SPF nie da wyrównania i DMARC stoi wyłącznie na DKIM.`,
+    );
   }
   if (polityka !== "none" && !dkimOk) {
     uwagi.push(`Polityka ${polityka} przy niezweryfikowanym DKIM: każdy mail, który nie przejdzie SPF z wyrównaniem, trafi do spamu albo zostanie odrzucony.`);
   }
-  return { ...wynik("ok", { znaleziono: rekord, uwagi }), polityka };
+  const wyrownanie = ocenWyrownanie(domena, t, { spfOk: nogi.spfOk, dkimOk, domenaSpf: nogi.domenaSpf });
+  if (wyrownanie.komunikat) uwagi.push(wyrownanie.komunikat);
+  return { ...wynik("ok", { znaleziono: rekord, uwagi }), polityka, wyrownanie };
 }
 
 // ─────────────────────────────── MX ─────────────────────────────────────────
@@ -609,16 +796,19 @@ export async function zweryfikujDomene(
   kontekst: KontekstSerwera,
   resolver: ResolverDns,
 ): Promise<WynikWeryfikacji> {
+  const rodzajSerwera: RodzajSerwera = kontekst.rodzaj ?? "wlasny_serwer";
+  // Domena, na której odbiorca sprawdzi SPF: koperta, gdy podana, inaczej domena From.
+  const domenaSpf = kontekst.domenaKoperty ?? domena;
   const [spf, dkim, mx] = await Promise.all([
-    sprawdzSpf(domena, kontekst, resolver),
+    rodzajSerwera === "przekaznik" ? sprawdzSpfPrzekaznika(kontekst, resolver) : sprawdzSpf(domenaSpf, kontekst, resolver),
     sprawdzDkim(domena, kontekst, resolver),
     sprawdzMx(domena, resolver),
   ]);
-  const dmarc = await sprawdzDmarc(domena, dkim.status === "ok", resolver);
+  const { wyrownanie, ...dmarc } = await sprawdzDmarc(domena, dkim.status === "ok", resolver, { spfOk: spf.status === "ok", domenaSpf });
   const trzy = [spf, dkim, dmarc];
   const okCount = trzy.filter((r) => r.status === "ok").length;
   const status: StatusDomeny = okCount === 3 ? "verified" : okCount === 0 ? "failed" : "partial";
-  return { spf, dkim, dmarc, mx, status, awariaDns: trzy.some((r) => r.przejsciowy) };
+  return { spf, dkim, dmarc, mx, status, awariaDns: trzy.some((r) => r.przejsciowy), wyrownanie, rodzajSerwera };
 }
 
 /** Rekord do wklejenia u rejestratora — tabela Host / Typ / Wartość (wzorzec Klaviyo). */
@@ -636,8 +826,16 @@ export interface RekordDoUstawienia {
 
 export function rekordyDoUstawienia(domena: string, kontekst: KontekstSerwera): RekordDoUstawienia[] {
   const selektor = kontekst.selektorDkim ?? "<selektor>";
+  // SPF stoi na domenie KOPERTY, gdy jest podana (przekaźnik zawsze): host względny
+  // wobec domeny From, np. „bounce" dla bounce.news.midrev.pl
+  const domenaSpf = kontekst.domenaKoperty ?? domena;
+  const hostSpf = domenaSpf === domena ? "@" : domenaSpf.endsWith(`.${domena}`) ? domenaSpf.slice(0, -(domena.length + 1)) : domenaSpf;
+  const wartoscSpf =
+    kontekst.rodzaj === "przekaznik"
+      ? `v=spf1 ${kontekst.mechanizmSpf ?? "include:<SPF dostawcy>"} ~all`
+      : propozycjaSpf(kontekst);
   return [
-    { rodzaj: "spf", host: "@", pelnaNazwa: domena, typ: "TXT", wartosc: propozycjaSpf(kontekst), doSkopiowania: Boolean(kontekst.mechanizmSpf || kontekst.ipSerwera?.length) },
+    { rodzaj: "spf", host: hostSpf, pelnaNazwa: domenaSpf, typ: "TXT", wartosc: wartoscSpf, doSkopiowania: Boolean(kontekst.mechanizmSpf || (kontekst.rodzaj !== "przekaznik" && kontekst.ipSerwera?.length)) },
     {
       rodzaj: "dkim",
       host: `${selektor}._domainkey`,

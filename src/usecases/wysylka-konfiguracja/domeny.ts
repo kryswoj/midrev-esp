@@ -193,15 +193,27 @@ export async function usunDomene(tenantId: string, domainId: string): Promise<Wy
 }
 
 /**
- * Kontekst serwera do oceny SPF: adresy IP skonfigurowanego serwera SMTP tenanta.
- * Serwer deweloperski (Mailpit) nie ma sensu w SPF — nie podajemy go wcale.
+ * Kontekst serwera do oceny SPF: rodzaj serwera, domena koperty i adresy IP
+ * skonfigurowanego serwera SMTP tenanta. Serwer deweloperski (Mailpit) nie ma sensu
+ * w SPF — nie podajemy go wcale. Przekaźnik (SES) też nie: pocztę do odbiorców oddają
+ * serwery dostawcy, nie host, z którym rozmawia panel, więc jego IP nic nie mówi.
+ * Domena koperty liczy się tylko wtedy, gdy serwer wysyła z TEJ domeny (adres nadawcy
+ * w sprawdzanej domenie) — inna domena tego samego konta ma własną kopertę = From.
  */
 async function kontekstSerwera(tenantId: string, d: DomenaWysylkowa, lookup?: FunkcjaLookup): Promise<KontekstSerwera> {
   const kontekst: KontekstSerwera = { selektorDkim: d.selektorDkim, mechanizmSpf: d.mechanizmSpf, ipSerwera: null, hostSerwera: null };
-  const { rows } = await getPool().query("select host, port from tenant_smtp_configs where tenant_id = $1", [tenantId]);
+  const { rows } = await getPool().query(
+    "select host, port, relay_mode, envelope_domain, sending_domain_id from tenant_smtp_configs where tenant_id = $1",
+    [tenantId],
+  );
   const serwer = rows[0];
   if (!serwer) return kontekst;
   kontekst.hostSerwera = serwer.host;
+  if (serwer.sending_domain_id === d.id) {
+    kontekst.rodzaj = serwer.relay_mode === "przekaznik" ? "przekaznik" : "wlasny_serwer";
+    kontekst.domenaKoperty = serwer.envelope_domain ?? null;
+    if (kontekst.rodzaj === "przekaznik") return kontekst;
+  }
   const hostyDeweloperskie = config().SMTP_HOSTY_DEWELOPERSKIE;
   if (czyHostDeweloperski(serwer.host, serwer.port, hostyDeweloperskie)) return kontekst;
   try {

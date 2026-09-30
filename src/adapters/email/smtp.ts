@@ -1,5 +1,6 @@
 import { createConnection } from "node:net";
 import type { DostawcaWysylki, Wiadomosc, WynikWysylki } from "../../domain/email/port";
+import { htmlNaTekst } from "../../domain/email/tekst";
 
 /**
  * Minimalny klient SMTP bez zależności, pod lokalny Mailpit (bez TLS i bez auth).
@@ -74,7 +75,23 @@ export class AdapterSmtp implements DostawcaWysylki {
       await czekajNaOdpowiedz(socket, "354");
 
       // Treść w base64: zdejmuje problem dot-stuffingu i ośmiobitowych znaków naraz.
-      const tresc = Buffer.from(w.html, "utf8").toString("base64").replace(/(.{76})/g, "$1\r\n");
+      // multipart/alternative z text/plain (ten sam konwerter co adapter produkcyjny),
+      // żeby podgląd w Mailpicie pokazywał to samo, co dostanie odbiorca.
+      const b64 = (t: string) => Buffer.from(t, "utf8").toString("base64").replace(/(.{76})/g, "$1\r\n");
+      const granica = `=_midrev_${w.idempotencyKey.replace(/[^A-Za-z0-9]/g, "")}`;
+      const tresc = [
+        `--${granica}`,
+        "Content-Type: text/plain; charset=utf-8",
+        "Content-Transfer-Encoding: base64",
+        "",
+        b64(htmlNaTekst(w.html)),
+        `--${granica}`,
+        "Content-Type: text/html; charset=utf-8",
+        "Content-Transfer-Encoding: base64",
+        "",
+        b64(w.html),
+        `--${granica}--`,
+      ].join("\r\n");
       const messageId = `<${w.idempotencyKey}@midrev-esp>`;
       const naglowki = [
         `From: ${w.odNazwa ? `${zakodujNaglowek(w.odNazwa)} ` : ""}<${od}>`,
@@ -85,9 +102,9 @@ export class AdapterSmtp implements DostawcaWysylki {
         // RFC 8058: wypisanie jednym kliknięciem, obsłużone przez POST bez żadnej strony pośredniej
         `List-Unsubscribe: <${w.adresWypisania}>`,
         `List-Unsubscribe-Post: List-Unsubscribe=One-Click`,
+        `X-MidRev-Message-Id: ${w.idempotencyKey.replace(/[\r\n]/g, "")}`,
         `MIME-Version: 1.0`,
-        `Content-Type: text/html; charset=utf-8`,
-        `Content-Transfer-Encoding: base64`,
+        `Content-Type: multipart/alternative; boundary="${granica}"`,
       ].join("\r\n");
 
       socket.write(naglowki + "\r\n\r\n" + tresc + "\r\n.\r\n");

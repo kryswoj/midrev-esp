@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server";
+import { czyTrasaPubliczna } from "./src/trasy-publiczne";
 
 // Pierwsza linia obrony (Story 1.4). Edge runtime nie ma dostepu do bazy, wiec
 // middleware sprawdza wylacznie OBECNOSC ciasteczka sesji i odsyla anonimowych
@@ -10,28 +11,12 @@ import { NextResponse, type NextRequest } from "next/server";
 // bo tamten modul ciagnie next/headers i baze, ktorych edge nie udzwignie.
 const CIASTECZKO_SESJI = "midrev_sesja";
 
-// Sciezki publiczne: logowanie, zasoby Nexta, webhooki sklepow (autoryzacja
-// podpisem HMAC, nie sesja) oraz wszystko, co klika odbiorca maila lub klient
-// bez konta: przekierowania /r/, wypisania /u/, akceptacja kampanii, warianty.
-const PUBLICZNE = [
-  "/logowanie",
-  "/_next",
-  "/api/webhooks",
-  "/r",
-  "/u",
-  "/akceptacja",
-  "/warianty",
-  "/favicon.ico", "/s", "/api/popup",
-];
-
-function publiczna(sciezka: string): boolean {
-  // dopasowanie po calych segmentach: "/r/abc" tak, ale "/raporty" juz nie
-  return PUBLICZNE.some((p) => sciezka === p || sciezka.startsWith(p + "/"));
-}
+// Lista tras publicznych zyje w src/trasy-publiczne.ts (jedno zrodlo prawdy, pilnowane
+// testem tests/trasy-publiczne.test.ts, ktory zderza ja z drzewem src/app).
 
 export function middleware(zadanie: NextRequest) {
   const { pathname, search } = zadanie.nextUrl;
-  if (publiczna(pathname)) return NextResponse.next();
+  if (czyTrasaPubliczna(pathname)) return NextResponse.next();
   if (zadanie.cookies.get(CIASTECZKO_SESJI)?.value) return NextResponse.next();
 
   const cel = new URL("/logowanie", zadanie.url);

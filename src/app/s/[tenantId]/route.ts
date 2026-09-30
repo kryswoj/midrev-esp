@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
-import { config } from "../../../config";
+import { adresSledzenia } from "../../../config";
 import { aktywnyPopup } from "../../../usecases/popupy/zarzadzaj";
 
 /**
@@ -59,7 +59,7 @@ export async function GET(_zadanie: NextRequest, ctx: { params: Promise<{ tenant
     bodyText: popup.body_text,
     buttonText: popup.button_text,
     delaySeconds: popup.rules?.delay_seconds ?? 0,
-    endpoint: `${config().APP_URL}/api/popup/${popup.id}`,
+    endpoint: `${adresSledzenia()}/api/popup/${popup.id}`,
     klucz: `midrev_popup_zamkniety_${popup.id}`,
   };
 

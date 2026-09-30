@@ -1,0 +1,12 @@
+[Unit]
+Description=midrev-esp backup codziennie ok. 02:30 UTC
+
+[Timer]
+OnCalendar=*-*-* 02:30:00 UTC
+RandomizedDelaySec=15min
+# Serwer wyłączony o 02:30 = backup zaraz po starcie, nie za dobę.
+Persistent=true
+Unit=midrev-esp-backup.service
+
+[Install]
+WantedBy=timers.target

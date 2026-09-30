@@ -12,10 +12,13 @@ import { zapiszZgloszenieDostawcy, type WynikZgloszenia } from "./zdarzenia-dost
  * klasyfikuje odbić sam — od tego jest `klasyfikujOdpowiedzSmtp` w domenie, dokładnie
  * ta, której używa adapter SMTP przy odmowie na RCPT TO. Dwa źródła, jedna klasyfikacja.
  *
- * Dopasowanie, w kolejności pewności:
- *   1. Message-ID oryginału = `messages.provider_id` (nadajemy własny `<id@domena>`),
- *   2. lewa strona Message-ID = `messages.id` (gdyby dostawca przepisał prawą),
- *   3. adres odbiorcy: OSTATNIA wiadomość do tego adresu przekazana dostawcy w ciągu
+ * Dopasowanie, w kolejności pewności (audyt 28.09: SES nadpisuje Message-ID):
+ *   1. nasz nagłówek `X-MidRev-Message-Id` w kopii nagłówków oryginału = `messages.id`,
+ *   2. Message-ID oryginału nadany przez DOSTAWCĘ: lewa strona = `messages.provider_message_id`
+ *      (SES: `<id@eu-central-1.amazonses.com>`, id z odpowiedzi „250 Ok <id>"),
+ *   3. Message-ID oryginału = `messages.provider_id` (nasz `<id@domena>`), albo jego
+ *      lewa strona = `messages.id` (gdyby dostawca przepisał prawą),
+ *   4. adres odbiorcy: OSTATNIA wiadomość do tego adresu przekazana dostawcy w ciągu
  *      30 dni (raport bez kopii nagłówków — część starych MTA tak robi).
  * Zawsze w obrębie tenanta: skrzynka jest tenanta, więc raport też.
  *
@@ -31,13 +34,15 @@ export interface WynikRaportu {
   adres: string | null;
   messageIdOryginalu: string | null;
   messageId: string | null;
-  dopasowanie: "message_id" | "adres" | null;
+  dopasowanie: SposobDopasowania | null;
   typZdarzenia: string | null;
   klasa: string | null;
   kodSmtp: string | null;
   kiedy: Date | null;
   temat: string;
 }
+
+export type SposobDopasowania = "naglowek" | "id_dostawcy" | "message_id" | "adres";
 
 const OKNO_DOPASOWANIA_PO_ADRESIE_DNI = 30;
 
@@ -57,30 +62,58 @@ export function przytnijDateRaportu(kiedy: Date | null, teraz = new Date()): Dat
 
 async function dopasuj(
   tenantId: string,
-  messageIdOryginalu: string | null,
+  klucze: { naszId: string | null; messageIdOryginalu: string | null },
   adres: string | null,
-): Promise<{ messageId: string; jak: "message_id" | "adres" } | null> {
+): Promise<{ messageId: string; jak: SposobDopasowania; email: string } | null> {
   const pool = getPool();
-  if (messageIdOryginalu) {
-    const { rows } = await pool.query<{ id: string }>(
-      "select id from messages where tenant_id = $1 and provider_id = $2 limit 1",
-      [tenantId, messageIdOryginalu],
+  // Każde zapytanie w obrębie tenanta (skrzynka jest tenanta): cudzy identyfikator
+  // w sfałszowanym raporcie nie ma jak trafić w wiadomość innego konta.
+  if (klucze.naszId) {
+    const { rows } = await pool.query<{ id: string; email: string }>(
+      "select id, email from messages where tenant_id = $1 and id = $2::uuid",
+      [tenantId, klucze.naszId],
     );
-    if (rows[0]) return { messageId: rows[0].id, jak: "message_id" };
-    const lewa = /^<([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})@/i.exec(messageIdOryginalu);
+    if (rows[0]) return { messageId: rows[0].id, jak: "naglowek", email: rows[0].email };
+  }
+  const mid = klucze.messageIdOryginalu;
+  if (mid) {
+    const lewaStrona = /^<(.+)@[^@<>]+>$/.exec(mid)?.[1] ?? null;
+    if (lewaStrona) {
+      const { rows } = await pool.query<{ id: string; email: string }>(
+        `select id, email from messages where tenant_id = $1 and provider_message_id = $2
+          order by coalesce(handed_off_at, created_at) desc limit 50`,
+        [tenantId, lewaStrona],
+      );
+      if (rows.length === 1) return { messageId: rows[0].id, jak: "id_dostawcy", email: rows[0].email };
+      if (rows.length > 1) {
+        // Identyfikator dostawcy NIEJEDNOZNACZNY (np. krótkie ID kolejki Postfixa po
+        // latach). Rozstrzyga wyłącznie adres odbiorcy WŚRÓD tych kandydatów; bez
+        // jednoznacznego trafienia nie przyklejamy raportu do niczego — zejście do
+        // „ostatniej wiadomości na adres" mogłoby wskazać inną, też prawdziwą wiadomość.
+        const naAdres = adres ? rows.filter((r) => r.email.trim().toLowerCase() === adres.trim().toLowerCase()) : [];
+        if (naAdres.length === 1) return { messageId: naAdres[0].id, jak: "id_dostawcy", email: naAdres[0].email };
+        return null;
+      }
+    }
+    const { rows } = await pool.query<{ id: string; email: string }>(
+      "select id, email from messages where tenant_id = $1 and provider_id = $2 limit 1",
+      [tenantId, mid],
+    );
+    if (rows[0]) return { messageId: rows[0].id, jak: "message_id", email: rows[0].email };
+    const lewa = /^<([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})@/i.exec(mid);
     if (lewa) {
-      const { rows: poId } = await pool.query<{ id: string }>(
-        "select id from messages where tenant_id = $1 and id = $2::uuid",
+      const { rows: poId } = await pool.query<{ id: string; email: string }>(
+        "select id, email from messages where tenant_id = $1 and id = $2::uuid",
         [tenantId, lewa[1]],
       );
-      if (poId[0]) return { messageId: poId[0].id, jak: "message_id" };
+      if (poId[0]) return { messageId: poId[0].id, jak: "message_id", email: poId[0].email };
     }
   }
   if (adres) {
     // po adresie: tylko wiadomości, które faktycznie wyszły (sent/delivered) i tylko
     // świeże; raport o mailu sprzed pół roku nie ma do czego się przykleić
-    const { rows } = await pool.query<{ id: string }>(
-      `select id from messages
+    const { rows } = await pool.query<{ id: string; email: string }>(
+      `select id, email from messages
         where tenant_id = $1 and lower(btrim(email)) = $2
           and current_state in ('sent', 'delivered')
           and coalesce(handed_off_at, created_at) > now() - make_interval(days => $3::int)
@@ -88,7 +121,7 @@ async function dopasuj(
         limit 1`,
       [tenantId, adres.trim().toLowerCase(), OKNO_DOPASOWANIA_PO_ADRESIE_DNI],
     );
-    if (rows[0]) return { messageId: rows[0].id, jak: "adres" };
+    if (rows[0]) return { messageId: rows[0].id, jak: "adres", email: rows[0].email };
   }
   return null;
 }
@@ -138,7 +171,7 @@ export async function przetworzRaport(
       wyniki.push(baza({ adres: o.adres, wynik: "pominiete", kodSmtp: null }));
       continue;
     }
-    const dop = await dopasuj(tenantId, raport.messageIdOryginalu, o.adres);
+    const dop = await dopasuj(tenantId, { naszId: raport.naszIdOryginalu, messageIdOryginalu: raport.messageIdOryginalu }, o.adres);
     if (!dop) {
       wyniki.push(baza({ adres: o.adres, wynik: "brak_wiadomosci", kiedy }));
       continue;
@@ -161,7 +194,13 @@ export async function przetworzRaport(
       continue;
     }
 
-    const zaufany = dop.jak === "message_id" && raport.pewnosc === "wysoka";
+    // Dowód tożsamości wiadomości = dowolny klucz poza samym adresem, ORAZ adresat raportu
+    // zgodny z adresem tej wiadomości. Nagłówki (X-MidRev-Message-Id, Message-ID) zna
+    // każdy odbiorca ze swojej kopii maila; sfałszowany raport z cudzym Final-Recipient
+    // nie może więc dać wykluczenia GLOBALNEGO (sklepowe zostaje: odwracalne z panelu).
+    // brak adresata w raporcie = brak dowodu (review Codeksa r2): tylko wykluczenie sklepowe
+    const adresZgodny = Boolean(o.adres) && o.adres!.trim().toLowerCase() === dop.email.trim().toLowerCase();
+    const zaufany = dop.jak !== "adres" && raport.pewnosc === "wysoka" && adresZgodny;
     const opcjeZapisu = { wykluczenieGlobalne: zaufany };
     let zapis: WynikZgloszenia;
     if (raport.rodzaj === "arf") {

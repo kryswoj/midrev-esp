@@ -3,7 +3,7 @@ import Link from "next/link";
 import { licznikiNawigacji, listaTenantow } from "../../../adapters/db/repozytoria";
 import { wylogujAkcja } from "../../logowanie/akcje";
 import { wymaganyTenant } from "../../autoryzacja";
-import { Icon } from "../../ui/icon";
+import { Icon } from "../../ui/ikona";
 import { PrzelacznikTenanta } from "./przelacznik";
 import { Nawigacja, NawigacjaMobilna } from "./nawigacja";
 

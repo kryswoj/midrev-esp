@@ -133,6 +133,43 @@ export async function utworzKampanieAkcja(formularz: FormData) {
   redirect(`/t/${tenantId}/kampanie/${id}/odbiorcy?ok=${encodeURIComponent("Szkic utworzony. Wybierz, do kogo pójdzie kampania.")}`);
 }
 
+/**
+ * „Duplikuj" z listy i ze szczegółu (audyt #20). Kopia to NOWY szkic: projekt maila, temat,
+ * preheader i odbiorcy — bez planu, akceptacji, wiadomości i statystyk (use-case pilnuje
+ * tego odczytem zwrotnym). Operator ląduje na przeglądzie kopii, nie oryginału.
+ */
+export async function duplikujKampanieAkcja(formularz: FormData) {
+  const { tenantId } = await wymaganyTenant(formularz.get("tenantId"));
+  const campaignId = wymaganaKampania(formularz.get("campaignId"));
+  const { duplikujKampanie } = await import("../usecases/tresc/kampanie");
+  const wynik = await duplikujKampanie(tenantId, campaignId);
+  if (!wynik.ok) redirect(`/t/${tenantId}/kampanie?blad=${encodeURIComponent(wynik.blad)}`);
+  revalidatePath(`/t/${tenantId}/kampanie`);
+  const pominiete = wynik.pominieteZrodla
+    ? ` ${wynik.pominieteZrodla === 1 ? "Jedno źródło odbiorców" : `${wynik.pominieteZrodla} źródła odbiorców`} już nie istnieje — sprawdź krok Odbiorcy.`
+    : "";
+  redirect(
+    `/t/${tenantId}/kampanie/${wynik.id}?ok=${encodeURIComponent(`Utworzono szkic „${wynik.nazwa}". Plan wysyłki i akceptacja klienta nie przechodzą na kopię.${pominiete}`)}`,
+  );
+}
+
+/**
+ * Usunięcie SZKICU z listy kampanii. Formularz niesie jawne `potwierdzenie=tak` z drugiego
+ * kroku przycisku — samo POST z id nie wystarcza. Status sprawdza use-case pod blokadą.
+ */
+export async function usunSzkicKampaniiAkcja(formularz: FormData) {
+  const { tenantId } = await wymaganyTenant(formularz.get("tenantId"));
+  const campaignId = wymaganaKampania(formularz.get("campaignId"));
+  if (formularz.get("potwierdzenie") !== "tak") {
+    redirect(`/t/${tenantId}/kampanie?blad=${encodeURIComponent("Usunięcie wymaga potwierdzenia.")}`);
+  }
+  const { usunSzkicKampanii } = await import("../usecases/tresc/kampanie");
+  const wynik = await usunSzkicKampanii(tenantId, campaignId);
+  revalidatePath(`/t/${tenantId}/kampanie`);
+  if (!wynik.ok) redirect(`/t/${tenantId}/kampanie?blad=${encodeURIComponent(wynik.blad)}`);
+  redirect(`/t/${tenantId}/kampanie?ok=${encodeURIComponent(`Szkic „${wynik.nazwa}" usunięty.`)}`);
+}
+
 // ── Kampanie: treść, test, akceptacja, wysyłka ────────────────────────────────
 
 /**
@@ -285,7 +322,8 @@ export async function podgladBlokowAkcja(
   const przygotowany = przygotujDokument(dokumentJson);
   if (!przygotowany.ok) return przygotowany;
   const { rows } = await getPool().query(
-    `select c.preheader, t.name as sklep from campaigns c join tenants t on t.id = c.tenant_id
+    `select c.preheader, t.name as sklep, t.sender_company_name, t.sender_postal_address, t.sender_tax_id
+       from campaigns c join tenants t on t.id = c.tenant_id
       where c.tenant_id = $1 and c.id = $2`,
     [tenantId, campaignId],
   );
@@ -296,6 +334,7 @@ export async function podgladBlokowAkcja(
     clickToken: "podglad",
     unsubscribeToken: "podglad",
     nazwaSklepu: String(rows[0].sklep ?? ""),
+    nadawca: { firma: rows[0].sender_company_name, adres: rows[0].sender_postal_address, nip: rows[0].sender_tax_id },
     sledzKlikniecia: false,
     sledzOtwarcia: false,
   });

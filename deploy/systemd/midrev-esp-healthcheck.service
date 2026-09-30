@@ -1,0 +1,33 @@
+# midrev-esp: healthcheck co 5 min (/api/zdrowie, stan unitów, świeżość backupu, dysk).
+# Alert na ALERT_WEBHOOK_URL po 2 kolejnych porażkach, potem co godzinę, i „wróciło".
+[Unit]
+Description=midrev-esp healthcheck
+Documentation=file:///srv/midrev-esp/ops/monitoring.md
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=midrev-esp
+Group=midrev-esp
+# potrzebny tylko ALERT_WEBHOOK_URL; systemd czyta plik jako root, proces go nie otwiera
+EnvironmentFile=/srv/midrev-esp/shared/env/production.env
+StateDirectory=midrev-esp-healthcheck
+StateDirectoryMode=0700
+ExecStart=/srv/midrev-esp/ops/monitoring/healthcheck.sh
+TimeoutStartSec=90
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=midrev-esp-healthcheck
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+CapabilityBoundingSet=
+UMask=0077

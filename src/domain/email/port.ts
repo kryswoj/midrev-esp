@@ -29,6 +29,12 @@ export interface Wiadomosc {
  */
 export interface WynikWysylki {
   providerId: string;
+  /**
+   * Identyfikator nadany przez DOSTAWCĘ w odpowiedzi SMTP („250 Ok <id>"), gdy inny niż
+   * nasz Message-ID. SES nadpisuje Message-ID swoim — przekazane odbicie niesie właśnie
+   * ten identyfikator (messages.provider_message_id, 0029).
+   */
+  providerMessageId?: string;
   /** pula IP, z której dostawca wziął adres nadania (Klaviyo: `IpPool`) */
   ipPool?: string;
   /** konkretne IP użyte do wysyłki (Klaviyo: `Sending Ip Address`) */

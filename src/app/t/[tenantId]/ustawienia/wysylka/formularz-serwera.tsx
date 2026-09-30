@@ -14,6 +14,8 @@ export interface SerwerDoFormularza {
   nazwaNadawcy: string;
   adresNadawcy: string;
   odpowiedzDo: string | null;
+  rodzaj: "wlasny_serwer" | "przekaznik";
+  domenaKoperty: string | null;
 }
 
 const PORT_DLA_TRYBU: Record<string, string> = { starttls: "587", tls: "465", none: "25" };
@@ -40,6 +42,7 @@ export function FormularzSerwera({
   const [tryb, ustawTryb] = useState(w?.bezpieczenstwo ?? serwer?.bezpieczenstwo ?? "starttls");
   const [port, ustawPort] = useState(w?.port ?? String(serwer?.port ?? 587));
   const [zmienHaslo, ustawZmienHaslo] = useState(!serwer?.hasloUstawione);
+  const [rodzaj, ustawRodzaj] = useState(w?.rodzaj ?? serwer?.rodzaj ?? "wlasny_serwer");
 
   return (
     <form action={akcja} className="space-y-5">
@@ -48,6 +51,32 @@ export function FormularzSerwera({
 
       <fieldset className="space-y-4">
         <legend className="mb-2 text-[14px] font-semibold">Połączenie</legend>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <label className="block">
+            <span className="etykieta mb-1.5 block">Rodzaj serwera</span>
+            <select name="rodzaj" value={rodzaj} onChange={(e) => ustawRodzaj(e.target.value)} className="pole">
+              <option value="wlasny_serwer">Własny serwer (skrzynka firmowa, Workspace, hosting)</option>
+              <option value="przekaznik">Przekaźnik wysyłkowy (Amazon SES, Brevo, Mailgun)</option>
+            </select>
+          </label>
+          <label className="block">
+            <span className="etykieta mb-1.5 block">Domena koperty / Return-Path{rodzaj === "przekaznik" ? "" : " (opcjonalnie)"}</span>
+            <input
+              name="domenaKoperty"
+              required={rodzaj === "przekaznik"}
+              placeholder={domeny[0] ? `bounce.${domeny[0]}` : "bounce.twojadomena.pl"}
+              defaultValue={w?.domenaKoperty ?? serwer?.domenaKoperty ?? ""}
+              className="pole font-mono text-[13px]"
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <span className="mt-1 block text-[12px] text-[var(--color-tekst-3)]">
+              {rodzaj === "przekaznik"
+                ? "U Amazon SES: „Custom MAIL FROM domain”. Na niej odbiorcy sprawdzają SPF (include:amazonses.com) — ustaw ją przy domenie jako SPF dostawcy."
+                : "Puste = koperta w domenie nadawcy. Podana = MAIL FROM w tej domenie (odbicia na jej MX)."}
+            </span>
+          </label>
+        </div>
         <div className="grid gap-4 sm:grid-cols-[1fr_120px]">
           <label className="block">
             <span className="etykieta mb-1.5 block">Serwer SMTP</span>

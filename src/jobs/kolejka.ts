@@ -93,3 +93,20 @@ export async function odlozZadanie(zadanie: Zadanie, blad: string, workerId: str
   );
   return wyczerpane;
 }
+
+/**
+ * Oddanie zadania do kolejki BEZ zużycia próby (zamykanie workera, SIGTERM). Zajęcie
+ * podbiło `attempts`, więc je cofamy: przerwanie przez deploy to nie jest porażka
+ * zadania, a pięć restartów w trakcie kampanii nie może jej zabić „wyczerpanymi próbami".
+ * Guard właściciela jak w domknijZadanie: zadanie odzyskane przez innego workera
+ * nie jest ruszane.
+ */
+export async function zwolnijZadanie(zadanie: Zadanie, workerId: string): Promise<boolean> {
+  const wynik = await getPool().query(
+    `update jobs set status = 'pending', locked_at = null, locked_by = null,
+            attempts = greatest(attempts - 1, 0), run_after = now()
+      where id = $1 and created_at = $2::timestamptz and status = 'running' and locked_by = $3`,
+    [zadanie.id, zadanie.token, workerId],
+  );
+  return (wynik.rowCount ?? 0) > 0;
+}

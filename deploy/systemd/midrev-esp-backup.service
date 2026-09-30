@@ -1,0 +1,28 @@
+# midrev-esp: codzienny backup (pg_dump + var/obrazy), szyfrowanie age, wysyłka rclone poza serwer.
+[Unit]
+Description=midrev-esp backup bazy i plików (off-site, szyfrowany)
+Documentation=file:///srv/midrev-esp/ops/README.md
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# root: `docker exec` do kontenera bazy (grupa docker = root i tak) i odczyt shared/var.
+ExecStart=/srv/midrev-esp/ops/backup/backup.sh
+TimeoutStartSec=3h
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=midrev-esp-backup
+# Utwardzenie umiarkowane: skrypt musi mówić do /run/docker.sock i zapisywać w /var
+# (staging, znacznik ostatniego sukcesu) oraz w konfiguracji rclone (odświeżanie tokenu).
+NoNewPrivileges=yes
+ProtectSystem=full
+ProtectHome=read-only
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+UMask=0077

@@ -16,6 +16,7 @@ import {
   zapiszSerwer,
 } from "../../../../../usecases/wysylka-konfiguracja/serwer";
 import { zapiszLimit } from "../../../../../usecases/wysylka-konfiguracja/limity";
+import { zapiszDaneNadawcy } from "../../../../../usecases/wysylka-konfiguracja/dane-nadawcy";
 import {
   testujSkrzynke,
   usunSkrzynke,
@@ -118,6 +119,8 @@ export async function zapiszSerwerAkcja(_poprzedni: StanFormularza | undefined, 
     nazwaNadawcy: tekst(f, "nazwaNadawcy"),
     adresNadawcy: tekst(f, "adresNadawcy"),
     odpowiedzDo: tekst(f, "odpowiedzDo"),
+    rodzaj: tekst(f, "rodzaj") || "wlasny_serwer",
+    domenaKoperty: tekst(f, "domenaKoperty"),
   };
   const wynik = await zapiszSerwer(tenantId, dane);
   if (!wynik.ok) {
@@ -146,6 +149,15 @@ export async function wyslijTestowaAkcja(f: FormData) {
   wroc(tenantId, wynik.ok
     ? { ok: `Serwer przyjął wiadomość testową od ${wynik.od}. Sprawdź skrzynkę odbiorcy (także spam).` }
     : { blad: wynik.blad });
+}
+
+// ── Dane nadawcy w stopce ────────────────────────────────────────────────────────
+
+export async function zapiszDaneNadawcyAkcja(f: FormData) {
+  const { tenantId } = await wymaganyTenant(f.get("tenantId"));
+  const wynik = await zapiszDaneNadawcy(tenantId, { firma: tekst(f, "firma"), adres: tekst(f, "adres"), nip: tekst(f, "nip") });
+  revalidatePath(sciezka(tenantId));
+  wroc(tenantId, wynik.ok ? { ok: "Dane nadawcy zapisane. Pojawią się w stopce każdej nowej wiadomości." } : { blad: wynik.blad });
 }
 
 // ── Limit dobowy ────────────────────────────────────────────────────────────────

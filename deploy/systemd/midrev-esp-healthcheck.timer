@@ -1,0 +1,11 @@
+[Unit]
+Description=midrev-esp healthcheck co 5 minut
+
+[Timer]
+OnBootSec=3min
+OnCalendar=*:0/5
+AccuracySec=30s
+Unit=midrev-esp-healthcheck.service
+
+[Install]
+WantedBy=timers.target

@@ -1,7 +1,7 @@
 /** Nagłówek strony z okruszkami, podtytułem i miejscem na realne akcje. */
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { Icon } from "./icon";
+import { Icon } from "./ikona";
 
 export function PageHeader({
   title,

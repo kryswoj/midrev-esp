@@ -1,0 +1,65 @@
+# midrev-esp: worker kolejki (wysyłka, flowy, odbicia IMAP, importy, partycje).
+# Uruchamiany przez tsx (devDependency), dlatego release ma pełne `npm ci`, nie --omit=dev.
+[Unit]
+Description=midrev-esp worker (kolejka zadań)
+Documentation=file:///srv/midrev-esp/ops/README.md
+After=network-online.target docker.service
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=midrev-esp
+Group=midrev-esp
+# Ten sam katalog co panel: var/importy wgrywa panel, a czyta worker.
+WorkingDirectory=/srv/midrev-esp/current
+EnvironmentFile=/srv/midrev-esp/shared/env/production.env
+UnsetEnvironment=MIDREV_SANDBOX SMTP_HOSTY_DEWELOPERSKIE
+# Worker (node) nie ustawia NODE_ENV sam; bez tego guardy produkcyjne w src/config.ts
+# są wyłączone, a to worker wkleja linki do maili (raport 02, P0-3).
+ExecStart=/usr/bin/env NODE_ENV=production /usr/bin/node --import tsx src/jobs/worker.ts
+Restart=always
+# Baza po reboocie może wstawać dłużej niż worker; restart co 10 s bez limitu prób.
+RestartSec=10
+# Łagodne zamknięcie: SIGTERM -> worker kończy bieżącą wiadomość, nie bierze nowych
+# zadań, zwalnia pulę. Po 45 s SIGKILL (wiadomość w `sending` wyjaśni rekoncyliacja).
+KillSignal=SIGTERM
+KillMode=mixed
+TimeoutStopSec=45
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=midrev-esp-worker
+LimitNOFILE=65536
+MemoryHigh=800M
+MemoryMax=1200M
+
+# --- utwardzenie (jak panel) ---
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/srv/midrev-esp/shared/var /srv/midrev-esp/shared/cache
+ProtectHome=yes
+# tsx trzyma pamięć podręczną kompilacji w /tmp: PrivateTmp daje prywatny, zapisywalny /tmp
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RemoveIPC=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

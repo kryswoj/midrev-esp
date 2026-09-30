@@ -1,5 +1,7 @@
-// Adres, pod ktory sandboxowy WooCommerce ma dosylac webhooki (patrz tests/sklepy.test.ts).
-process.env.APP_URL = process.env.APP_URL ?? "http://172.22.0.1:3005";
+// Adres, pod ktory sandboxowy WooCommerce ma dosylac webhooki: testowy odbiornik piszacy
+// do bazy testowej (patrz tests/odbiornik-webhookow.ts i tests/sklepy.test.ts).
+import { ADRES_ODBIORNIKA, DOSTAWA_WEBHOOKOW, uruchomOdbiornikWebhookow, type Odbiornik } from "./odbiornik-webhookow";
+process.env.APP_URL = ADRES_ODBIORNIKA;
 
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { closePool, getPool } from "../src/adapters/db/pool";
@@ -102,15 +104,18 @@ describe("Kolizja kluczy w bazie", () => {
   });
 });
 
-describe.skipIf(!klucze)("Webhooki customer.* na zywym Woo", () => {
+// Caly blok czeka na dostawe webhooka ze sklepu: tylko w `npm run test:woo`.
+describe.skipIf(!klucze || !DOSTAWA_WEBHOOKOW)("Webhooki customer.* na zywym Woo", () => {
   let tenantId = "";
   let storeId = "";
   let adres = "";
   let customerId = 0;
   let orderId = 0;
   const email = `klient-webhook-${Date.now()}@example.test`;
+  let odbiornik: Odbiornik | undefined;
 
   beforeAll(async () => {
+    odbiornik = await uruchomOdbiornikWebhookow();
     await getPool().query("delete from tenants where name like $1", [PREFIKS + "Woo%"]);
     tenantId = (await getPool().query("insert into tenants (name) values ($1) returning id", [PREFIKS + "Woo"])).rows[0].id;
     const wynik = await podlaczSklepWoo(tenantId, { baseUrl: klucze!.url, consumerKey: klucze!.ck, consumerSecret: klucze!.cs });
@@ -123,6 +128,7 @@ describe.skipIf(!klucze)("Webhooki customer.* na zywym Woo", () => {
     if (orderId) await woo(klucze!, `orders/${orderId}?force=true`, { method: "DELETE" }).catch(() => {});
     if (customerId) await woo(klucze!, `customers/${customerId}?force=true&reassign=1`, { method: "DELETE" }).catch(() => {});
     if (adres) await usunWebhookiPodAdresem(klucze!, adres);
+    await odbiornik?.zamknij();
     await getPool().query("delete from tenants where name like $1", [PREFIKS + "%"]);
     await closePool();
   });

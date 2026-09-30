@@ -1,4 +1,6 @@
 import { getPool } from "../../../../../adapters/db/pool";
+import { trybSandbox } from "../../../../../config";
+import { odczytajDaneNadawcy, type DaneNadawcy } from "../../../../../usecases/wysylka-konfiguracja/dane-nadawcy";
 import { formatujDateICzas } from "../../../../../domain/daty";
 import { listaDomen, type DomenaWysylkowa } from "../../../../../usecases/wysylka-konfiguracja/domeny";
 import { odczytajSerwer, type WidokSerwera } from "../../../../../usecases/wysylka-konfiguracja/serwer";
@@ -20,6 +22,7 @@ import {
   usunDomeneAkcja,
   usunSkrzynkeAkcja,
   wyslijTestowaAkcja,
+  zapiszDaneNadawcyAkcja,
   zapiszLimitAkcja,
   zmienDomeneAkcja,
 } from "./akcje";
@@ -56,7 +59,17 @@ const NAZWY_REKORDOW = { spf: "SPF", dkim: "DKIM", dmarc: "DMARC" } as const;
  * partią (FR45), policzona z zapisanego stanu, bez sieci. Stoi na górze ekranu, bo to
  * jest jedyne pytanie, z którym ktoś tu przychodzi.
  */
-function werdykt(serwer: WidokSerwera | null, domeny: DomenaWysylkowa[]): { klasa: string; slowo: string; opis: string } {
+function werdykt(serwer: WidokSerwera | null, domeny: DomenaWysylkowa[], sandbox: boolean): { klasa: string; slowo: string; opis: string } {
+  if (!serwer && !sandbox) {
+    // poza sandboksem ścieżki „adresu technicznego" nie ma (nadawca.ts): nic nie wyjdzie
+    return {
+      klasa: "plakietka-blad",
+      slowo: "wysyłka zablokowana",
+      opis: domeny.length
+        ? "Serwer wysyłkowy nie jest ustawiony, więc żaden mail (kampania, automatyzacja, test) nie wyjdzie. Ustaw serwer niżej."
+        : "Dodaj domenę i ustaw serwer wysyłkowy (np. Amazon SES). Do tego czasu żaden mail nie wyjdzie.",
+    };
+  }
   if (!serwer) {
     return {
       klasa: "plakietka-uwaga",
@@ -97,7 +110,7 @@ export default async function WysylkaIDomeny({
   // strona weryfikuje sama (AD-21) — layout nie jest granicą autoryzacji
   await wymaganyTenant(tenantId);
   const { ok, blad } = await searchParams;
-  const [domeny, serwer, konto, limit, skrzynka, raporty, statystyka] = await Promise.all([
+  const [domeny, serwer, konto, limit, skrzynka, raporty, statystyka, daneNadawcy] = await Promise.all([
     listaDomen(tenantId),
     odczytajSerwer(tenantId),
     getPool().query("select name from tenants where id = $1", [tenantId]),
@@ -105,9 +118,10 @@ export default async function WysylkaIDomeny({
     odczytajSkrzynke(tenantId),
     ostatnieRaporty(tenantId, 15),
     statystykaRaportow(tenantId, 7),
+    odczytajDaneNadawcy(tenantId),
   ]);
   const nazwaKonta = String(konto.rows[0]?.name ?? "");
-  const stan = werdykt(serwer, domeny);
+  const stan = werdykt(serwer, domeny, trybSandbox());
 
   return (
     <>
@@ -167,10 +181,9 @@ export default async function WysylkaIDomeny({
             </div>
           </div>
 
-          {/* Zwykły opis, nie kontrolka: wyboru dziś nie ma, więc nie udajemy przełącznika (DESIGN.md: zero atrap) */}
           <p className="px-4 pt-4 text-[13px] leading-[19px] text-[var(--color-tekst-2)]">
-            Kampanie wychodzą przez Twój własny serwer SMTP: skrzynkę firmową, Google Workspace, Microsoft 365 albo serwer hostingu.
-            Infrastruktura MidRev (Amazon SES) jest w przygotowaniu; gdy będzie dostępna, pojawi się tu wybór.
+            Kampanie wychodzą przez serwer SMTP: własny (skrzynka firmowa, Google Workspace, Microsoft 365, hosting) albo przekaźnik
+            wysyłkowy (Amazon SES, Brevo, Mailgun). Przy przekaźniku SPF sprawdzamy na domenie koperty (Return-Path), a nie na adresie serwera.
           </p>
 
           {serwer ? <StanSerwera tenantId={tenantId} serwer={serwer} /> : null}
@@ -192,6 +205,8 @@ export default async function WysylkaIDomeny({
                       nazwaNadawcy: serwer.nazwaNadawcy,
                       adresNadawcy: serwer.adresNadawcy,
                       odpowiedzDo: serwer.odpowiedzDo,
+                      rodzaj: serwer.rodzaj,
+                      domenaKoperty: serwer.domenaKoperty,
                     }
                   : null
               }
@@ -204,8 +219,51 @@ export default async function WysylkaIDomeny({
 
         {/* Krok 4: skrzynka zwrotna */}
         <SekcjaSkrzynki tenantId={tenantId} serwer={serwer} skrzynka={skrzynka} raporty={raporty} statystyka={statystyka} />
+
+        {/* Krok 5: dane nadawcy w stopce */}
+        <SekcjaDanychNadawcy tenantId={tenantId} dane={daneNadawcy} />
       </div>
     </>
+  );
+}
+
+function SekcjaDanychNadawcy({ tenantId, dane }: { tenantId: string; dane: DaneNadawcy }) {
+  return (
+    <section className="karta overflow-hidden">
+      <div className="karta-naglowek">
+        <div className="min-w-0">
+          <h2>5. Dane nadawcy w stopce</h2>
+          <p className="karta-opis mt-0.5">
+            Każdy mail marketingowy ma w stopce dane firmy, która go wysyła. Bez adresu pocztowego lista kontrolna kampanii nie przepuści wysyłki.
+          </p>
+        </div>
+      </div>
+      {!dane.adres ? (
+        <p role="status" className="mx-4 mt-4 rounded-md border border-[var(--color-czeka-ramka)] bg-[var(--color-czeka-tlo)] px-3 py-2 text-[13px] text-[var(--color-czeka)]">
+          Adres pocztowy nie jest ustawiony — kampanie są zablokowane do czasu jego podania.
+        </p>
+      ) : null}
+      <form action={zapiszDaneNadawcyAkcja} className="space-y-3 p-4">
+        <input type="hidden" name="tenantId" value={tenantId} />
+        <div className="grid gap-4 sm:grid-cols-2">
+          <label className="block">
+            <span className="etykieta mb-1.5 block">Nazwa firmy</span>
+            <input name="firma" defaultValue={dane.firma ?? ""} placeholder="np. MidRev sp. z o.o." className="pole" maxLength={200} />
+          </label>
+          <label className="block">
+            <span className="etykieta mb-1.5 block">NIP (opcjonalnie)</span>
+            <input name="nip" defaultValue={dane.nip ?? ""} placeholder="np. 1234567890" className="pole liczba" maxLength={30} />
+          </label>
+        </div>
+        <label className="block">
+          <span className="etykieta mb-1.5 block">Adres pocztowy</span>
+          <textarea name="adres" defaultValue={dane.adres ?? ""} placeholder={"ul. Przykładowa 1\n00-001 Warszawa"} rows={2} className="pole" maxLength={500} />
+        </label>
+        <PrzyciskAkcji trwa="Zapisuję…" maly={false}>
+          Zapisz dane nadawcy
+        </PrzyciskAkcji>
+      </form>
+    </section>
   );
 }
 
@@ -507,6 +565,21 @@ function Domena({ tenantId, d, uzywana }: { tenantId: string; d: DomenaWysylkowa
         </p>
       ) : null}
 
+      {raport?.wyrownanie?.komunikat ? (
+        // DMARC przy ścisłym trybie (adkim=s/aspf=s): wyrównanie osobno od statusów rekordów,
+        // bo „wszystkie trzy poprawne" nie znaczy jeszcze „DMARC przejdzie"
+        <p
+          role="status"
+          className={
+            raport.wyrownanie.dmarcPrzejdzie
+              ? "rounded-md border border-[var(--color-czeka-ramka)] bg-[var(--color-czeka-tlo)] px-3 py-2 text-[13px] text-[var(--color-czeka)]"
+              : "rounded-md border border-[var(--color-blad)] bg-[var(--color-blad-tlo)] px-3 py-2 text-[13px] text-[var(--color-blad)]"
+          }
+        >
+          <span className="font-medium">Wyrównanie DMARC (aspf={raport.wyrownanie.aspf}, adkim={raport.wyrownanie.adkim}):</span> {raport.wyrownanie.komunikat}
+        </p>
+      ) : null}
+
       {/* Tabela Host / Typ / Wartość — wzorzec Klaviyo Settings → Domains */}
       <div className="overflow-x-auto rounded-[10px] border border-[var(--color-linia)]">
         <table className="tabela">
@@ -659,6 +732,8 @@ function StanSerwera({ tenantId, serwer }: { tenantId: string; serwer: WidokSerw
       <p className="text-[13px] text-[var(--color-tekst-2)]">
         Nadawca: {serwer.nazwaNadawcy} &lt;{serwer.adresNadawcy}&gt;
         {serwer.odpowiedzDo ? <> · odpowiedzi na {serwer.odpowiedzDo}</> : null}
+        {" "}· {serwer.rodzaj === "przekaznik" ? "przekaźnik" : "własny serwer"}
+        {serwer.domenaKoperty ? <> · koperta {serwer.domenaKoperty}</> : null}
         {serwer.ostatniTestAt ? (
           <>
             {" "}· ostatni test <span className="liczba">{formatujDateICzas(serwer.ostatniTestAt)}</span>

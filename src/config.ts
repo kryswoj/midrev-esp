@@ -1,7 +1,17 @@
+import { isIP } from "node:net";
 import { z } from "zod";
 
-/** Domyślny adres sandboxa. Na produkcji jest ZABRONIONY (patrz guard niżej). */
+/** Domyślny adres sandboxa. Poza sandboksem ZABRONIONY (patrz guard niżej). */
 const APP_URL_DOMYSLNY = "http://137.74.42.199:3005";
+
+/** Adres bez ukośnika na końcu: `https://x.pl/` dałoby w mailach `https://x.pl//u/…`. */
+const adresPubliczny = z
+  .string()
+  .url()
+  .transform((u) => u.replace(/\/+$/, ""));
+
+/** Wartości flagi, które znaczą „tak". Wszystko inne (w tym brak) = produkcja. */
+const TAK = new Set(["1", "true", "tak", "yes"]);
 
 // Jedyne miejsce w kodzie, które dotyka process.env (AD-1, konwencje).
 // Walidacja przy starcie, żeby brak zmiennej wywalał proces od razu, a nie w środku
@@ -10,26 +20,36 @@ const schemat = z.object({
   DATABASE_URL: z.string().min(1, "DATABASE_URL jest wymagany"),
   SECRETS_KEY: z
     .string()
-    .length(64, "SECRETS_KEY musi być 32 bajtami zapisanymi szesnastkowo (64 znaki)")
+    .regex(/^[0-9a-f]{64}$/i, "SECRETS_KEY musi być 32 bajtami zapisanymi szesnastkowo (64 znaki)")
     .default("0".repeat(64)),
   ALERT_WEBHOOK_URL: z.string().url().optional(),
   /* Klucz HMAC do haszy adresow na globalnej liscie wykluczen (0022). OSOBNY od
      SECRETS_KEY: rotacja klucza szyfrowania poswiadczen nie moze po cichu uniewaznic
      zaslepek po anonimizacji RODO. Bez wartosci: klucz pochodny od SECRETS_KEY
-     z ostrzezeniem w logu (sandbox), na produkcji wymagany. */
+     z ostrzezeniem w logu (sandbox), poza sandboksem wymagany. */
   SUPPRESSION_HASH_KEY: z
     .string()
     .regex(/^[0-9a-f]{64}$/i, "SUPPRESSION_HASH_KEY musi byc 32 bajtami zapisanymi szesnastkowo (64 znaki)")
     .optional(),
-  /* Publiczny adres aplikacji: na nim stoją linki w mailach (klik, wypisanie, akceptacja).
-     Link w mailu musi działać u odbiorcy, nie na localhost. */
-  APP_URL: z.string().url().default(APP_URL_DOMYSLNY),
+  /* Adres PANELU: logowanie, ciasteczko sesji, akceptacja kampanii przez klienta,
+     adres dostawy webhooków sklepu. Gdy TRACKING_URL nie jest ustawiony, na nim stoi
+     też wszystko, co widzi odbiorca maila. */
+  APP_URL: adresPubliczny.default(APP_URL_DOMYSLNY),
+  /* Opcjonalna osobna domena ŚLEDZENIA (np. https://link.midrev.pl): kliki /r, pixel
+     /api/o, wypis /u i List-Unsubscribe, obrazy /o, skrypt popupów /s i jego zgłoszenia
+     /api/popup. Adres panelu nie leci wtedy w każdym mailu, a domena linków trafiona na
+     listę URIBL nie zabiera ze sobą panelu. Linki w wysłanych mailach żyją latami:
+     ustawić RAZ, przed pierwszym obrazem i pierwszą kampanią. Brak = APP_URL. */
+  TRACKING_URL: adresPubliczny.optional(),
   /* Rozmiar partii wysyłki (ile wiadomości jedno wywołanie wyslijPartie zajmuje naraz).
      Między partiami silnik sprawdza wstrzymanie tenanta, status kampanii i progi
      reputacji, więc partia to zarazem „ziarno reakcji" na wstrzymanie. 100 = kompromis
      między przepustowością (jedno pooled połączenie SMTP na partię) a tym, że kampania
      sypiąca odbiciami stanie po stu, nie po tysiącu wiadomości. */
   WYSYLKA_ROZMIAR_PARTII: z.coerce.number().int().min(1).max(1000).default(100),
+  /* Serwer „domyślny" dla tenanta bez własnego SMTP. Istnieje wyłącznie pod Mailpita:
+     poza sandboksem ścieżka domyślna jest zablokowana (nadawca.ts), więc te trzy
+     wartości na produkcji niczego nie wysyłają. */
   SMTP_HOST: z.string().default("127.0.0.1"),
   SMTP_PORT: z.coerce.number().default(1025),
   MAIL_FROM: z.string().default("kampanie@midrev-esp.local"),
@@ -53,44 +73,152 @@ const schemat = z.object({
         z.string().regex(/^[^\s:]+:\d{1,5}$|^\[[0-9a-f:.]+\]:\d{1,5}$/, "każda pozycja musi mieć postać host:port"),
       ),
     ),
+  /* Tryb sandboxa (dev, testy). JAWNA flaga zamiast NODE_ENV: `next start` ustawia
+     NODE_ENV sam, a worker (`node src/jobs/worker.ts`) nie, więc guard oparty na
+     NODE_ENV nie działał dokładnie w procesie, który wkleja adresy do maili.
+     Brak flagi = produkcja: każdy proces, który nie powie wprost „jestem sandboksem",
+     dostaje pełne guardy. */
+  MIDREV_SANDBOX: z
+    .string()
+    .optional()
+    .transform((w) => TAK.has(String(w ?? "").trim().toLowerCase())),
+  /* Skąd brać adres klienta do limitów (logowanie, popup) za reverse proxy:
+       ostatni-xff — OSTATNI wpis X-Forwarded-For (Caddy nadpisuje XFF adresem klienta,
+                     nginx z proxy_add_x_forwarded_for dopisuje go na końcu; pierwszy
+                     wpis podaje klient i da się go sfałszować),
+       x-real-ip   — nagłówek X-Real-IP ustawiany przez proxy,
+       brak        — proxy nie ma: nagłówkom nie ufamy wcale (limit per IP wspólny). */
+  TRUSTED_PROXY: z.enum(["ostatni-xff", "x-real-ip", "brak"]).optional(),
+  /* Opcjonalny token do SZCZEGÓŁÓW healthchecku (/api/zdrowie?szczegoly=1 z nagłówkiem
+     Authorization: Bearer <token>): głębokość kolejki, liczba held. Bez tokenu trasa
+     podaje wyłącznie stan (ok/blad), bo jest publiczna. openssl rand -hex 32 */
+  ZDROWIE_TOKEN: z.string().min(32, "ZDROWIE_TOKEN musi mieć co najmniej 32 znaki").optional(),
   NODE_ENV: z.string().optional(),
 });
 
-let zbuforowana: z.infer<typeof schemat> | undefined;
+export type Konfiguracja = z.infer<typeof schemat>;
 
-export function config() {
-  if (zbuforowana) return zbuforowana;
-  const wynik = schemat.safeParse(process.env);
+/** Host adresu jest gołym IP albo nazwą lokalną — takich adresów nie wkleja się do maili. */
+function hostLokalnyAlboIp(adres: string): boolean {
+  const host = new URL(adres).hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  return (
+    isIP(host) !== 0 ||
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host.endsWith(".local") ||
+    host.endsWith(".internal") ||
+    !host.includes(".")
+  );
+}
+
+/**
+ * Walidacja środowiska BEZ pamięci podręcznej: czysta funkcja, którą testy wołają
+ * z dowolnym zestawem zmiennych. Rzuca z nazwą zmiennej, nigdy z jej wartością.
+ */
+export function zbudujKonfiguracje(env: Record<string, string | undefined>): Konfiguracja {
+  const wynik = schemat.safeParse(env);
   if (!wynik.success) {
     const brakujace = wynik.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; ");
     throw new Error(`Konfiguracja niekompletna — ${brakujace}`);
   }
-  // Lista serwerów deweloperskich omija blokadę SSRF i blokadę domeny (FR45). Na
-  // produkcji to byłaby dziura, a nie wygoda, więc proces odmawia startu zamiast
-  // ostrzegać w logu, którego nikt nie czyta.
-  if (wynik.data.NODE_ENV === "production" && wynik.data.SMTP_HOSTY_DEWELOPERSKIE.length > 0) {
-    throw new Error("Konfiguracja niebezpieczna — SMTP_HOSTY_DEWELOPERSKIE nie może być ustawione przy NODE_ENV=production");
+  const k = wynik.data;
+  const blad = (tresc: string) => new Error(`Konfiguracja niebezpieczna — ${tresc}`);
+
+  // Sandbox na buildzie produkcyjnym to wyłączone guardy tam, gdzie są potrzebne.
+  // Ten jeden warunek patrzy na NODE_ENV, bo tylko zawęża (nigdy nie luzuje) guardy.
+  if (k.MIDREV_SANDBOX && k.NODE_ENV === "production") {
+    throw blad("MIDREV_SANDBOX nie może być ustawiony przy NODE_ENV=production");
   }
-  // Domyślny klucz z samych zer jest wygodą sandboxa. Na produkcji szyfruje nim realne
+  if (k.MIDREV_SANDBOX) return k;
+
+  // ── Poniżej: wszystko, co nie jest jawnym sandboksem ──────────────────────────
+  // Lista serwerów deweloperskich omija blokadę SSRF i blokadę domeny (FR45). Poza
+  // sandboksem to dziura, a nie wygoda, więc proces odmawia startu.
+  if (k.SMTP_HOSTY_DEWELOPERSKIE.length > 0) {
+    throw blad("SMTP_HOSTY_DEWELOPERSKIE musi być puste poza sandboksem (MIDREV_SANDBOX)");
+  }
+  // Domyślny klucz z samych zer jest wygodą sandboxa. Poza nim szyfruje realne
   // poświadczenia (sklepy, hasła SMTP klientów), więc wyciek bazy = wyciek haseł.
-  if (wynik.data.NODE_ENV === "production" && /^0+$/.test(wynik.data.SECRETS_KEY)) {
-    throw new Error("Konfiguracja niebezpieczna — SECRETS_KEY nie może być domyślnym kluczem przy NODE_ENV=production");
+  if (/^0+$/.test(k.SECRETS_KEY)) {
+    throw blad("SECRETS_KEY nie może być domyślnym kluczem poza sandboksem (openssl rand -hex 32)");
   }
-  if (wynik.data.NODE_ENV === "production" && (!wynik.data.SUPPRESSION_HASH_KEY || /^0+$/.test(wynik.data.SUPPRESSION_HASH_KEY))) {
-    throw new Error("Konfiguracja niebezpieczna — SUPPRESSION_HASH_KEY jest wymagany i nie może być zerami przy NODE_ENV=production");
+  if (!k.SUPPRESSION_HASH_KEY || /^0+$/.test(k.SUPPRESSION_HASH_KEY)) {
+    throw blad("SUPPRESSION_HASH_KEY jest wymagany poza sandboksem i nie może być zerami");
   }
-  // Linki w mailach (klik, wypisanie, pixel, akceptacja) i ciasteczko sesji stoją na
-  // APP_URL. Domyślne gołe IP po http na produkcji to filtr antyspamowy na każdym mailu
-  // i sesja panelu bez TLS — proces ma odmówić startu, a nie wysłać pierwszą kampanię
-  // z takimi linkami.
-  if (wynik.data.NODE_ENV === "production") {
-    if (wynik.data.APP_URL === APP_URL_DOMYSLNY) {
-      throw new Error("Konfiguracja niebezpieczna — APP_URL musi być ustawione jawnie przy NODE_ENV=production (domyślny adres sandboxa jest zabroniony)");
-    }
-    if (!/^https:\/\//i.test(wynik.data.APP_URL)) {
-      throw new Error("Konfiguracja niebezpieczna — APP_URL musi zaczynać się od https:// przy NODE_ENV=production");
-    }
+  if (k.SUPPRESSION_HASH_KEY.toLowerCase() === k.SECRETS_KEY.toLowerCase()) {
+    throw blad("SUPPRESSION_HASH_KEY musi być inny niż SECRETS_KEY");
   }
-  zbuforowana = wynik.data;
+  // Alert, którego nikt nie dostaje, to log, którego nikt nie czyta (NFR38): wstrzymanie
+  // wysyłki przez progi reputacji albo held po awarii ma dotrzeć do człowieka.
+  if (!k.ALERT_WEBHOOK_URL) {
+    throw blad("ALERT_WEBHOOK_URL jest wymagany poza sandboksem (kanał techniczny na Discordzie/Slacku)");
+  }
+  // Zaufanie do nagłówków proxy musi być DECYZJĄ operatora: domyślne „ostatni-xff" przy
+  // aplikacji wystawionej bez proxy oddawałoby klientowi wybór licznika limitu logowania.
+  // „brak" (nie ufam nagłówkom) wyłączałby limit prób logowania per IP (review Codeksa r2):
+  // produkcja stoi za proxy i ma powiedzieć, jak ono podaje adres klienta.
+  if (!k.TRUSTED_PROXY || k.TRUSTED_PROXY === "brak") {
+    throw blad("TRUSTED_PROXY jest wymagany poza sandboksem: ostatni-xff (Caddy/nginx przed aplikacją) albo x-real-ip");
+  }
+  if (!/^https:\/\//i.test(k.ALERT_WEBHOOK_URL)) {
+    throw blad("ALERT_WEBHOOK_URL musi zaczynać się od https:// poza sandboksem");
+  }
+  // Linki w mailach (klik, wypis, pixel, obrazy) i ciasteczko sesji stoją na APP_URL
+  // i TRACKING_URL. Gołe IP po http to filtr antyspamowy na każdym mailu, a RFC 8058
+  // wymaga HTTPS dla wypisu jednym kliknięciem.
+  const adresy: [string, string | undefined][] = [
+    ["APP_URL", k.APP_URL],
+    ["TRACKING_URL", k.TRACKING_URL],
+  ];
+  if (k.APP_URL === APP_URL_DOMYSLNY) {
+    throw blad("APP_URL musi być ustawione jawnie poza sandboksem (domyślny adres sandboxa jest zabroniony)");
+  }
+  for (const [nazwa, adres] of adresy) {
+    if (adres === undefined) continue;
+    if (!/^https:\/\//i.test(adres)) throw blad(`${nazwa} musi zaczynać się od https:// poza sandboksem`);
+    if (hostLokalnyAlboIp(adres)) throw blad(`${nazwa} nie może wskazywać na adres IP ani nazwę lokalną poza sandboksem`);
+    const u = new URL(adres);
+    if (u.pathname !== "/" && u.pathname !== "") throw blad(`${nazwa} ma być samym adresem hosta, bez ścieżki`);
+    if (u.search || u.hash || u.username || u.password) throw blad(`${nazwa} nie może mieć parametrów, kotwicy ani danych logowania`);
+  }
+  return k;
+}
+
+let zbuforowana: Konfiguracja | undefined;
+
+export function config(): Konfiguracja {
+  if (zbuforowana) return zbuforowana;
+  zbuforowana = zbudujKonfiguracje(process.env);
   return zbuforowana;
+}
+
+/** Czy proces działa w jawnym trybie sandboxa (MIDREV_SANDBOX=1). */
+export function trybSandbox(): boolean {
+  return config().MIDREV_SANDBOX;
+}
+
+/**
+ * Adres, pod którym odbiorca maila widzi NASZE trasy: kliki, pixel, wypis, obrazy,
+ * skrypt popupów. TRACKING_URL, a bez niego APP_URL. Panel i akceptacja kampanii
+ * zostają na APP_URL.
+ */
+export function adresSledzenia(): string {
+  const k = config();
+  return k.TRACKING_URL ?? k.APP_URL;
+}
+
+/**
+ * Opis konfiguracji do logu startowego: nazwy hostów i tryb, BEZ sekretów i bez
+ * adresu bazy (w DATABASE_URL jest hasło).
+ */
+export function opisKonfiguracji(): string {
+  const k = config();
+  const host = (a: string) => new URL(a).host;
+  return [
+    `tryb=${k.MIDREV_SANDBOX ? "sandbox" : "produkcja"}`,
+    `panel=${host(k.APP_URL)}`,
+    `sledzenie=${host(adresSledzenia())}`,
+    `alerty=${k.ALERT_WEBHOOK_URL ? "webhook" : "tylko log"}`,
+    `proxy=${k.TRUSTED_PROXY ?? "ostatni-xff (sandbox)"}`,
+  ].join(" ");
 }

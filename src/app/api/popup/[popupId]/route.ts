@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { przyjmijZgloszenie, schematZgloszenia } from "../../../../usecases/popupy/zglos-popup";
 import { popupPubliczny } from "../../../../usecases/popupy/zarzadzaj";
+import { adresKlienta } from "../../../../adapters/ip-klienta";
 import { przeczytajOgraniczone } from "../../przeczytaj-ograniczone";
 
 /**
@@ -61,9 +62,9 @@ function przekroczonyLimit(ip: string): boolean {
 }
 
 function ipZadania(zadanie: NextRequest): string {
-  // pierwszy adres z X-Forwarded-For, bo dalsze dokleja kazdy posrednik po drodze
-  const xff = zadanie.headers.get("x-forwarded-for");
-  return xff ? xff.split(",")[0].trim() : "nieznane";
+  // adres z naglowka ustawionego przez ZAUFANE proxy (TRUSTED_PROXY): pierwszy wpis
+  // X-Forwarded-For podaje klient i kazda proba dostawalaby nowy licznik
+  return adresKlienta(zadanie.headers) ?? "nieznane";
 }
 
 // zgloszenie to email + imie; wiekszy payload nie ma prawa istniec, a czytanie

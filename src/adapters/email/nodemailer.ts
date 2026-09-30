@@ -2,6 +2,7 @@ import { isIP } from "node:net";
 import nodemailer from "nodemailer";
 import type { Sekret } from "../crypto";
 import type { DostawcaWysylki, Wiadomosc, WynikWysylki } from "../../domain/email/port";
+import { htmlNaTekst } from "../../domain/email/tekst";
 import { BladHostaSmtp, rozwiazHostSmtp, type CelPolaczenia, type FunkcjaLookup } from "./bezpieczny-host";
 
 /**
@@ -24,6 +25,60 @@ export interface KonfiguracjaSerwera {
   bezpieczenstwo: Bezpieczenstwo;
   uzytkownik: string | null;
   haslo: Sekret | null;
+  /**
+   * Rodzaj serwera (0029). `przekaznik` = ESP/relay (Amazon SES, Brevo, Mailgun), który
+   * sam przepisuje kopertę na swoją domenę MAIL FROM. Domyślnie `wlasny_serwer`.
+   */
+  rodzaj?: RodzajSerwera;
+  /** domena koperty (Return-Path), np. bounce.news.midrev.pl; null = koperta = From */
+  domenaKoperty?: string | null;
+}
+
+export type RodzajSerwera = "wlasny_serwer" | "przekaznik";
+
+/**
+ * Adres koperty SMTP (MAIL FROM) dla danego nadawcy.
+ *
+ * Decyzja (dokumentacja SES, „Using a custom MAIL FROM domain" i „Email feedback
+ * forwarding destination", sprawdzone 28.09.2026):
+ *   - SES przy SMTP ZAWSZE podmienia kopertę: z custom MAIL FROM na zanonimizowany adres
+ *     w `bounce.<domena>` (np. 0107…-000000@bounce.news.midrev.pl), bez niego na
+ *     `amazonses.com`. SPF sprawdzany jest więc na domenie custom MAIL FROM, a nie na tym,
+ *     co podamy w MAIL FROM.
+ *   - Przy włączonym „email feedback forwarding" SES odsyła odbicia i skargi na adres
+ *     z nagłówka Return-Path w DATA, a bez niego na adres z komendy MAIL FROM. Ten adres
+ *     musi należeć do zweryfikowanej tożsamości (u nas: domena From).
+ *   - MX domeny custom MAIL FROM wskazuje na feedback-smtp.<region>.amazonses.com, czyli
+ *     adres w `bounce.<domena>` NIE jest skrzynką, którą da się czytać.
+ * Wniosek: przy PRZEKAŹNIKU koperta zostaje adresem From (prawdziwa skrzynka, czytana
+ * przez skrzynkę zwrotną IMAP), a `domenaKoperty` służy wyłącznie weryfikacji SPF
+ * (weryfikacja-dns.ts). Podanie tam `…@bounce.news.midrev.pl` wysłałoby przekazane
+ * odbicia z powrotem do SES, czyli w nicość.
+ * Przy WŁASNYM serwerze nikt kopertę nie przepisuje: gdy `domenaKoperty` jest podana,
+ * MAIL FROM = część lokalna adresu From @ domenaKoperty (odbicia idą na MX tej domeny,
+ * SPF liczony jest dla niej). Bez niej MAIL FROM = From, jak dotąd.
+ */
+export function adresKoperty(od: string, k: Pick<KonfiguracjaSerwera, "rodzaj" | "domenaKoperty">): string {
+  if (k.rodzaj === "przekaznik" || !k.domenaKoperty) return od;
+  const lokalna = od.split("@")[0];
+  return `${lokalna}@${k.domenaKoperty}`;
+}
+
+/**
+ * Identyfikator nadany przez serwer w odpowiedzi na koniec DATA. SES: „250 Ok
+ * 0107018f…-000000" (Message-ID u odbiorcy to <ten-id@region.amazonses.com>), Postfix:
+ * „250 2.0.0 Ok: queued as 4ABC123". Bez identyfikatora (Mailpit, część serwerów) = null.
+ */
+export function idDostawcyZOdpowiedzi(odpowiedz: string | null | undefined): string | null {
+  const t = String(odpowiedz ?? "").trim();
+  const m =
+    /^250[ -](?:\d\.\d\.\d\s+)?Ok(?::\s*queued as)?\s+<?([A-Za-z0-9][A-Za-z0-9._@=+-]{3,250})>?\s*$/i.exec(t) ??
+    /^250[ -](?:\d\.\d\.\d\s+)?.*\bqueued as\s+([A-Za-z0-9][A-Za-z0-9._@=+-]{3,250})/i.exec(t);
+  if (!m) return null;
+  // Klucz w tej samej postaci, której szuka dopasowanie odbić (odbicia.ts: lewa strona
+  // Message-ID z raportu): pełny identyfikator `<abc@mx>` zapisujemy jako `abc`.
+  const lewa = m[1].includes("@") ? m[1].slice(0, m[1].lastIndexOf("@")) : m[1];
+  return lewa.length >= 4 ? lewa : null;
 }
 
 export interface OpcjeAdaptera {
@@ -327,7 +382,10 @@ export class AdapterNodemailer implements DostawcaWysylki {
     // wiadomości), prawa domena nadawcy — RFC 5322 chce po prawej nazwy domenowej, a po
     // tym identyfikatorze skrzynka zwrotna dopasowuje odbicia (DSN) do wiadomości.
     const messageId = `<${w.idempotencyKey}@${od.split("@")[1]}>`;
-    const naglowki: Record<string, string> = {};
+    // Nasz identyfikator w nagłówku, którego przekaźnik NIE przepisuje (SES nadpisuje
+    // Message-ID własnym). Wraca w kopii nagłówków oryginału w DSN/ARF i jest pierwszym
+    // kluczem dopasowania odbicia (dsn.ts), przed ID dostawcy i Message-ID.
+    const naglowki: Record<string, string> = { "X-MidRev-Message-Id": bezNowychLinii(w.idempotencyKey) };
     if (w.adresWypisania) {
       // RFC 8058: wypisanie jednym kliknięciem
       naglowki["List-Unsubscribe"] = `<${bezNowychLinii(w.adresWypisania)}>`;
@@ -338,11 +396,14 @@ export class AdapterNodemailer implements DostawcaWysylki {
         from: { name: bezNowychLinii(w.odNazwa ?? ""), address: od },
         to: doAdres,
         replyTo: odpowiedzDo,
-        // koperta podana jawnie: dokładnie jeden odbiorca i MAIL FROM = adres nadawcy,
-        // dzięki czemu SPF sprawdzany jest na domenie z From (wyrównanie DMARC)
-        envelope: { from: od, to: [doAdres] },
+        // koperta podana jawnie: dokładnie jeden odbiorca, MAIL FROM wg rodzaju serwera
+        // (adresKoperty: przy przekaźniku = From, przy własnym serwerze z domeną koperty =
+        // lokalna@domenaKoperty) — decyzja i źródła przy adresKoperty
+        envelope: { from: adresKoperty(od, this.#konfiguracja), to: [doAdres] },
         subject: bezNowychLinii(w.temat),
         html: w.html,
+        // alternatywa text/plain w KAŻDYM mailu (multipart/alternative)
+        text: htmlNaTekst(w.html),
         messageId,
         headers: naglowki,
       });
@@ -354,7 +415,8 @@ export class AdapterNodemailer implements DostawcaWysylki {
       // `sendingIp` celowo puste: znamy tylko adres serwera, KTÓREMU oddaliśmy maila, a nie
       // IP, z którego jego serwer wyśle go dalej. Wpisanie tu adresu przyjmującego
       // skłamałoby w diagnostyce dostarczalności (A3).
-      return { providerId: info.messageId ?? messageId, handedOffAt: new Date() };
+      const providerMessageId = idDostawcyZOdpowiedzi(info.response);
+      return { providerId: info.messageId ?? messageId, ...(providerMessageId ? { providerMessageId } : {}), handedOffAt: new Date() };
     } catch (blad) {
       if (blad instanceof Error && blad.message.startsWith("SMTP: ")) throw blad;
       throw bladWysylki(blad);

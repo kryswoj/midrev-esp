@@ -18,9 +18,10 @@
  *                 wyłącznie przy twardym kodzie.
  *   nie_odbicie — cokolwiek innego (odpowiedź człowieka, autoresponder, newsletter).
  *
- * Oryginalna wiadomość rozpoznawana jest po Message-ID: z części message/rfc822 albo
- * text/rfc822-headers (kopia naszych nagłówków), z In-Reply-To/References raportu, albo
- * z X-Original-Message-ID. To jest klucz dopasowania; adres odbiorcy jest kluczem zapasowym.
+ * Oryginalna wiadomość rozpoznawana jest, w kolejności pewności, po: naszym nagłówku
+ * X-MidRev-Message-Id z kopii nagłówków oryginału (przekaźnik go nie przepisuje), potem
+ * po Message-ID z części message/rfc822 albo text/rfc822-headers, z In-Reply-To/References
+ * raportu, albo z X-Original-Message-ID. Adres odbiorcy jest kluczem zapasowym.
  */
 
 export type AkcjaDsn = "failed" | "delayed" | "delivered" | "relayed" | "expanded";
@@ -40,6 +41,13 @@ export interface RaportZwrotny {
   pewnosc: "wysoka" | "niska";
   /** Message-ID oryginału w formie `<…>` albo null */
   messageIdOryginalu: string | null;
+  /**
+   * Nasz identyfikator wiadomości z nagłówka `X-MidRev-Message-Id` w ZAŁĄCZONEJ kopii
+   * nagłówków oryginału (message/rfc822, text/rfc822-headers). Przekaźnik (SES) nadpisuje
+   * Message-ID, ale własny nagłówek przepuszcza, więc to najpewniejszy klucz dopasowania.
+   * Tylko w kształcie UUID (id wiadomości); cokolwiek innego = null.
+   */
+  naszIdOryginalu: string | null;
   odbiorcy: OdbiorcaRaportu[];
   /** data raportu ZE ŹRÓDŁA: nagłówek Date raportu, w ostateczności Arrival-Date */
   kiedy: Date | null;
@@ -234,6 +242,34 @@ function messageIdZ(wartosc: string | null): string | null {
   return m ? `<${m[1]}>` : null;
 }
 
+const UUID_WIADOMOSCI = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function naszIdZ(wartosc: string | null): string | null {
+  const w = (wartosc ?? "").trim().replace(/^<|>$/g, "");
+  return UUID_WIADOMOSCI.test(w) ? w.toLowerCase() : null;
+}
+
+/**
+ * `X-MidRev-Message-Id` WYŁĄCZNIE z załączonej kopii oryginału — nie z nagłówków samego
+ * raportu i nie z cytatu w treści: tam trafia to, co napisze autor raportu, a kopia
+ * nagłówków to ta część DSN/ARF, którą serwer odbiorcy odsyła z naszej wiadomości.
+ */
+function znajdzNaszIdOryginalu(korzen: CzescMime): string | null {
+  for (const c of wszystkieCzesci(korzen)) {
+    if (c === korzen) continue;
+    if (c.typ === "message/rfc822") {
+      const osadzony = c.czesci[0];
+      const id = naszIdZ(osadzony ? naglowek(osadzony.naglowki, "x-midrev-message-id") : null);
+      if (id) return id;
+    }
+    if (c.typ === "text/rfc822-headers" || c.typ === "message/global-headers") {
+      const id = naszIdZ(naglowek(parsujNaglowki(c.tresc), "x-midrev-message-id"));
+      if (id) return id;
+    }
+  }
+  return null;
+}
+
 function znajdzMessageIdOryginalu(korzen: CzescMime): string | null {
   // 1. kopia oryginału (message/rfc822 albo text/rfc822-headers)
   for (const c of wszystkieCzesci(korzen)) {
@@ -328,10 +364,12 @@ export function parsujRaportZwrotny(surowy: string): RaportZwrotny {
   const nadawca = naglowek(n, "from");
   const kiedyRaportu = parsujDateNaglowka(naglowek(n, "date"));
   const messageIdOryginalu = znajdzMessageIdOryginalu(korzen);
+  const naszIdOryginalu = znajdzNaszIdOryginalu(korzen);
   const typRaportu = (korzen.parametry["report-type"] ?? "").toLowerCase();
 
   const baza = {
     messageIdOryginalu,
+    naszIdOryginalu,
     temat,
     nadawca,
     typSkargi: null as string | null,

@@ -1,6 +1,6 @@
 /** Pusty stan z jedną ikoną, krótkim wyjaśnieniem i pojedynczą akcją. */
 import type { ReactNode } from "react";
-import { Icon, type NazwaIkony } from "./icon";
+import { Icon, type NazwaIkony } from "./ikona";
 
 export function EmptyState({ icon = "dokument", title, description, action, inTable = false }: {
   icon?: NazwaIkony;

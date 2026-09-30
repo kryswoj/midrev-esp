@@ -23,6 +23,7 @@ import { stanKampanii, OKNO_SPOZNIENIA_GODZIN } from "../../../../../usecases/wy
 import { stanWysylkiTenanta } from "../../../../../usecases/wysylka/reputacja";
 import { Stat } from "../../../../ui";
 import { PrzyciskKopiuj } from "./kopiuj";
+import { PrzyciskDuplikuj } from "../akcje-kampanii";
 import { Komunikat, kampaniaKreatora, RamaKreatora } from "./kreator";
 import { listaKontrolnaKampanii, type PunktListy } from "../../../../../usecases/tresc/lista-kontrolna";
 import { zlozWiadomosc } from "../../../../../usecases/wysylka/renderuj";
@@ -92,7 +93,7 @@ export default async function Kampania({
   ]);
   const [lista, sklep] = await Promise.all([
     listaKontrolnaKampanii(tenantId, campaignId, { odbiorcy }),
-    getPool().query("select name from tenants where id = $1", [tenantId]),
+    getPool().query("select name, sender_company_name, sender_postal_address, sender_tax_id from tenants where id = $1", [tenantId]),
   ]);
   const akceptacja = akceptacje.rows[0];
   const html = String((kampania.content as any)?.html ?? "");
@@ -104,6 +105,11 @@ export default async function Kampania({
         clickToken: "podglad",
         unsubscribeToken: "podglad",
         nazwaSklepu: String(sklep.rows[0]?.name ?? ""),
+        nadawca: {
+          firma: sklep.rows[0]?.sender_company_name ?? null,
+          adres: sklep.rows[0]?.sender_postal_address ?? null,
+          nip: sklep.rows[0]?.sender_tax_id ?? null,
+        },
         sledzKlikniecia: false,
         sledzOtwarcia: false,
       }).html
@@ -158,7 +164,12 @@ export default async function Kampania({
 
   return (
     <>
-      <RamaKreatora tenantId={tenantId} kampania={kampania} aktywny="przeglad" />
+      <RamaKreatora
+        tenantId={tenantId}
+        kampania={kampania}
+        aktywny="przeglad"
+        akcja={<PrzyciskDuplikuj tenantId={tenantId} campaignId={campaignId} />}
+      />
       <Komunikat ok={ok} blad={blad} />
 
       {/* Pasek stanu (DESIGN.md): rzecz wymagająca decyzji ma być widoczna od razu,

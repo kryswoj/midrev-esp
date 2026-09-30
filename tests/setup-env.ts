@@ -1,16 +1,15 @@
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { adresBazyTestowej, odczytajPlikEnv, wymagajBazyTestowej } from "./baza-testowa";
 
-const envPath = join(import.meta.dirname, "..", ".env");
-
-if (existsSync(envPath)) {
-  for (const line of readFileSync(envPath, "utf-8").split("\n")) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith("#")) continue;
-    const eq = trimmed.indexOf("=");
-    if (eq === -1) continue;
-    const key = trimmed.slice(0, eq).trim();
-    const value = trimmed.slice(eq + 1).trim();
-    if (!(key in process.env)) process.env[key] = value;
-  }
+// Uruchamiany przed KAZDYM plikiem testow (setupFiles), zanim test dotknie config().
+for (const [klucz, wartosc] of odczytajPlikEnv()) {
+  if (!(klucz in process.env)) process.env[klucz] = wartosc;
 }
+
+// Testy chodza WYLACZNIE na bazie testowej. DATABASE_URL z .env to baza deweloperska
+// (serwer :3005 + worker), wiec nadpisujemy ja bezwarunkowo - takze wtedy, gdy ktos
+// wyeksportowal DATABASE_URL w powloce.
+process.env.DATABASE_URL = adresBazyTestowej();
+// Testy to sandbox z definicji (Mailpit, klucz z zer, http). Guardy produkcyjne sprawdza
+// osobny test na czystej funkcji zbudujKonfiguracje, nie globalny stan procesu.
+process.env.MIDREV_SANDBOX = "1";
+wymagajBazyTestowej(process.env.DATABASE_URL, "setup-env");

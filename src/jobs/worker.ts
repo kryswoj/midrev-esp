@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { getPool } from "../adapters/db/pool";
+import { closePool, getPool } from "../adapters/db/pool";
 import { config } from "../config";
+import { sprawdzSrodowiskoStartowe } from "../walidacja-startowa";
 import { przeliczAtrybucje } from "../usecases/przelicz-atrybucje";
 import { przetworzZdarzenie } from "../usecases/przetworz-zdarzenie";
 import { wyslijPartie, zbudujWiadomosciKampanii } from "../usecases/wysylka/wyslij-kampanie";
@@ -8,7 +9,10 @@ import { rekoncyliacjaWysylki } from "../usecases/wysylka/rekoncyliacja";
 import { sprawdzProgiReputacji } from "../usecases/wysylka/reputacja";
 import { domknijOdwolane, wypchnijZaplanowane } from "../usecases/wysylka/sterowanie";
 import { wyslijAlert } from "./alerty";
-import { dodajZadanie, domknijZadanie, odlozZadanie, odswiezHeartbeat, zajmijZadanie, type Zadanie } from "./kolejka";
+import { dodajZadanie, domknijZadanie, odlozZadanie, odswiezHeartbeat, zajmijZadanie, zwolnijZadanie, type Zadanie } from "./kolejka";
+import { ODSTEP_HEARTBEATU_MS, oznaczZamykanieWorkera, sprzatnijHeartbeaty, zapiszHeartbeat } from "./heartbeat";
+import { czyZamykanie, drzemka, oglosZamykanie } from "./zamykanie";
+import { odzyskajZombie, utrzymajPartycje } from "./partycje";
 import { HANDLERY_AUTOMATYZACJI } from "./handlery-automatyzacje";
 import { HANDLERY_CYKLICZNE, zarejestrujCykliczne } from "./handlery-cykliczne";
 import { HANDLERY_ODBICIA, ODSTEP_ODBIC_MS, zaplanujOdbicia } from "./handlery-odbicia";
@@ -28,6 +32,13 @@ async function statusKampanii(tenantId: string, campaignId: string): Promise<str
     [tenantId, campaignId],
   );
   return rows[0]?.status ?? null;
+}
+
+/** Handler przerwany przez SIGTERM w bezpiecznym punkcie: zadanie wraca do kolejki bez zużycia próby. */
+class PrzerwaneZamykaniem extends Error {
+  constructor() {
+    super("przerwane zamykaniem workera");
+  }
 }
 
 const HANDLERY: Record<string, (z: Zadanie) => Promise<void>> = {
@@ -50,6 +61,11 @@ const HANDLERY: Record<string, (z: Zadanie) => Promise<void>> = {
     do {
       wynik = await wyslijPartie(z.tenant_id, { limit: config().WYSYLKA_ROZMIAR_PARTII });
       console.log(`[${workerId}] kampania ${campaignId}: wysłane ${wynik.wyslane}, odmowy ${wynik.odmowy}, błędy ${wynik.bledy}`);
+      if (wynik.powodZatrzymania === "zamykanie") {
+        // SIGTERM: reszta partii już wróciła do queued, a zadanie wraca do kolejki bez
+        // zużycia próby (tik → zwolnijZadanie). Następny proces dokończy kampanię.
+        throw new PrzerwaneZamykaniem();
+      }
       if (wynik.powodZatrzymania === "wstrzymanie_tenanta") {
         // Wysyłka CAŁEGO tenanta wstrzymana (B5). To nie jest błąd joba: ponawianie
         // niczego nie naprawi, a wyczerpane próby wysłałyby drugi alert o tej samej
@@ -165,6 +181,11 @@ async function tik() {
     await handler(zadanie);
     await domknijZadanie(zadanie, workerId);
   } catch (blad) {
+    if (blad instanceof PrzerwaneZamykaniem) {
+      const oddane = await zwolnijZadanie(zadanie, workerId);
+      console.log(`[${workerId}] zadanie ${zadanie.kind} ${oddane ? "oddane do kolejki bez zużycia próby" : "nie należało już do tego workera"} (zamykanie)`);
+      return true;
+    }
     const tresc = blad instanceof Error ? blad.message : String(blad);
     const wyczerpane = await odlozZadanie(zadanie, tresc, workerId);
     if (wyczerpane) {
@@ -180,23 +201,55 @@ async function tik() {
   return true;
 }
 
-import { odzyskajZombie, utrzymajPartycje } from "./partycje";
+// ── Start ───────────────────────────────────────────────────────────────────────
+// Walidacja środowiska ZANIM cokolwiek dotknie bazy albo zbuduje link: guard nie zależy
+// od NODE_ENV (worker go nie dostaje), tylko od jawnej flagi MIDREV_SANDBOX.
+try {
+  const { opis } = sprawdzSrodowiskoStartowe("worker");
+  console.log(`[${workerId}] ${opis}`);
+} catch (blad) {
+  console.error(`[${workerId}] START ODRZUCONY: ${blad instanceof Error ? blad.message : String(blad)}`);
+  process.exit(1);
+}
 
 console.log(`[${workerId}] start, kolejka na Postgresie, SKIP LOCKED`);
-// partycje na start i co godzinę: bez tego trzeciego dnia zapisy lecą do partycji-alarmu
-await utrzymajPartycje();
+
+/** Zadania w tle (tiki co minutę itd.): zamykanie czeka, aż skończą, zanim zamknie pulę bazy. */
+const wTle = new Set<Promise<unknown>>();
+const zegary: NodeJS.Timeout[] = [];
+function wTleBezpiecznie(nazwa: string, praca: () => Promise<unknown>) {
+  if (czyZamykanie()) return;
+  const p = praca()
+    .catch((b) => console.error(`[${workerId}] ${nazwa}:`, b))
+    .finally(() => wTle.delete(p));
+  wTle.add(p);
+}
+function coIle(nazwa: string, ms: number, praca: () => Promise<unknown>) {
+  zegary.push(setInterval(() => wTleBezpiecznie(nazwa, praca), ms));
+}
+
+// Partycje na start i co godzinę. Błąd NIE przewraca startu (dawniej rzut przy starcie
+// = restart w kółko): kolejka działa dalej na partycji domyślnej, a człowiek dostaje alert.
+async function partycje() {
+  const w = await utrzymajPartycje();
+  if (w.przeniesione) console.warn(`[${workerId}] partycje: ${w.przeniesione} zadań przeniesionych z jobs_default do partycji dziennych`);
+  if (w.bledy.length) {
+    await wyslijAlert(`utrzymanie partycji kolejki: ${w.bledy.length} błędów — ${w.bledy.slice(0, 3).join(" | ")}`, { poziom: "krytyczny" });
+  }
+}
+await partycje().catch((b) => console.error(`[${workerId}] partycje (start):`, b));
 await odzyskajZombie();
-setInterval(() => utrzymajPartycje().catch((b) => console.error(`[${workerId}] partycje:`, b)), 3600_000);
-setInterval(() => odzyskajZombie().catch((b) => console.error(`[${workerId}] zombie:`, b)), 300_000);
-setInterval(() => {
+await zapiszHeartbeat(workerId, { start: true }).catch((b) => console.error(`[${workerId}] heartbeat workera (start):`, b));
+coIle("partycje", 3600_000, partycje);
+coIle("zombie", 300_000, odzyskajZombie);
+coIle("heartbeat workera", ODSTEP_HEARTBEATU_MS, () => zapiszHeartbeat(workerId));
+coIle("sprzątanie heartbeatów", 3600_000, () => sprzatnijHeartbeaty());
+coIle("heartbeat zadania", 60_000, async () => {
   const z = biezaceZadanie;
   if (!z) return;
-  odswiezHeartbeat(z, workerId)
-    .then((moje) => {
-      if (!moje) console.warn(`[${workerId}] heartbeat: zadanie ${z.kind} nie należy już do tego workera (odzyskane jako zombie?)`);
-    })
-    .catch((b) => console.error(`[${workerId}] heartbeat:`, b));
-}, 60_000);
+  const moje = await odswiezHeartbeat(z, workerId);
+  if (!moje) console.warn(`[${workerId}] heartbeat: zadanie ${z.kind} nie należy już do tego workera (odzyskane jako zombie?)`);
+});
 
 // Tik automatyzacji co minutę per tenant: journeys reagują na zdarzenia (zapis z popupu,
 // zamówienie) bez człowieka w pętli. Nakładanie się tików jest bezpieczne: unikalność
@@ -206,7 +259,7 @@ async function tikAutomatyzacji() {
   for (const t of rows) await dodajZadanie(t.id, "automatyzacje_tik", {});
 }
 await tikAutomatyzacji().catch((b) => console.error(`[${workerId}] tik automatyzacji (start):`, b));
-setInterval(() => tikAutomatyzacji().catch((b) => console.error(`[${workerId}] tik automatyzacji:`, b)), 60_000);
+coIle("tik automatyzacji", 60_000, tikAutomatyzacji);
 
 // Rekoncyliacja co kwadrans per tenant (W3): wiadomości zawieszone w 'sending'
 // przechodzą w 'held' i idzie alert — bez tego odbiorca po cichu wypadał z wysyłki.
@@ -220,13 +273,13 @@ async function zaplanujRekoncyliacje() {
   }
 }
 await zaplanujRekoncyliacje().catch((b) => console.error(`[${workerId}] rekoncyliacja (start):`, b));
-setInterval(() => zaplanujRekoncyliacje().catch((b) => console.error(`[${workerId}] rekoncyliacja:`, b)), 900_000);
+coIle("rekoncyliacja", 900_000, zaplanujRekoncyliacje);
 
 // Skrzynka zwrotna (odbicia i skargi przez IMAP) co 5 minut per tenant, który ją ma
 // skonfigurowaną (audyt 24.09, #3). Bez tego przy własnym SMTP klienta twarde odbicia
 // nigdy nie trafiały do wykluczeń, a progi reputacji liczyły na pustym mianowniku.
 await zaplanujOdbicia().catch((b) => console.error(`[${workerId}] odbicia (start):`, b));
-setInterval(() => zaplanujOdbicia().catch((b) => console.error(`[${workerId}] odbicia:`, b)), ODSTEP_ODBIC_MS);
+coIle("odbicia", ODSTEP_ODBIC_MS, zaplanujOdbicia);
 
 // B1: dispatcher zaplanowanych kampanii, co minutę. Do tej pory `scheduled_at` czytał
 // wyłącznie panel, więc plan wysyłki był napisem na ekranie. Dwa workery robiące ten tik
@@ -246,19 +299,77 @@ async function tikHarmonogramu() {
   }
 }
 await tikHarmonogramu().catch((b) => console.error(`[${workerId}] harmonogram (start):`, b));
-setInterval(() => tikHarmonogramu().catch((b) => console.error(`[${workerId}] harmonogram:`, b)), 60_000);
+coIle("harmonogram", 60_000, tikHarmonogramu);
 
 // Joby cykliczne agenta danych (import, sprzątanie): rejestracja tików w tym procesie.
-zarejestrujCykliczne({ workerId });
+const zatrzymajCykliczne = zarejestrujCykliczne({ workerId });
 
-// prosta pętla: pracuj póki są zadania, śpij 2s gdy pusto
-// eslint-disable-next-line no-constant-condition
-while (true) {
-  try {
-    const bylo = await tik();
-    if (!bylo) await new Promise((r) => setTimeout(r, 2000));
-  } catch (blad) {
-    console.error(`[${workerId}] błąd pętli:`, blad);
-    await new Promise((r) => setTimeout(r, 5000));
-  }
+// ── Zamykanie (SIGTERM/SIGINT) ────────────────────────────────────────────────────
+// 1. przestajemy zajmować zadania i planować tiki,
+// 2. bieżące zadanie kończy się w bezpiecznym punkcie: wysyłka kończy BIEŻĄCĄ
+//    wiadomość, resztę partii oddaje do queued, zadanie wraca do kolejki bez próby,
+// 3. zegary stop, czekamy na zadania w tle, pula bazy zamknięta, wyjście 0.
+// Twardy limit ZAMYKANIE_MS: jeśli handler (np. import pliku, wolny SMTP) nie skończy,
+// wychodzimy z kodem 1 BEZ oddawania jego zadania: handler żyje do samego process.exit,
+// więc oddane zadanie mógłby w tym czasie podjąć drugi worker i dwa handlery pracowałyby
+// równolegle nad tym samym (review Codeksa r1). Zadanie zostaje `running`, heartbeat
+// zadania stoi, a recovery zombie (15 min) odda je do kolejki, gdy proces na pewno nie
+// żyje. Wiadomość w `sending` rozstrzygnie rekoncyliacja (held), nie ślepe ponowienie.
+// Pula SMTP partii zamyka się w `finally` wyslijPartie. systemd: TimeoutStopSec > 30 s.
+const ZAMYKANIE_MS = 25_000;
+let petla: Promise<void> | null = null;
+
+async function zakoncz(kod: number) {
+  for (const z of zegary) clearInterval(z);
+  await Promise.race([Promise.allSettled([...wTle]), drzemkaTwarda(3_000)]);
+  await closePool().catch(() => {});
+  process.exit(kod);
 }
+
+function drzemkaTwarda(ms: number) {
+  return new Promise<void>((r) => setTimeout(r, ms).unref());
+}
+
+let sygnalow = 0;
+async function naSygnal(sygnal: string) {
+  sygnalow++;
+  if (sygnalow > 1) {
+    console.warn(`[${workerId}] ${sygnal} ponownie: wyjście natychmiast`);
+    process.exit(1);
+  }
+  console.log(`[${workerId}] ${sygnal}: zamykanie — nie zajmuję nowych zadań, kończę bieżącą wiadomość`);
+  oglosZamykanie();
+  zatrzymajCykliczne();
+  for (const z of zegary) clearInterval(z);
+  await oznaczZamykanieWorkera(workerId).catch((b) => console.error(`[${workerId}] heartbeat (zamykanie):`, b));
+  const zdazyl = await Promise.race([
+    (petla ?? Promise.resolve()).then(() => true),
+    drzemkaTwarda(ZAMYKANIE_MS).then(() => false),
+  ]);
+  if (!zdazyl) {
+    const z = biezaceZadanie;
+    if (z) {
+      console.error(`[${workerId}] zamykanie: zadanie ${z.kind} nie skończyło się w ${ZAMYKANIE_MS / 1000} s; zostaje w running, odda je recovery zombie po 15 min. Wyjście awaryjne.`);
+    }
+    await zakoncz(1);
+    return;
+  }
+  console.log(`[${workerId}] zamknięty czysto`);
+  await zakoncz(0);
+}
+process.on("SIGTERM", () => void naSygnal("SIGTERM"));
+process.on("SIGINT", () => void naSygnal("SIGINT"));
+
+// prosta pętla: pracuj póki są zadania, śpij 2s gdy pusto (drzemka przerywana SIGTERM)
+petla = (async () => {
+  console.log(`[${workerId}] gotowy`);
+  while (!czyZamykanie()) {
+    try {
+      const bylo = await tik();
+      if (!bylo) await drzemka(2000);
+    } catch (blad) {
+      console.error(`[${workerId}] błąd pętli:`, blad);
+      await drzemka(5000);
+    }
+  }
+})();

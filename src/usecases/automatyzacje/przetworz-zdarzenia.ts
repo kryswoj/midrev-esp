@@ -13,7 +13,7 @@ import {
   type Wezel,
 } from "../../domain/automatyzacje/graf";
 import { canSendTo } from "../wysylka/can-send-to";
-import { zlozWiadomosc } from "../wysylka/renderuj";
+import { zlozWiadomosc, type DaneStopki } from "../wysylka/renderuj";
 import { wyslijPartie } from "../wysylka/wyslij-kampanie";
 import { politykaSledzenia, zgodyNaSledzenie } from "../wysylka/zgody";
 import { adresNadawcyTenanta } from "../wysylka-konfiguracja/nadawca";
@@ -233,19 +233,27 @@ async function wprowadzDoFlow(tenantId: string, flowId: string): Promise<number>
 
 interface Otoczenie {
   nazwaSklepu: string;
+  /** dane nadawcy do stopki (0029): firma, adres pocztowy, NIP */
+  nadawca: DaneStopki;
   sendingDomainId: string | null;
   polityka: Awaited<ReturnType<typeof politykaSledzenia>>;
 }
 
 async function otoczenieTenanta(tenantId: string): Promise<Otoczenie> {
   const pool = getPool();
-  const { rows } = await pool.query("select name from tenants where id = $1", [tenantId]);
+  const { rows } = await pool.query(
+    "select name, sender_company_name, sender_postal_address, sender_tax_id from tenants where id = $1",
+    [tenantId],
+  );
   const od = await adresNadawcyTenanta(tenantId);
   const domena = od.split("@")[1]?.trim().toLowerCase();
   const { rows: sd } = domena
     ? await pool.query("select id from sending_domains where tenant_id = $1 and lower(domain) = $2", [tenantId, domena])
     : { rows: [] as { id: string }[] };
-  return { nazwaSklepu: String(rows[0]?.name ?? ""), sendingDomainId: sd[0]?.id ?? null, polityka: await politykaSledzenia(pool, tenantId) };
+  return {
+    nazwaSklepu: String(rows[0]?.name ?? ""),
+    nadawca: { firma: rows[0]?.sender_company_name ?? null, adres: rows[0]?.sender_postal_address ?? null, nip: rows[0]?.sender_tax_id ?? null },
+    sendingDomainId: sd[0]?.id ?? null, polityka: await politykaSledzenia(pool, tenantId) };
 }
 
 type WynikWiadomosci =
@@ -287,6 +295,7 @@ async function zbudujWiadomoscWezla(
     clickToken,
     unsubscribeToken: unsubToken,
     nazwaSklepu: oto.nazwaSklepu,
+    nadawca: oto.nadawca,
     sledzKlikniecia: zgody.klikniecia,
     sledzOtwarcia: zgody.otwarcia,
   });

@@ -1,0 +1,97 @@
+# midrev-esp PRODUKCJA: wyłącznie Postgres 18 (panel i worker chodzą pod systemd, nie w Dockerze).
+# Bez Mailpita, bez WooCommerce, bez bazy testów. Sandbox deweloperski to ../docker-compose.yml.
+#
+# Uruchomienie (na serwerze produkcyjnym, jako root):
+#   docker compose -f /srv/midrev-esp/ops/docker-compose.prod.yml up -d
+#
+# Zasady, których ten plik pilnuje (każda wzięła się z błędu, który już się zdarzył):
+# - port TYLKO na 127.0.0.1. Porty publikowane przez Dockera omijają ufw; bind na
+#   0.0.0.0 = baza z danymi osobowymi w internecie. Druga warstwa: "ip": "127.0.0.1"
+#   w /etc/docker/daemon.json i reguła DOCKER-USER (provision.sh),
+# - hasło nie jest w tym pliku: przychodzi z db.env (prawa 600, poza repo),
+# - wolumen nazwany, z prefiksem projektu `midrev-esp-prod` (na serwerze deweloperskim
+#   istnieje projekt `midrev-esp` z wolumenami sandboxa; nazwy się nie spotkają),
+# - restart: unless-stopped, żeby baza wstała sama po reboocie.
+#
+# Zmienne interpolowane (domyślne = produkcja; test na sucho nadpisuje je, żeby nie
+# dotknąć niczego istniejącego):
+#   DB_ENV_FILE   plik z POSTGRES_USER / POSTGRES_PASSWORD / POSTGRES_DB
+#   DB_PORT       port na 127.0.0.1 (musi zgadzać się z DATABASE_URL w production.env)
+#   DB_CONTAINER  nazwa kontenera (skrypty backupu wołają `docker exec` po tej nazwie)
+
+name: midrev-esp-prod
+
+services:
+  postgres:
+    # Ta sama gałąź co sandbox (postgres:18-alpine), żeby testy i produkcja miały ten sam
+    # silnik. Aktualizacja wersji pomocniczej: świadomie, `docker compose pull` + `up -d`
+    # w oknie bez wysyłki (WYMAGA ZGODY, patrz README).
+    image: postgres:18-alpine
+    container_name: ${DB_CONTAINER:-midrev-esp-prod-db}
+    restart: unless-stopped
+    env_file:
+      - path: ${DB_ENV_FILE:-/srv/midrev-esp/shared/env/db.env}
+        required: true
+    ports:
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
+    volumes:
+      # PG18 zmienił punkt montowania: dane lądują w podkatalogu /var/lib/postgresql/18/docker
+      - pgdata:/var/lib/postgresql
+    # Parametry pod VPS 2 vCPU / 4 GB, na którym obok bazy chodzą panel Next (~0,5–1 GB)
+    # i worker (~0,3 GB). Baza pilota jest mała (dziesiątki MB), więc priorytet to
+    # przewidywalna pamięć, nie maksymalna przepustowość.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=512MB
+      - -c
+      - effective_cache_size=1536MB
+      - -c
+      - work_mem=8MB
+      - -c
+      - maintenance_work_mem=128MB
+      - -c
+      - max_connections=60
+      - -c
+      - wal_compression=on
+      - -c
+      - checkpoint_completion_target=0.9
+      - -c
+      - max_wal_size=2GB
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - effective_io_concurrency=100
+      # zawieszona transakcja nie może trzymać blokad bez końca (kolejka używa SKIP LOCKED)
+      - -c
+      - idle_in_transaction_session_timeout=300000
+      - -c
+      - log_min_duration_statement=2000
+      - -c
+      - log_lock_waits=on
+      - -c
+      - log_temp_files=10MB
+      - -c
+      - log_line_prefix=%m [%p] %q%u@%d
+      - -c
+      - timezone=UTC
+    shm_size: 256mb
+    # czyste zamknięcie (checkpoint) zamiast SIGKILL po 10 s
+    stop_grace_period: 60s
+    stop_signal: SIGINT
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -q -h 127.0.0.1 -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+
+volumes:
+  pgdata:

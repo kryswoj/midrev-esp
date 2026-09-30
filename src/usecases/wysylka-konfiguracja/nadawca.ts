@@ -1,6 +1,6 @@
 import { getPool } from "../../adapters/db/pool";
 import { AdapterSmtp } from "../../adapters/email/smtp";
-import { config } from "../../config";
+import { config, trybSandbox } from "../../config";
 import type { DostawcaWysylki } from "../../domain/email/port";
 import { sprawdzDomene, type OpcjeDns } from "./domeny";
 import { zaladujSerwer, zapiszWynikTestu } from "./serwer";
@@ -9,8 +9,9 @@ import { zaladujSerwer, zapiszWynikTestu } from "./serwer";
  * Wybór dostawcy i nadawcy dla partii wysyłki tenanta (moduł „Wysyłka i domeny").
  *
  * Dwie drogi:
- *   domyślna        — tenant bez własnego serwera: dotychczasowe zachowanie (adapter SMTP
- *                     z SMTP_HOST/SMTP_PORT, adres MAIL_FROM), nazwa nadawcy = nazwa konta.
+ *   domyślna        — tenant bez własnego serwera: WYŁĄCZNIE w sandboksie (MIDREV_SANDBOX)
+ *                     adapter SMTP z SMTP_HOST/SMTP_PORT (Mailpit), adres MAIL_FROM, nazwa
+ *                     nadawcy = nazwa konta. Poza sandboksem: blokada z jasnym powodem.
  *   serwer klienta  — tenant ze skonfigurowanym i SPRAWDZONYM serwerem SMTP: jego serwer,
  *                     jego adres nadawcy, jego reply-to.
  *
@@ -63,9 +64,37 @@ export async function wybierzWysylke(
   tenantId: string,
   opcje: { dostawca?: DostawcaWysylki; dns?: OpcjeDns } = {},
 ): Promise<WyborWysylki> {
+  // Adres pocztowy nadawcy w stopce: twarda bramka w SILNIKU, nie tylko w liście kontrolnej
+  // kampanii (review Codeksa r2): flowy, wysyłka testowa i dispatcher zaplanowanych kampanii
+  // idą tędy, a lista kontrolna ich nie widzi. Poza sandboksem bez adresu nic nie wychodzi.
+  if (!trybSandbox()) {
+    const { rows: nadawcaTenanta } = await getPool().query(
+      "select sender_postal_address from tenants where id = $1",
+      [tenantId],
+    );
+    if (!String(nadawcaTenanta[0]?.sender_postal_address ?? "").trim()) {
+      return {
+        rodzaj: "blokada",
+        powod: "Stopka nie ma adresu pocztowego nadawcy (wymóg CAN-SPAM, Gmail/Yahoo, UŚUDE). Ustawienia → Wysyłka i domeny → „Dane nadawcy w stopce”.",
+      };
+    }
+  }
+
   const serwer = await zaladujSerwer(tenantId, { lookup: opcje.dns?.lookup });
 
   if (!serwer) {
+    // Poza sandboksem ścieżki domyślnej NIE MA (audyt 28.09, P1-1): adapter systemowy to
+    // klient pod Mailpita (bez TLS, bez AUTH, EHLO midrev-esp.local, adres
+    // kampanie@midrev-esp.local) i nie przechodzi przez FR45. Wysyłka poszłaby w pętlę
+    // błędów albo, przy SMTP_HOST ustawionym na prawdziwy serwer, gołym SMTP z domeny
+    // .local. Blokada obejmuje wszystko, co idzie przez silnik: kampanie, flowy i testy.
+    if (!trybSandbox()) {
+      return {
+        rodzaj: "blokada",
+        powod:
+          "Konto nie ma skonfigurowanego serwera wysyłki. Ustawienia → Wysyłka i domeny: dodaj domenę, serwer SMTP (np. Amazon SES) i przejdź weryfikację DNS.",
+      };
+    }
     const { rows } = await getPool().query("select name from tenants where id = $1", [tenantId]);
     return {
       rodzaj: "domyslny",

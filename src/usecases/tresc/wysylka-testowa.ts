@@ -25,7 +25,8 @@ export async function wyslijTestKampanii(tenantId: string, campaignId: string, a
 
   const pool = getPool();
   const { rows } = await pool.query(
-    `select c.subject, c.content, t.name as sklep from campaigns c
+    `select c.subject, c.content, t.name as sklep,
+            t.sender_company_name, t.sender_postal_address, t.sender_tax_id from campaigns c
       join tenants t on t.id = c.tenant_id where c.tenant_id = $1 and c.id = $2`,
     [tenantId, campaignId],
   );
@@ -45,6 +46,7 @@ export async function wyslijTestKampanii(tenantId: string, campaignId: string, a
     clickToken,
     unsubscribeToken: unsubToken,
     nazwaSklepu: kampania.sklep,
+    nadawca: { firma: kampania.sender_company_name, adres: kampania.sender_postal_address, nip: kampania.sender_tax_id },
     sledzKlikniecia: false,
   });
   const { rows: wstawione } = await pool.query(

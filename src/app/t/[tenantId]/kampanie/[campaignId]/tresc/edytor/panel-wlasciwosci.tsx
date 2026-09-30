@@ -17,6 +17,7 @@ import {
 } from "../../../../../../../domain/email/bloki";
 import { PoleKoloru, PoleTekstu, PoleUrl, Przelacznik, Sekcja, Segmenty, Suwak, Wybor, Wyrownanie } from "./kontrolki";
 import { NAZWY_BLOKOW } from "./biblioteka";
+import { PoleObrazu } from "./pole-obrazu";
 
 type Zmiana = (zmiany: Partial<Blok>, klucz?: string) => void;
 
@@ -66,7 +67,7 @@ export function WlasciwosciBloku({ blok, zmien, uwagi, styl }: { blok: Blok; zmi
       case "obraz":
         return (
           <Sekcja tytul="Obraz">
-            <PoleUrl etykieta="Adres obrazu" wartosc={blok.src} onZmiana={(src) => zmien({ src }, "src")} podpowiedz="Obraz musi leżeć pod publicznym adresem https:// (sklep, CDN)." />
+            <PoleObrazu etykieta="Adres obrazu" wartosc={blok.src} onZmiana={(src) => zmien({ src }, "src")} podpowiedz="Wklej adres obrazu ze sklepu albo CDN — albo wgraj plik do biblioteki poniżej." />
             <PoleTekstu etykieta="Tekst alternatywny (alt)" wartosc={blok.alt} onZmiana={(alt) => zmien({ alt }, "alt")} placeholder="co jest na obrazie" podpowiedz="Wyświetla się, gdy skrzynka blokuje obrazy, i czyta go czytnik ekranu." maks={300} />
             <PoleUrl etykieta="Link po kliknięciu" wartosc={blok.link} onZmiana={(link) => zmien({ link }, "link")} />
             <Suwak etykieta="Szerokość" wartosc={blok.szerokosc} min={10} maks={100} jednostka="%" onZmiana={(szerokosc) => zmien({ szerokosc }, "szerokosc")} />
@@ -116,7 +117,7 @@ export function WlasciwosciBloku({ blok, zmien, uwagi, styl }: { blok: Blok; zmi
       case "produkt":
         return (
           <Sekcja tytul="Produkt" opis="Nazwę, opis i cenę edytujesz też wprost na płótnie.">
-            <PoleUrl etykieta="Zdjęcie produktu" wartosc={blok.obrazUrl} onZmiana={(obrazUrl) => zmien({ obrazUrl }, "obrazUrl")} />
+            <PoleObrazu etykieta="Zdjęcie produktu" wartosc={blok.obrazUrl} onZmiana={(obrazUrl) => zmien({ obrazUrl }, "obrazUrl")} />
             <PoleTekstu etykieta="Tekst alternatywny zdjęcia" wartosc={blok.obrazAlt} onZmiana={(obrazAlt) => zmien({ obrazAlt }, "obrazAlt")} placeholder={blok.nazwa} maks={300} />
             <PoleUrl etykieta="Link do produktu" wartosc={blok.link} onZmiana={(link) => zmien({ link }, "link")} podpowiedz="Prowadzi tam zdjęcie i przycisk." />
             <div className="grid grid-cols-2 gap-3">

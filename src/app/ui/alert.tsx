@@ -1,6 +1,6 @@
 /** Komunikat kontekstowy z ikoną i tonem odpowiadającym znaczeniu. */
 import type { ReactNode } from "react";
-import { Icon, type NazwaIkony } from "./icon";
+import { Icon, type NazwaIkony } from "./ikona";
 
 const TONY = {
   info: { icon: "info" as NazwaIkony, style: "border-[var(--color-info-ramka)] bg-[var(--color-info-tlo)] text-[var(--color-info)]" },

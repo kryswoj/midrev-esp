@@ -1,8 +1,10 @@
-// Adres, pod ktory sandboxowy WooCommerce ma dosylac webhooki. Ustawiany PRZED
-// pierwszym uzyciem config(): kontener Woo nie widzi "localhost" aplikacji, tylko
-// bramke dockera. Port 3005 jest dopuszczony filtrem w mu-pluginie sandboxa
-// (WordPress przepuszcza "safe" zadania tylko na 80/443/8080).
-process.env.APP_URL = process.env.APP_URL ?? "http://172.22.0.1:3005";
+// Adres, pod ktory sandboxowy WooCommerce ma dosylac webhooki: testowy odbiornik
+// (tests/odbiornik-webhookow.ts) z tym samym handlerem trasy co produkcja, piszacy do
+// BAZY TESTOWEJ. Nie serwer dev :3005 - ten pisze do bazy deweloperskiej. Ustawiany
+// PRZED pierwszym uzyciem config(); kontener Woo nie widzi "localhost" aplikacji, tylko
+// bramke dockera.
+import { ADRES_ODBIORNIKA, DOSTAWA_WEBHOOKOW, uruchomOdbiornikWebhookow, type Odbiornik } from "./odbiornik-webhookow";
+process.env.APP_URL = ADRES_ODBIORNIKA;
 
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -78,7 +80,10 @@ describe.skipIf(!klucze)("Sklepy: webhooki po stronie Woo (B3)", () => {
   let storeId = "";
   let adres = "";
 
+  let odbiornik: Odbiornik | undefined;
+
   beforeAll(async () => {
+    if (DOSTAWA_WEBHOOKOW) odbiornik = await uruchomOdbiornikWebhookow();
     await getPool().query("delete from tenants where name like $1", [PREFIKS + "%"]);
     tenantId = await utworzTenanta(PREFIKS + "Woo");
   });
@@ -91,6 +96,7 @@ describe.skipIf(!klucze)("Sklepy: webhooki po stronie Woo (B3)", () => {
         await woo(`webhooks/${w.id}?force=true`, { method: "DELETE" }).catch(() => {});
       }
     }
+    await odbiornik?.zamknij();
     await getPool().query("delete from tenants where name like $1", [PREFIKS + "%"]);
     await closePool();
   });
@@ -181,7 +187,8 @@ describe.skipIf(!klucze)("Sklepy: webhooki po stronie Woo (B3)", () => {
     expect((await woo(`webhooks/${cel.id}`)).status).toBe("active");
   });
 
-  it(
+  // dostawa ze sklepu do testowego odbiornika: tylko w `npm run test:woo` (patrz odbiornik-webhookow.ts)
+  it.skipIf(!DOSTAWA_WEBHOOKOW)(
     "zamowienie zlozone w sklepie dociera webhookiem do raw_events",
     async () => {
       // Woo wymaga w pozycji zamowienia realnego produktu (product_id albo sku),
@@ -214,14 +221,14 @@ describe.skipIf(!klucze)("Sklepy: webhooki po stronie Woo (B3)", () => {
       await woo(`orders/${zamowienie.id}?force=true`, { method: "DELETE" }).catch(() => {});
       expect(
         trafienie,
-        "sklep nie dostarczyl webhooka - sprawdz, czy aplikacja slucha na " + APP_URL,
+        `sklep nie dostarczyl webhooka - odbiornik ${APP_URL} przyjal ${odbiornik?.przyjete()} zadan`,
       ).toBeTruthy();
       expect(trafienie.payload.billing.email).toBe("webhook-b3@example.com");
     },
     180_000,
   );
 
-  it("sklep, ktory przyslal zdarzenie, nie jest uznany za milczacy", async () => {
+  it.skipIf(!DOSTAWA_WEBHOOKOW)("sklep, ktory przyslal zdarzenie, nie jest uznany za milczacy", async () => {
     const [ocena] = await ocenSklepy(tenantId);
     expect(ocena.storeId).toBe(storeId);
     expect(ocena.webhookiAktywne).toBe(true);

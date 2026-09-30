@@ -8,8 +8,9 @@ import {
   rozwiazHostSmtp,
   type FunkcjaLookup,
 } from "../../adapters/email/bezpieczny-host";
-import { AdapterNodemailer, type Bezpieczenstwo, type WynikTestu } from "../../adapters/email/nodemailer";
+import { AdapterNodemailer, type Bezpieczenstwo, type RodzajSerwera, type WynikTestu } from "../../adapters/email/nodemailer";
 import { config } from "../../config";
+import { normalizujDomene } from "./weryfikacja-dns";
 
 /**
  * Konfiguracja własnego serwera SMTP tenanta: zapis, odczyt do formularza, test
@@ -32,6 +33,10 @@ export interface WidokSerwera {
   nazwaNadawcy: string;
   adresNadawcy: string;
   odpowiedzDo: string | null;
+  /** 0029: własny serwer albo przekaźnik (SES) — decyduje o sposobie oceny SPF i kopercie */
+  rodzaj: RodzajSerwera;
+  /** domena koperty (Return-Path / custom MAIL FROM), np. bounce.news.midrev.pl */
+  domenaKoperty: string | null;
   domenaId: string;
   domenaNadawcy: string;
   statusDomeny: string;
@@ -53,6 +58,10 @@ export interface DaneSerwera {
   nazwaNadawcy: string;
   adresNadawcy: string;
   odpowiedzDo: string;
+  /** "wlasny_serwer" (domyślnie) | "przekaznik" */
+  rodzaj?: string;
+  /** domena koperty; puste = koperta w domenie nadawcy */
+  domenaKoperty?: string;
 }
 
 export interface OpcjeSerwera {
@@ -80,7 +89,7 @@ export async function odczytajSerwer(tenantId: string): Promise<WidokSerwera | n
   const { rows } = await getPool().query(
     `select c.host, c.port, c.security, c.username, (c.password_encrypted is not null) as haslo_ustawione,
             c.from_name, c.from_email, c.reply_to, c.sending_domain_id, d.domain, d.status as status_domeny,
-            c.connection_verified_at, c.last_tested_at, c.last_test_error
+            c.connection_verified_at, c.last_tested_at, c.last_test_error, c.relay_mode, c.envelope_domain
        from tenant_smtp_configs c
        join sending_domains d on d.tenant_id = c.tenant_id and d.id = c.sending_domain_id
       where c.tenant_id = $1`,
@@ -97,6 +106,8 @@ export async function odczytajSerwer(tenantId: string): Promise<WidokSerwera | n
     nazwaNadawcy: w.from_name,
     adresNadawcy: w.from_email,
     odpowiedzDo: w.reply_to,
+    rodzaj: w.relay_mode === "przekaznik" ? "przekaznik" : "wlasny_serwer",
+    domenaKoperty: w.envelope_domain ?? null,
     domenaId: w.sending_domain_id,
     domenaNadawcy: w.domain,
     statusDomeny: w.status_domeny,
@@ -158,6 +169,24 @@ export async function zapiszSerwer(tenantId: string, dane: DaneSerwera, opcje: O
   }
   const domenaId: string = domeny[0].id;
 
+  // Rodzaj serwera i domena koperty (0029). Przekaźnik (SES) wymaga domeny koperty:
+  // na niej odbiorcy sprawdzają SPF. Domena koperty musi być domeną nadawcy albo jej
+  // subdomeną — inaczej SPF nie da wyrównania DMARC nawet w trybie luźnym, a u SES
+  // custom MAIL FROM musi być subdomeną zweryfikowanej tożsamości.
+  const rodzaj: RodzajSerwera = (dane.rodzaj ?? "wlasny_serwer") === "przekaznik" ? "przekaznik" : "wlasny_serwer";
+  if (dane.rodzaj && !["wlasny_serwer", "przekaznik"].includes(dane.rodzaj)) {
+    return { ok: false, blad: "Wybierz rodzaj serwera: własny serwer albo przekaźnik (np. Amazon SES)." };
+  }
+  const surowaKoperta = (dane.domenaKoperty ?? "").trim();
+  const domenaKoperty = surowaKoperta ? normalizujDomene(surowaKoperta) : null;
+  if (surowaKoperta && !domenaKoperty) return { ok: false, blad: "Domenę koperty podaj jako samą nazwę, np. bounce.twojadomena.pl." };
+  if (domenaKoperty && domenaKoperty !== domenaAdresu && !domenaKoperty.endsWith(`.${domenaAdresu}`)) {
+    return { ok: false, blad: `Domena koperty musi być domeną nadawcy (${domenaAdresu}) albo jej subdomeną, np. bounce.${domenaAdresu}.` };
+  }
+  if (rodzaj === "przekaznik" && !domenaKoperty) {
+    return { ok: false, blad: `Przy przekaźniku (np. Amazon SES) podaj domenę koperty — u SES to „Custom MAIL FROM domain”, np. bounce.${domenaAdresu}.` };
+  }
+
   const klient = await pool.connect();
   try {
     await klient.query("begin");
@@ -212,21 +241,25 @@ export async function zapiszSerwer(tenantId: string, dane: DaneSerwera, opcje: O
     await klient.query(
       `insert into tenant_smtp_configs
          (tenant_id, sending_domain_id, host, port, security, username, password_encrypted,
-          from_name, from_email, reply_to, connection_verified_at, updated_at)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, null, clock_timestamp())
+          from_name, from_email, reply_to, connection_verified_at, updated_at, relay_mode, envelope_domain)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, null, clock_timestamp(), $12, $13)
        on conflict (tenant_id) do update set
          sending_domain_id = excluded.sending_domain_id, host = excluded.host, port = excluded.port,
          security = excluded.security, username = excluded.username,
          password_encrypted = excluded.password_encrypted, from_name = excluded.from_name,
          from_email = excluded.from_email, reply_to = excluded.reply_to,
+         relay_mode = excluded.relay_mode, envelope_domain = excluded.envelope_domain,
          connection_verified_at = case when $11 then null else tenant_smtp_configs.connection_verified_at end,
+         -- updated_at rośnie przy KAŻDYM zapisie: wynik weryfikacji domeny starszy niż zmiana
+         -- (np. rodzaju serwera albo koperty) jest przed partią sprawdzany ponownie (nadawca.ts)
          updated_at = clock_timestamp()`,
-      [tenantId, domenaId, host, port, bezpieczenstwo, uzytkownik, hasloZaszyfrowane, nazwaNadawcy, adresNadawcy, odpowiedzDo, zmianaPolaczenia],
+      [tenantId, domenaId, host, port, bezpieczenstwo, uzytkownik, hasloZaszyfrowane, nazwaNadawcy, adresNadawcy, odpowiedzDo, zmianaPolaczenia, rodzaj, domenaKoperty],
     );
 
     // Odczyt zwrotny w tej samej transakcji: każde pole i hasło po odszyfrowaniu.
     const { rows: zapisane } = await klient.query(
-      `select sending_domain_id, host, port, security, username, password_encrypted, from_name, from_email, reply_to
+      `select sending_domain_id, host, port, security, username, password_encrypted, from_name, from_email, reply_to,
+              relay_mode, envelope_domain
          from tenant_smtp_configs where tenant_id = $1`,
       [tenantId],
     );
@@ -246,6 +279,8 @@ export async function zapiszSerwer(tenantId: string, dane: DaneSerwera, opcje: O
       z.from_name !== nazwaNadawcy ||
       z.from_email !== adresNadawcy ||
       z.reply_to !== odpowiedzDo ||
+      z.relay_mode !== rodzaj ||
+      (z.envelope_domain ?? null) !== domenaKoperty ||
       !hasloZgodne
     ) {
       await klient.query("rollback");
@@ -270,6 +305,8 @@ interface ZaladowanySerwer {
   od: string;
   odNazwa: string;
   odpowiedzDo: string | null;
+  rodzaj: RodzajSerwera;
+  domenaKoperty: string | null;
   sendingDomainId: string;
   polaczenieSprawdzone: boolean;
   domena: string;
@@ -288,7 +325,7 @@ export async function zaladujSerwer(tenantId: string, opcje: OpcjeSerwera = {}):
     `select c.host, c.port, c.security, c.username, c.password_encrypted, c.from_name, c.from_email,
             c.reply_to, c.sending_domain_id, c.connection_verified_at, c.updated_at::text as wersja,
             d.domain, d.status as status_domeny, d.last_checked_at, c.updated_at,
-            c.last_tested_at, c.last_test_error
+            c.last_tested_at, c.last_test_error, c.relay_mode, c.envelope_domain
        from tenant_smtp_configs c
        join sending_domains d on d.tenant_id = c.tenant_id and d.id = c.sending_domain_id
       where c.tenant_id = $1`,
@@ -296,9 +333,10 @@ export async function zaladujSerwer(tenantId: string, opcje: OpcjeSerwera = {}):
   );
   const w = rows[0];
   if (!w) return null;
+  const rodzaj: RodzajSerwera = w.relay_mode === "przekaznik" ? "przekaznik" : "wlasny_serwer";
   const haslo = w.password_encrypted ? new Sekret(odszyfruj(w.password_encrypted)) : null;
   const adapter = new AdapterNodemailer(
-    { host: w.host, port: w.port, bezpieczenstwo: w.security, uzytkownik: w.username, haslo },
+    { host: w.host, port: w.port, bezpieczenstwo: w.security, uzytkownik: w.username, haslo, rodzaj, domenaKoperty: w.envelope_domain ?? null },
     { hostyDeweloperskie: hostyDeweloperskie(), lookup: opcje.lookup },
   );
   return {
@@ -310,6 +348,8 @@ export async function zaladujSerwer(tenantId: string, opcje: OpcjeSerwera = {}):
     od: w.from_email,
     odNazwa: w.from_name,
     odpowiedzDo: w.reply_to,
+    rodzaj,
+    domenaKoperty: w.envelope_domain ?? null,
     sendingDomainId: w.sending_domain_id,
     polaczenieSprawdzone: w.connection_verified_at !== null,
     domena: w.domain,

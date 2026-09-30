@@ -6,6 +6,9 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:woo": "TEST_WOO_DOSTAWA=1 vitest run tests/sklepy.test.ts tests/webhooki-klient.test.ts tests/import-pelny.test.ts",
+    "test:reset": "TEST_DB_RESET=1 vitest run",
+    "sprzatnij-resztki-testow": "node --env-file=.env --import tsx scripts/sprzatnij-resztki-testow.ts",
     "typecheck": "tsc --noEmit",
     "sandbox:up": "docker compose up -d",
     "sandbox:down": "docker compose down",
@@ -13,7 +16,9 @@
     "dev": "next dev -p 3005",
     "build": "next build",
     "start": "next start -p 3005",
-    "worker": "node --env-file=.env --import tsx src/jobs/worker.ts"
+    "worker": "node --env-file=.env --import tsx src/jobs/worker.ts",
+    "worker:prod": "NODE_ENV=production node --import tsx src/jobs/worker.ts",
+    "migrate:prod": "NODE_ENV=production node --import tsx scripts/migrate.ts"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.3",

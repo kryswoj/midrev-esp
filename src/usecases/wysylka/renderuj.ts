@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { config } from "../../config";
+import { adresSledzenia } from "../../config";
 
 /**
  * Render treści kampanii do finalnego HTML wiadomości.
@@ -37,7 +37,7 @@ export function tokenOtwarcia(clickToken: string): string {
 export function adresPixela(clickToken: string): string {
   // `.gif` na końcu jest ozdobą adresu (część filtrów pocztowych patrzy krzywo na
   // obrazek bez rozszerzenia); trasa obcina je przed wyszukaniem tokena.
-  return `${config().APP_URL}/api/o/${tokenOtwarcia(clickToken)}.gif`;
+  return `${adresSledzenia()}/api/o/${tokenOtwarcia(clickToken)}.gif`;
 }
 
 /** Tekst od operatora (nazwa sklepu) wchodzi do HTML maila wyłącznie po escapowaniu. */
@@ -53,7 +53,8 @@ export function escapujHtml(tekst: string): string {
  */
 export function przepiszLinki(html: string, clickToken: string): Zlinkowany {
   const linki: string[] = [];
-  const baza = config().APP_URL;
+  // domena ŚLEDZENIA (TRACKING_URL, bez niej APP_URL): adres panelu nie leci w mailach
+  const baza = adresSledzenia();
   const przepisany = html.replace(
     /href\s*=\s*(?:"(https?:\/\/[^"]*)"|'(https?:\/\/[^']*)'|(https?:\/\/[^\s>"']+))/gi,
     (_pelny, wDwoch: string | undefined, wJednym: string | undefined, bez: string | undefined) => {
@@ -65,11 +66,33 @@ export function przepiszLinki(html: string, clickToken: string): Zlinkowany {
   return { html: przepisany, linki };
 }
 
+/** Dane nadawcy do stopki (0029, dane-nadawcy.ts). Brak pól = linia się nie pojawia. */
+export interface DaneStopki {
+  firma: string | null;
+  adres: string | null;
+  nip: string | null;
+}
+
+/** Linia identyfikacji nadawcy w stopce: „Firma · adres · NIP …" (escapowane). Pusta, gdy brak danych. */
+export function liniaNadawcy(d: DaneStopki | null | undefined): string {
+  if (!d) return "";
+  const czesci = [d.firma, d.adres?.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).join(", "), d.nip ? `NIP ${d.nip}` : null]
+    .map((c) => (c ?? "").trim())
+    .filter(Boolean)
+    .map(escapujHtml);
+  return czesci.length ? `\n    <p style="margin:0 0 4px">${czesci.join(" · ")}</p>` : "";
+}
+
 export function zlozWiadomosc(opcje: {
   trescHtml: string;
   clickToken: string;
   unsubscribeToken: string;
   nazwaSklepu: string;
+  /**
+   * Dane nadawcy do stopki (nazwa firmy, adres pocztowy, NIP). Bez nich stopka zostaje
+   * w dotychczasowej postaci; lista kontrolna kampanii blokuje wysyłkę bez adresu.
+   */
+  nadawca?: DaneStopki | null;
   /**
    * Zgoda na śledzenie kliknięć, rozstrzygnięta przy budowie wiadomości (Blok A, A5).
    * Gdy `false`, linki zostają ORYGINALNE, a snapshot `linki` jest pusty — odbiorca
@@ -91,14 +114,14 @@ export function zlozWiadomosc(opcje: {
    */
   sledzOtwarcia?: boolean;
 }): Zlinkowany {
-  const baza = config().APP_URL;
+  const baza = adresSledzenia();
   const { html, linki } =
     opcje.sledzKlikniecia === false
       ? { html: opcje.trescHtml, linki: [] as string[] }
       : przepiszLinki(opcje.trescHtml, opcje.clickToken);
   const stopka = `
   <div style="margin-top:32px;padding-top:16px;border-top:1px solid #e5e5e5;color:#8a8a8a;font:12px/1.6 -apple-system,Segoe UI,sans-serif">
-    <p style="margin:0 0 4px">Otrzymujesz tę wiadomość, bo wyraziłaś/eś zgodę na komunikację od ${escapujHtml(opcje.nazwaSklepu)}.</p>
+    <p style="margin:0 0 4px">Otrzymujesz tę wiadomość, bo wyraziłaś/eś zgodę na komunikację od ${escapujHtml(opcje.nazwaSklepu)}.</p>${liniaNadawcy(opcje.nadawca)}
     <p style="margin:0"><a href="${baza}/u/${opcje.unsubscribeToken}" style="color:#8a8a8a">Wypisz się jednym kliknięciem</a></p>
   </div>`;
   // Pixel na samym końcu ciała, POZA kontenerem treści: nie wpływa na układ, a klient

@@ -251,7 +251,7 @@ export function WidokBloku({ blok, styl, mobile, tylkoDoOdczytu, onZmiana }: Wla
       );
     }
     case "obraz":
-      return <Obraz src={blok.src} alt={blok.alt} szerokosc={`${mobile ? 100 : blok.szerokosc}%`} promien={blok.zaokraglenie} wyrownanie={blok.wyrownanie} opisBraku="Wklej adres obrazu (https://…) w panelu po prawej" />;
+      return <Obraz src={blok.src} alt={blok.alt} szerokosc={`${mobile ? 100 : blok.szerokosc}%`} promien={blok.zaokraglenie} wyrownanie={blok.wyrownanie} opisBraku="Wgraj obraz albo wklej jego adres w panelu po prawej" />;
     case "przycisk": {
       const tlo = bezpiecznyKolor(blok.kolorTla, styl.kolorMarki);
       return (

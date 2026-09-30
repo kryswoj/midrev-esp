@@ -3,7 +3,7 @@
 /** Nawigacja główna z prawdziwym stanem aktywnym i ikonami lucide. */
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Icon, type NazwaIkony } from "../../ui/icon";
+import { Icon, type NazwaIkony } from "../../ui/ikona";
 
 const IKONY: Record<string, NazwaIkony> = {
   przeglad: "przeglad",

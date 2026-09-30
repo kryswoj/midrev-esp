@@ -5,7 +5,7 @@ export * from "./button";
 export * from "./card";
 export * from "./empty-state";
 export * from "./field";
-export * from "./icon";
+export * from "./ikona";
 export * from "./page-header";
 export * from "./responsive-table";
 export * from "./stat";

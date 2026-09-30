@@ -2,7 +2,7 @@
 
 /** Działający przełącznik sklepu z natywnym selectem i czytelną oprawą. */
 import { useRouter } from "next/navigation";
-import { Icon } from "../../ui/icon";
+import { Icon } from "../../ui/ikona";
 
 export function PrzelacznikTenanta({ tenanci, biezacyId, compact = false }: {
   tenanci: { id: string; name: string }[];

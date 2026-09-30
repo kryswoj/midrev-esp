@@ -1,4 +1,4 @@
-import { config } from "../../../../config";
+import { adresSledzenia } from "../../../../config";
 import { wymaganyTenant } from "../../../autoryzacja";
 import { popupyTenanta } from "../../../../usecases/popupy/zarzadzaj";
 import { Badge, Button, Card, CardBody, CardHeader, EmptyState, Icon, MobileList, MobileListItem, Table, TBody, Td, Th, THead } from "../../../ui";
@@ -25,9 +25,9 @@ export default async function Popupy({
   await wymaganyTenant(tenantId);
   const { ok, blad } = await searchParams;
   const popupy = await popupyTenanta(tenantId);
-  // snippet budowany z APP_URL, bo to ten sam adres, na ktory skrypt wysle zgloszenia;
+  // snippet z adresu SLEDZENIA (TRACKING_URL albo APP_URL): ten sam host, na ktory skrypt wysle zgloszenia;
   // recznie wpisany host rozjechalby sie przy zmianie srodowiska
-  const snippet = `<script src="${config().APP_URL}/s/${tenantId}"></script>`;
+  const snippet = `<script src="${adresSledzenia()}/s/${tenantId}"></script>`;
 
   return (
     <>

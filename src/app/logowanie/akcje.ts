@@ -3,6 +3,7 @@
 import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { CIASTECZKO_SESJI } from "../../adapters/auth-sesja";
+import { adresKlienta } from "../../adapters/ip-klienta";
 import { config } from "../../config";
 import { zaloguj } from "../../usecases/auth/zaloguj";
 import { wyloguj } from "../../usecases/auth/wyloguj";
@@ -28,11 +29,11 @@ export async function zalogujAkcja(
   const haslo = String(formularz.get("haslo") ?? "");
   const dalej = String(formularz.get("dalej") ?? "");
 
-  // adres klienta wylacznie do limitu prob logowania; pierwszy wpis
-  // x-forwarded-for to oryginalny nadawca sprzed reverse proxy
+  // adres klienta wylacznie do limitu prob logowania, z naglowka ustawionego przez
+  // ZAUFANE proxy (TRUSTED_PROXY, src/adapters/ip-klienta.ts). Pierwszy wpis XFF podaje
+  // klient, wiec limit per IP bylby do obejscia jednym naglowkiem.
   const naglowki = await headers();
-  const klientIp =
-    naglowki.get("x-forwarded-for")?.split(",")[0]?.trim() || undefined;
+  const klientIp = adresKlienta(naglowki) ?? undefined;
 
   const wynik = await zaloguj(email, haslo, klientIp);
   if (!wynik.ok) {

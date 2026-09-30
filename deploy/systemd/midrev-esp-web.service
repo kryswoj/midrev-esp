@@ -1,0 +1,69 @@
+# midrev-esp: panel Next.js (`next start`) za Caddy. Instalacja: provision.sh.
+# Nasłuch TYLKO 127.0.0.1:3100; na świat wystawia go Caddy (esp. i link.).
+[Unit]
+Description=midrev-esp panel (Next.js)
+Documentation=file:///srv/midrev-esp/ops/README.md
+After=network-online.target docker.service
+Wants=network-online.target
+# Bez Requires=docker.service: restart Dockera nie może na stałe zatrzymać panelu.
+# Bez bazy panel odpowiada 5xx, a /api/zdrowie 503 (healthcheck to zgłosi).
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=midrev-esp
+Group=midrev-esp
+# `current` to symlink na releases/<znacznik>; systemd rozwiązuje go przy starcie,
+# więc restart po przełączeniu symlinka uruchamia nową wersję.
+WorkingDirectory=/srv/midrev-esp/current
+# JEDEN plik środowiska dla panelu i workera (prawa 600, root).
+EnvironmentFile=/srv/midrev-esp/shared/env/production.env
+# Tryb sandboxa i lista serwerów deweloperskich nie mają prawa przeciec na produkcję,
+# nawet jeśli ktoś wpisze je do pliku env (UnsetEnvironment działa po EnvironmentFile).
+UnsetEnvironment=MIDREV_SANDBOX SMTP_HOSTY_DEWELOPERSKIE
+# NODE_ENV wymuszony w samej komendzie: EnvironmentFile= ma pierwszeństwo przed
+# Environment=, a `env` w ExecStart przed jednym i drugim.
+ExecStart=/usr/bin/env NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 /usr/bin/node node_modules/next/dist/bin/next start -H 127.0.0.1 -p 3100
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=45
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=midrev-esp-web
+LimitNOFILE=65536
+MemoryHigh=1200M
+MemoryMax=1600M
+
+# --- utwardzenie ---
+NoNewPrivileges=yes
+ProtectSystem=strict
+# Jedyne miejsca zapisu: biblioteka obrazów i pliki importu (release/var -> shared/var)
+# oraz pamięć podręczna Nexta (release/.next/cache -> shared/cache/next/<release>).
+ReadWritePaths=/srv/midrev-esp/shared/var /srv/midrev-esp/shared/cache
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RemoveIPC=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+# MemoryDenyWriteExecute celowo NIE: JIT V8 potrzebuje stron W+X.
+
+[Install]
+WantedBy=multi-user.target

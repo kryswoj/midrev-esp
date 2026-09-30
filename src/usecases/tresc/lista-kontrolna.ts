@@ -1,11 +1,12 @@
 import { getPool } from "../../adapters/db/pool";
 import { czyHostDeweloperski } from "../../adapters/email/bezpieczny-host";
-import { config } from "../../config";
+import { adresSledzenia, config } from "../../config";
 import { linkiSledzone, prawdziweLinki, wczytajDokument } from "../../domain/email/bloki";
 import { policzOdbiorcow, type RozbicieOdbiorcow } from "../policz-odbiorcow";
 import { odczytajSerwer, type WidokSerwera } from "../wysylka-konfiguracja/serwer";
 import { zlozWiadomosc } from "../wysylka/renderuj";
 import { renderujDokument } from "./render-blokow";
+import { brakujaceObrazy } from "../obrazy/biblioteka";
 
 /**
  * Lista kontrolna przed wysyłką (B4). Twarda bramka: każdy punkt w stanie `blad`
@@ -23,7 +24,7 @@ export type StanPunktu = "ok" | "blad" | "uwaga";
 export type KrokKreatora = "odbiorcy" | "tresc" | "ustawienia" | "przeglad";
 
 export interface PunktListy {
-  klucz: "temat" | "odbiorcy" | "tresc" | "link" | "wypis" | "domena" | "jakosc";
+  klucz: "temat" | "odbiorcy" | "tresc" | "link" | "wypis" | "adres" | "domena" | "jakosc" | "obrazy";
   etykieta: string;
   stan: StanPunktu;
   opis: string;
@@ -83,6 +84,11 @@ export function ocenGotowosc(wej: {
   maStopkeZWypisem: boolean;
   domena: StanDomeny;
   uwagiTresci: string[];
+  /**
+   * Adres pocztowy nadawcy ze stopki (0029). `undefined` = nie oceniamy (wołający bez
+   * dostępu do ustawień konta); prawdziwa lista kontrolna przekazuje go ZAWSZE.
+   */
+  adresPocztowy?: string | null;
 }): PunktListy[] {
   const punkty: PunktListy[] = [];
   const temat = (wej.temat ?? "").trim();
@@ -137,6 +143,18 @@ export function ocenGotowosc(wej: {
       : "Złożona wiadomość nie zawiera linku wypisu — wysyłka byłaby niezgodna z prawem.",
     krok: "przeglad",
   });
+  if (wej.adresPocztowy !== undefined) {
+    const adres = (wej.adresPocztowy ?? "").trim();
+    punkty.push({
+      klucz: "adres",
+      etykieta: "Adres pocztowy w stopce",
+      stan: adres ? "ok" : "blad",
+      opis: adres
+        ? `Stopka podaje adres nadawcy: ${adres.split(/\r?\n/).join(", ")}.`
+        : "Stopka nie ma adresu pocztowego nadawcy. Wymagają go CAN-SPAM, Gmail i Yahoo dla nadawców masowych oraz ustawa o świadczeniu usług drogą elektroniczną. Ustawienia → Wysyłka i domeny → „Dane nadawcy w stopce”.",
+      krok: "ustawienia",
+    });
+  }
   const d = wej.domena;
   punkty.push({
     klucz: "domena",
@@ -175,7 +193,8 @@ export async function listaKontrolnaKampanii(
 ): Promise<{ punkty: PunktListy[]; gotowa: boolean }> {
   const pool = getPool();
   const { rows } = await pool.query(
-    `select c.subject, c.preheader, c.content, t.name as sklep
+    `select c.subject, c.preheader, c.content, t.name as sklep,
+            t.sender_company_name, t.sender_postal_address, t.sender_tax_id
        from campaigns c join tenants t on t.id = c.tenant_id
       where c.tenant_id = $1 and c.id = $2`,
     [tenantId, campaignId],
@@ -195,11 +214,12 @@ export async function listaKontrolnaKampanii(
     clickToken: "lista-kontrolna",
     unsubscribeToken: wartownik,
     nazwaSklepu: String(kampania.sklep ?? ""),
+    nadawca: { firma: kampania.sender_company_name, adres: kampania.sender_postal_address, nip: kampania.sender_tax_id },
     sledzOtwarcia: false,
   });
   // Nie wystarczy, że napis jest w źródle: link wypisu musi być PRAWDZIWYM znacznikiem <a>,
   // a nie tekstem połkniętym przez niedomknięty <style>, komentarz albo atrybut z treści.
-  const maStopkeZWypisem = prawdziweLinki(zlozona.html).includes(`${config().APP_URL}/u/${wartownik}`);
+  const maStopkeZWypisem = prawdziweLinki(zlozona.html).includes(`${adresSledzenia()}/u/${wartownik}`);
 
   const { dokument, zrodlo } = wczytajDokument(kampania.content);
   const uwagiTresci = zrodlo === "bloki" ? renderujDokument(dokument, { preheader: kampania.preheader }).uwagi : [];
@@ -217,6 +237,19 @@ export async function listaKontrolnaKampanii(
       deweloperskie: config().SMTP_HOSTY_DEWELOPERSKIE,
     }),
     uwagiTresci,
+    adresPocztowy: kampania.sender_postal_address ?? null,
   });
+  // Obraz z biblioteki usunięty po wstawieniu do szkicu (usuwanie ze szkiców jest dozwolone)
+  // dałby w mailu ikonę zepsutego obrazka. Twarda bramka, jak reszta punktów „blad".
+  const brakObrazow = await brakujaceObrazy(tenantId, html);
+  if (brakObrazow > 0) {
+    punkty.push({
+      klucz: "obrazy",
+      etykieta: "Obrazy z biblioteki",
+      stan: "blad",
+      opis: `${brakObrazow === 1 ? "Jeden obraz wstawiony" : `${brakObrazow} obrazy wstawione`} z biblioteki już w niej nie ${brakObrazow === 1 ? "istnieje" : "istnieją"} — u odbiorcy byłby pusty prostokąt. Wstaw obraz ponownie w kroku Treść.`,
+      krok: "tresc",
+    });
+  }
   return { punkty, gotowa: punkty.every((p) => p.stan !== "blad") };
 }

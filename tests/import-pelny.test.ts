@@ -1,4 +1,8 @@
-process.env.APP_URL = process.env.APP_URL ?? "http://172.22.0.1:3005";
+// Webhooki zakladane przy podlaczeniu sklepu celuja w adres testowego odbiornika, nie
+// w serwer dev :3005 (ten pisze do bazy deweloperskiej). Sam import nie czeka na dostawe,
+// wiec odbiornik nie musi tu nasluchiwac - patrz tests/odbiornik-webhookow.ts.
+import { ADRES_ODBIORNIKA } from "./odbiornik-webhookow";
+process.env.APP_URL = ADRES_ODBIORNIKA;
 
 import { createServer, type Server } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";

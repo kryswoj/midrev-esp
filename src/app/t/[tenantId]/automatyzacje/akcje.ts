@@ -194,13 +194,17 @@ export async function podgladWiadomosciFlowAkcja(
   const { getPool } = await import("../../../../adapters/db/pool");
   const przygotowany = przygotujDokument(dokumentJson);
   if (!przygotowany.ok) return przygotowany;
-  const { rows } = await getPool().query("select name from tenants where id = $1", [tenantId]);
+  const { rows } = await getPool().query(
+    "select name, sender_company_name, sender_postal_address, sender_tax_id from tenants where id = $1",
+    [tenantId],
+  );
   const render = renderujDokument(przygotowany.dokument);
   const { html } = zlozWiadomosc({
     trescHtml: render.html,
     clickToken: "podglad",
     unsubscribeToken: "podglad",
     nazwaSklepu: String(rows[0]?.name ?? ""),
+    nadawca: { firma: rows[0]?.sender_company_name ?? null, adres: rows[0]?.sender_postal_address ?? null, nip: rows[0]?.sender_tax_id ?? null },
     sledzKlikniecia: false,
     sledzOtwarcia: false,
   });

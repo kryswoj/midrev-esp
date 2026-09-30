@@ -1,0 +1,155 @@
+# midrev-esp: reverse proxy produkcji (osobny VPS). Instalacja: /etc/caddy/Caddyfile
+# (provision.sh kopiuje, waliduje i przeładowuje; każda późniejsza zmiana WYMAGA ZGODY).
+#
+# Dwa hosty na JEDNYM procesie Next (127.0.0.1:3100):
+#   esp.midrev.pl   panel operatora (cały), webhooki sklepów, akceptacja kampanii
+#   link.midrev.pl  WYŁĄCZNIE trasy, które woła odbiorca maila albo strona sklepu:
+#                   /r (klik), /u (wypis + RFC 8058 One-Click POST), /api/o (pixel),
+#                   /o (obrazy w mailach), /s (skrypt popupów), /api/popup (dane i zapis
+#                   popupu). Wszystko inne na link. = 404 z Caddy, zanim dotknie aplikacji.
+#                   Lista pochodzi z src/trasy-publiczne.ts (TRASY_PUBLICZNE) po odjęciu
+#                   tras panelu, sklepu i klienta agencji (/logowanie, /_next, /favicon.ico,
+#                   /akceptacja, /api/webhooks, /api/zdrowie). Nowa trasa odbiorcy = dopisać tutaj.
+#
+# Walidacja bez uruchamiania:  caddy validate --config deploy/Caddyfile --adapter caddyfile
+# Przeładowanie (atomowe; zły plik = Caddy zostaje na starej konfiguracji):
+#                              systemctl reload caddy
+{
+	# konto ACME Let's Encrypt (powiadomienia o wygasaniu certyfikatów)
+	email krystian@midrev.pl
+	# admin API tylko lokalnie (domyślnie i tak localhost:2019; zapisane jawnie)
+	admin localhost:2019
+	servers {
+		# Caddy stoi na brzegu: żadnemu nagłówkowi X-Forwarded-* od klienta nie ufamy
+		# (brak trusted_proxies = {remote_host} to zawsze prawdziwy adres połączenia).
+		timeouts {
+			read_header 10s
+			idle 2m
+		}
+	}
+}
+
+# Nagłówki wspólne obu hostów. `defer` = ustawiane po odpowiedzi aplikacji, więc
+# usuwanie X-Powered-By działa także, gdy Next go dołoży.
+(wspolne) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Robots-Tag "noindex, nofollow"
+		-Server
+		-X-Powered-By
+		defer
+	}
+}
+
+# Nadpisanie (nie doklejenie!) adresu klienta. Aplikacja liczy limit prób logowania
+# i limit popupu po PIERWSZYM wpisie X-Forwarded-For; gdyby proxy doklejało, pierwszy
+# wpis podawałby atakujący.
+(upstream) {
+	reverse_proxy 127.0.0.1:3100 {
+		header_up X-Real-IP {remote_host}
+		# Caddy bez trusted_proxies i tak zastępuje XFF (walidator ostrzega „Unnecessary
+		# header_up”); zostaje jawnie, żeby zmiana domyślnych Caddy nie zmieniła zachowania.
+		header_up X-Forwarded-For {remote_host}
+		# Host przechodzi bez zmian (domyślne zachowanie Caddy); server actions Nexta
+		# porównują Origin z Host, więc nie wolno go przepisywać.
+	}
+}
+
+esp.midrev.pl {
+	import wspolne
+
+	# Import CSV profili do 50 MB (import-klaviyo/pliki.ts) + narzut multipart/nagłówków.
+	request_body {
+		max_size 60MB
+	}
+
+	# Nagłówki bezpieczeństwa panelu. Znak `?` = ustaw tylko, jeśli aplikacja nie wysłała
+	# własnego: gdy next.config.ts zacznie je dawać, nie będzie duplikatów ani konfliktu.
+	header {
+		?X-Frame-Options "DENY"
+		?X-Content-Type-Options "nosniff"
+		?Referrer-Policy "strict-origin-when-cross-origin"
+		?Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+		defer
+	}
+
+	encode zstd gzip
+
+	import upstream
+
+	log {
+		output file /var/log/caddy/esp.midrev.pl.access.log {
+			roll_size 50MiB
+			roll_keep 14
+			roll_keep_for 336h
+		}
+		format json
+	}
+}
+
+link.midrev.pl {
+	import wspolne
+
+	# Na trasach odbiorcy nie ma uploadu: popup ma własny limit ciała w aplikacji,
+	# one-click wypis to kilkadziesiąt bajtów.
+	request_body {
+		max_size 1MB
+	}
+
+	header ?X-Content-Type-Options "nosniff"
+
+	# Dopasowanie po CAŁYCH segmentach i z rozróżnieniem wielkości liter (path_regexp,
+	# nie `path`, bo `path` w Caddy ignoruje wielkość liter, a Next nie). Token jest
+	# zawsze jednym segmentem: /r/{token}, /u/{token}, /api/o/{sha}.gif, /o/{token}.{ext},
+	# /s/{tenantId}, /api/popup/{popupId}. Segment `.`/`..` odpada w regexie.
+	# Do tego metody: nowy handler POST/PUT pod tym samym prefiksem nie staje się sam
+	# publiczny na domenie linków.
+	@odbiorca_odczyt {
+		path_regexp odczyt ^/(?:r|o|s|api/o)/[A-Za-z0-9_~-][A-Za-z0-9._~-]*$
+		method GET HEAD
+	}
+	# wypis: GET strona z przyciskiem, POST formularz i RFC 8058 One-Click
+	@odbiorca_wypis {
+		path_regexp wypis ^/u/[A-Za-z0-9_~-][A-Za-z0-9._~-]*$
+		method GET HEAD POST
+	}
+	# popup na stronie sklepu: konfiguracja (GET), zapis (POST), preflight CORS (OPTIONS)
+	@odbiorca_popup {
+		path_regexp popup ^/api/popup/[A-Za-z0-9_~-][A-Za-z0-9._~-]*$
+		method GET HEAD POST OPTIONS
+	}
+
+	handle @odbiorca_odczyt {
+		import upstream
+	}
+	handle @odbiorca_wypis {
+		import upstream
+	}
+	handle @odbiorca_popup {
+		import upstream
+	}
+
+	handle /robots.txt {
+		respond "User-agent: *
+Disallow: /
+" 200
+	}
+
+	# Wszystko inne: panel, /logowanie, /_next, /api/webhooks, /akceptacja, /api/zdrowie...
+	# nie istnieje pod domeną śledzenia.
+	handle {
+		respond "Nie znaleziono" 404
+	}
+
+	log {
+		# Log /u jest potrzebny po odtworzeniu bazy ze starszego backupu (wypisy z luki
+		# trzeba wprowadzić przed startem workera), stąd 30 dni. To dane osobowe (IP),
+		# dłużej nie trzymamy.
+		output file /var/log/caddy/link.midrev.pl.access.log {
+			roll_size 100MiB
+			roll_keep 30
+			roll_keep_for 720h
+		}
+		format json
+	}
+}

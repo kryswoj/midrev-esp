@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { getPool } from "../../adapters/db/pool";
 import { hashAdresu } from "../../adapters/hash-adresu";
-import { config } from "../../config";
+import { adresSledzenia, config } from "../../config";
 import type { DostawcaWysylki } from "../../domain/email/port";
 import { klasyfikujOdpowiedzSmtp, type Klasyfikacja } from "../../domain/email/klasyfikacja";
 import { canSendTo } from "./can-send-to";
@@ -10,6 +10,7 @@ import { politykaSledzenia } from "./zgody";
 import { policzOdbiorcow } from "../policz-odbiorcow";
 import { adresNadawcyTenanta, wybierzWysylke } from "../wysylka-konfiguracja/nadawca";
 import { wyslijAlert } from "../../jobs/alerty";
+import { czyZamykanie } from "../../jobs/zamykanie";
 
 /**
  * Rangi stanów wiadomości (AD-22). Projekcja current_state na messages jest aktualizowana
@@ -187,7 +188,8 @@ async function domenaWysylkowa(tenantId: string, adresOd: string): Promise<strin
 export async function zbudujWiadomosciKampanii(tenantId: string, campaignId: string, opcje: { porcja?: number } = {}) {
   const pool = getPool();
   const { rows: kampanie } = await pool.query(
-    `select c.name, c.subject, c.content, t.name as nazwa_sklepu
+    `select c.name, c.subject, c.content, t.name as nazwa_sklepu,
+            t.sender_company_name, t.sender_postal_address, t.sender_tax_id
        from campaigns c join tenants t on t.id = c.tenant_id
       where c.tenant_id = $1 and c.id = $2`,
     [tenantId, campaignId],
@@ -216,6 +218,7 @@ export async function zbudujWiadomosciKampanii(tenantId: string, campaignId: str
       clickToken: znacznikKlik,
       unsubscribeToken: znacznikWypis,
       nazwaSklepu: kampania.nazwa_sklepu,
+      nadawca: { firma: kampania.sender_company_name, adres: kampania.sender_postal_address, nip: kampania.sender_tax_id },
       sledzKlikniecia: klikniecia,
       sledzOtwarcia: otwarcia,
     });
@@ -368,7 +371,7 @@ function klasyfikujOdmowe(blad: unknown): Klasyfikacja {
  * Wołający musi umieć to rozróżnić: limit dobowy wraca jutro sam, wstrzymanie tenanta
  * czeka na człowieka, a brak wiadomości to normalne domknięcie kampanii.
  */
-export type PowodZatrzymania = "limit_dobowy" | "wstrzymanie_tenanta" | "blokada_nadawcy" | null;
+export type PowodZatrzymania = "limit_dobowy" | "wstrzymanie_tenanta" | "blokada_nadawcy" | "zamykanie" | null;
 
 /**
  * Faza 2: wysyłka partii. Cykl JEDNEJ wiadomości wg AD-23:
@@ -384,6 +387,11 @@ export async function wyslijPartie(
 ) {
   const pool = getPool();
   const limitPartii = opcje.limit ?? 50;
+  // Proces się zamyka (SIGTERM): nowej partii nie zajmujemy. Nic nie jest claimed,
+  // więc nic nie utknie; kolejka poczeka na następny proces.
+  if (czyZamykanie()) {
+    return { wyslane: 0, odmowy: 0, bledy: 0, powodZatrzymania: "zamykanie" as const, powodOpis: null };
+  }
 
   // Limit dobowy i stan wstrzymania tenanta jednym zapytaniem: to sa dwie odpowiedzi na
   // to samo pytanie "czy temu tenantowi wolno teraz wysylac", zadawane przed kazda partia.
@@ -517,6 +525,20 @@ export async function wyslijPartie(
   try {
   for (let i = 0; i < doWyslania.length; i++) {
     const wiadomosc = doWyslania[i];
+    if (czyZamykanie()) {
+      // SIGTERM w środku partii: bieżąca wiadomość (poprzednia iteracja) jest już
+      // rozliczona, a ta i dalsze są w `claimed` — dostawca NIE był dla nich wołany, więc
+      // powrót do queued nie grozi duplikatem (AD-26). Warunek na token partii: nie
+      // cofamy świeżych claimów innego workera, który przejął je po odzyskaniu zombie.
+      await pool.query(
+        `update messages set current_state = 'queued', claimed_at = null
+          where tenant_id = $1 and id = any($2) and current_state = 'claimed'
+            and claimed_at = $3::timestamptz`,
+        [tenantId, doWyslania.slice(i).map((w) => w.id), wiadomosc.claim_token],
+      );
+      powodZatrzymania = "zamykanie";
+      break;
+    }
     const klient = await pool.connect();
     let wolnoWysylac = false;
     let limitOdmowil = false;
@@ -614,7 +636,7 @@ export async function wyslijPartie(
         odpowiedzDo: nadawca.odpowiedzDo,
         temat: wiadomosc.subject,
         html: wiadomosc.body_html,
-        adresWypisania: `${config().APP_URL}/u/${wiadomosc.unsubscribe_token}`,
+        adresWypisania: `${adresSledzenia()}/u/${wiadomosc.unsubscribe_token}`,
         idempotencyKey: wiadomosc.id,
       });
     } catch (blad) {
@@ -717,7 +739,7 @@ export async function wyslijPartie(
       await k2.query(
         `update messages
             set provider_id = $3, provider = $4, ip_pool = $5, sending_ip = $6::inet,
-                handed_off_at = $7
+                handed_off_at = $7, provider_message_id = $8
           where tenant_id = $1 and id = $2`,
         [
           tenantId,
@@ -729,6 +751,8 @@ export async function wyslijPartie(
           // gdy dostawca nie podaje momentu przekazania, źródłem jest chwila, w której
           // przyjął wiadomość — wciąż data zdarzenia, a nie domyślne `now()` bazy
           wynik.handedOffAt ?? new Date(),
+          // ID nadany przez dostawcę (SES nadpisuje Message-ID): klucz dopasowania odbić
+          wynik.providerMessageId ?? null,
         ],
       );
       await zapiszZdarzenie(k2, tenantId, wiadomosc.id, "sent", {

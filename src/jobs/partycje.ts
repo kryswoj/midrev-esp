@@ -1,30 +1,111 @@
+import type { Pool } from "pg";
 import { getPool } from "../adapters/db/pool";
 
 /**
  * Utrzymanie partycji dziennych kolejki (AD-31). Migracja 0002 założyła partycje tylko
- * na dzień własnego uruchomienia i następny; bez tego joba trzeciego dnia zapisy lecą
- * do partycji domyślnej, która jest alarmem, nie miejscem pracy.
+ * na dzień własnego uruchomienia i następny; bez tego joba zapisy lecą do partycji
+ * domyślnej, która jest alarmem, nie miejscem pracy.
+ *
+ * Pułapka, którą to naprawia (audyt 28.09, P1-8): Postgres NIE pozwala założyć partycji
+ * na zakres, dla którego `jobs_default` ma już wiersze. Worker wyłączony dłużej niż
+ * zapas partycji (dawniej 3 dni) albo panel kolejkujący joby przed pierwszym startem
+ * workera = wiersze w `jobs_default`, a po powrocie `create table … partition of`
+ * rzucał na top-level `await` przy starcie i worker restartował się w kółko.
+ *
+ * Teraz:
+ *   1. partycje zakładane z zapasem 14 dni (panel może kolejkować dwa tygodnie bez workera),
+ *   2. dzień, który ma wiersze w `jobs_default`, dostaje partycję ZE ZWOLNIENIEM default:
+ *      w jednej transakcji pod blokadą `jobs_default` wiersze tego dnia przechodzą do
+ *      nowej tabeli, a ta jest dołączana jako partycja. Tożsamość zadania (id,
+ *      created_at) się nie zmienia, więc worker trzymający zadanie domknie je dalej,
+ *   3. błąd jednego dnia NIE przerywa reszty i NIE wywraca startu: wraca w `bledy`,
+ *      a worker zamienia go w alert. Kolejka działa dalej, bo default przyjmuje zapisy.
  *
  * Odłączanie: partycja może odejść WYŁĄCZNIE, gdy nie ma w niej zadań pending/running.
  * Zadanie utworzone dziś, a odłożone o dwa tygodnie, wciąż mieszka w dzisiejszej
  * partycji i skasowanie jej po samym wieku zabiłoby je przed wykonaniem.
  */
-export async function utrzymajPartycje(dniWprzod = 3, retencjaDni = 14) {
-  const pool = getPool();
-  for (let i = 0; i <= dniWprzod; i++) {
-    await pool.query(
-      `do $$
-       declare
-         d date := current_date + ${i};
-         nazwa text := 'jobs_' || to_char(current_date + ${i}, 'YYYY_MM_DD');
-       begin
-         if to_regclass(nazwa) is null then
-           execute format('create table %I partition of jobs for values from (%L) to (%L)',
-                          nazwa, d::timestamptz, (d + 1)::timestamptz);
-           execute format('alter table %I set (autovacuum_vacuum_scale_factor = 0.02, autovacuum_analyze_scale_factor = 0.01)', nazwa);
-         end if;
-       end $$`,
-    );
+export interface WynikPartycji {
+  zalozone: number;
+  /** wiersze przeniesione z jobs_default do właściwych partycji */
+  przeniesione: number;
+  odlaczone: number;
+  /** błędy per dzień (tekst dla człowieka); pusta lista = wszystko w porządku */
+  bledy: string[];
+}
+
+export async function utrzymajPartycje(
+  opcje: { dniWprzod?: number; retencjaDni?: number; pool?: Pool } = {},
+): Promise<WynikPartycji> {
+  const pool = opcje.pool ?? getPool();
+  const dniWprzod = Math.max(1, Math.floor(opcje.dniWprzod ?? 14));
+  const retencjaDni = Math.max(1, Math.floor(opcje.retencjaDni ?? 14));
+  const wynik: WynikPartycji = { zalozone: 0, przeniesione: 0, odlaczone: 0, bledy: [] };
+
+  // Dni do obsłużenia: zapas do przodu ORAZ każdy dzień, który ma wiersze w default.
+  // Daty liczone w tej samej sesji co granice partycji (d::timestamptz), więc strefa
+  // czasowa sesji jest spójna po obu stronach.
+  const { rows: dni } = await pool.query<{ dzien: string }>(
+    `select to_char(d, 'YYYY-MM-DD') as dzien from (
+       select current_date + i as d from generate_series(0, $1::int) as i
+       union
+       select distinct created_at::date from jobs_default
+     ) x
+     where to_regclass('jobs_' || to_char(d, 'YYYY_MM_DD')) is null
+     order by 1`,
+    [dniWprzod],
+  );
+
+  for (const { dzien } of dni) {
+    const nazwa = `jobs_${dzien.replace(/-/g, "_")}`;
+    // nazwa i data pochodzą z to_char w bazie; sprawdzenie formatu zamyka drogę
+    // do wstrzyknięcia DDL, gdyby ktoś kiedyś zmienił źródło listy
+    if (!/^jobs_\d{4}_\d{2}_\d{2}$/.test(nazwa) || !/^\d{4}-\d{2}-\d{2}$/.test(dzien)) {
+      wynik.bledy.push(`niepoprawna nazwa partycji ${nazwa}`);
+      continue;
+    }
+    const klient = await pool.connect();
+    try {
+      await klient.query("begin");
+      // Krótki limit czekania na blokadę i na całą operację (review Codeksa r1): długa
+      // kolejka zapytań za ACCESS EXCLUSIVE zatrzymałaby zajmowanie zadań. Przekroczenie =
+      // błąd tego dnia (alert), kolejka pracuje dalej na default, próba za godzinę.
+      await klient.query("set local lock_timeout = '3s'");
+      await klient.query("set local statement_timeout = '60s'");
+      // Blokada default na czas przeniesienia: nowy wiersz tego dnia wpadający do default
+      // między DELETE a ATTACH wywróciłby dołączenie. Inserty i odczyty kolejki czekają
+      // chwilę (transakcja jest krótka), nic nie ginie.
+      await klient.query("lock table jobs_default in access exclusive mode");
+      const { rows: juz } = await klient.query("select to_regclass($1) is not null as jest", [nazwa]);
+      if (juz[0].jest) {
+        await klient.query("commit");
+        continue;
+      }
+      await klient.query(`create table ${nazwa} (like jobs including defaults including constraints including storage)`);
+      await klient.query(
+        `alter table ${nazwa} set (autovacuum_vacuum_scale_factor = 0.02, autovacuum_analyze_scale_factor = 0.01)`,
+      );
+      const przeniesienie = await klient.query(
+        `with zabrane as (
+           delete from jobs_default
+            where created_at >= $1::date::timestamptz and created_at < ($1::date + 1)::timestamptz
+           returning *
+         )
+         insert into ${nazwa} select * from zabrane`,
+        [dzien],
+      );
+      await klient.query(
+        `alter table jobs attach partition ${nazwa} for values from ('${dzien}'::date::timestamptz) to (('${dzien}'::date + 1)::timestamptz)`,
+      );
+      await klient.query("commit");
+      wynik.zalozone++;
+      wynik.przeniesione += przeniesienie.rowCount ?? 0;
+    } catch (blad) {
+      await klient.query("rollback").catch(() => {});
+      wynik.bledy.push(`partycja ${nazwa}: ${String((blad as Error)?.message ?? blad).slice(0, 300)}`);
+    } finally {
+      klient.release();
+    }
   }
 
   const { rows: stare } = await pool.query(
@@ -35,17 +116,35 @@ export async function utrzymajPartycje(dniWprzod = 3, retencjaDni = 14) {
        and to_date(substring(c.relname from 6), 'YYYY_MM_DD') < current_date - $1::int`,
     [retencjaDni],
   );
-  let odlaczone = 0;
   for (const { relname } of stare) {
-    const { rows } = await pool.query(
-      `select count(*)::int as aktywne from ${relname} where status in ('pending', 'running')`,
-    );
-    if (rows[0].aktywne > 0) continue; // aktywne zadania trzymają partycję przy życiu
-    await pool.query(`alter table jobs detach partition ${relname}`);
-    await pool.query(`drop table ${relname}`);
-    odlaczone++;
+    if (!/^jobs_\d{4}_\d{2}_\d{2}$/.test(relname)) continue;
+    // Krótka transakcja z limitami (review Codeksa r2): DETACH czekający na blokadę `jobs`
+    // ustawiłby za sobą w kolejce zajmowanie zadań i zapytania panelu.
+    const klient = await pool.connect();
+    try {
+      await klient.query("begin");
+      await klient.query("set local lock_timeout = '3s'");
+      await klient.query("set local statement_timeout = '60s'");
+      const { rows } = await klient.query(
+        `select count(*)::int as aktywne from ${relname} where status in ('pending', 'running')`,
+      );
+      if (rows[0].aktywne > 0) {
+        // aktywne zadania trzymają partycję przy życiu
+        await klient.query("rollback");
+        continue;
+      }
+      await klient.query(`alter table jobs detach partition ${relname}`);
+      await klient.query(`drop table ${relname}`);
+      await klient.query("commit");
+      wynik.odlaczone++;
+    } catch (blad) {
+      await klient.query("rollback").catch(() => {});
+      wynik.bledy.push(`retencja ${relname}: ${String((blad as Error)?.message ?? blad).slice(0, 300)}`);
+    } finally {
+      klient.release();
+    }
   }
-  return { odlaczone };
+  return wynik;
 }
 
 /**
