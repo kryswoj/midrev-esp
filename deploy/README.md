@@ -558,3 +558,13 @@ Pakiet zakłada następujące elementy kodu (stan 28.09 wieczór, równoległa p
 | `var/` liczony od `process.cwd()` | `obrazy/pliki.ts`, `import-klaviyo/pliki.ts` | jest | `deploy.sh` robi symlink `var -> shared/var`; cwd procesu to fizyczny katalog wydania (sprawdzone) |
 | `next build` bez sekretów w środowisku | cała aplikacja | przechodzi (raport 02) | build się wyłoży: nie dawać sekretów do buildu, poprawić kod |
 | `.next/cache` zapisywalny | Next | symlink do `shared/cache/next/<wydanie>` | reszta `.next` jest tylko do odczytu: ewentualne zapisy ISR poza `cache/` Next loguje jako ostrzeżenie; sprawdzić w journalu po pierwszym wdrożeniu (`EROFS`, `EACCES`) |
+
+## 11. Serwer współdzielony (stan 30.09.2026: produkcja na VPS 137.74.42.199)
+
+- Systemowy `/usr/bin/node` to v20, więc ESP używa izolowanego Node 24 w `/opt/node-24/bin`.
+  Unity mają drop-iny `/etc/systemd/system/midrev-esp-{web,worker}.service.d/node24.conf`
+  z `ExecStart` na `/opt/node-24/bin/node`. Wdrożenie: `NODE_DIR=/opt/node-24/bin deploy.sh ...`
+  (skrypt odmówi, gdy node < 24 albo gdy unity uruchamiają inny node niż `NODE_DIR`).
+- `provision.sh` NIE był uruchamiany (ruszałby ufw, daemon.json Dockera i DOCKER-USER innych projektów).
+  Baza: `DB_PORT=5434 docker compose -f /srv/midrev-esp/ops/docker-compose.prod.yml up -d`.
+- Caddy: bloki esp./link. dopisane do istniejącego /etc/caddy/Caddyfile (cloudcli, studio, crm).

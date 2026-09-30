@@ -42,6 +42,37 @@ CURRENT=$ESP_ROOT/current
 REPO=${ESP_REPO:-$ESP_ROOT/repo.git}
 ZOSTAW_WYDAN=5
 ZOSTAW_DUMPOW=3
+# Katalog z node/npm dla aplikacji (domyślnie systemowy /usr/bin; serwer współdzielony: /opt/node-24/bin)
+NODE_DIR=${NODE_DIR:-/usr/bin}
+# Skrypt działa jako root, a NODE_DIR trafia na początek PATH i jego node uruchamiamy.
+# Dlatego: ścieżka bezwzględna bez ':', po kanonizacji (readlink -e) cała ścieżka od '/'
+# oraz pliki node i npm (też po rozwiązaniu symlinków) należą do roota i nie są
+# zapisywalne dla grupy/innych. Dopiero potem pierwsze uruchomienie node. Node >= 24.
+sprawdz_sciezke_roota() {
+	local cel=$1 kat
+	[[ $(stat -c '%u' "$cel") == 0 ]] || { echo "$cel nie należy do roota" >&2; exit 1; }
+	[[ $(( 8#$(stat -c '%a' "$cel") & 8#022 )) == 0 ]] || { echo "$cel jest zapisywalny dla grupy/innych" >&2; exit 1; }
+	kat=$(dirname "$cel")
+	while :; do
+		[[ $(stat -c '%u' "$kat") == 0 ]] || { echo "$kat (przodek $cel) nie należy do roota" >&2; exit 1; }
+		[[ $(( 8#$(stat -c '%a' "$kat") & 8#022 )) == 0 ]] || { echo "$kat (przodek $cel) jest zapisywalny dla grupy/innych" >&2; exit 1; }
+		[[ $kat == / ]] && break
+		kat=$(dirname "$kat")
+	done
+}
+waliduj_node() {
+	[[ $NODE_DIR == /* && $NODE_DIR != *:* ]] || { echo "NODE_DIR musi być ścieżką bezwzględną bez ':' ($NODE_DIR)" >&2; exit 1; }
+	NODE_DIR=$(readlink -e "$NODE_DIR") || { echo "NODE_DIR nie istnieje" >&2; exit 1; }
+	[[ -d $NODE_DIR && $NODE_DIR != *:* ]] || { echo "NODE_DIR ($NODE_DIR) po kanonizacji nie jest katalogiem albo zawiera ':'" >&2; exit 1; }
+	sprawdz_sciezke_roota "$NODE_DIR"
+	for plik in node npm; do
+		cel=$(readlink -e "$NODE_DIR/$plik") || { echo "brak $NODE_DIR/$plik" >&2; exit 1; }
+		[[ -f $cel && -x $cel ]] || { echo "$NODE_DIR/$plik -> $cel nie jest wykonywalnym plikiem" >&2; exit 1; }
+		sprawdz_sciezke_roota "$cel"
+	done
+	WERSJA_NODE=$("$NODE_DIR/node" --version)
+	[[ $WERSJA_NODE =~ ^v([0-9]+)\.[0-9]+\.[0-9]+$ && $((10#${BASH_REMATCH[1]})) -ge 24 ]] || { echo "Node w $NODE_DIR to $WERSJA_NODE, wymagany >= 24 (ustaw NODE_DIR, np. /opt/node-24/bin)" >&2; exit 1; }
+}
 HEALTH_URL=${HEALTH_URL:-http://127.0.0.1:3100/api/zdrowie}
 HEALTH_TIMEOUT_S=${HEALTH_TIMEOUT_S:-120}
 PANEL_URL=${PANEL_URL:-http://127.0.0.1:3100/logowanie}
@@ -174,7 +205,7 @@ uruchom_jako_aplikacja() {
 jako_budowniczy() {
 	local kat=$1
 	shift
-	runuser -u "$APP_USER" -- env -i -C "$kat" PATH=/usr/bin:/bin HOME="$APP_HOME" \
+	runuser -u "$APP_USER" -- env -i -C "$kat" PATH="$NODE_DIR:/usr/bin:/bin" HOME="$APP_HOME" \
 		NEXT_TELEMETRY_DISABLED=1 npm_config_update_notifier=false "$@"
 }
 
@@ -282,7 +313,14 @@ db_gotowa || zgin "baza nie odpowiada (docker ps; docker logs $ESP_DB_CONTAINER)
 sprawdz_zgodnosc_bazy
 WOLNE_MB=$(df -Pm "$ESP_ROOT" | awk 'NR==2 {print $4}')
 ((WOLNE_MB >= MIN_WOLNE_MB)) || zgin "za mało miejsca: ${WOLNE_MB} MB wolne, wymagane $MIN_WOLNE_MB MB"
-command -v node >/dev/null || zgin "brak node"
+waliduj_node
+[[ -x $NODE_DIR/node ]] || zgin "brak node w $NODE_DIR"
+# unity web/worker muszą uruchamiać TEN SAM node, który zbudował wydanie (drop-in node24.conf
+# na serwerze współdzielonym); inaczej produkcja wstałaby na innej wersji niż build i migracje
+for u in midrev-esp-web.service midrev-esp-worker.service; do
+	systemctl cat "$u" | grep -E '^ExecStart=.+' | tail -1 | grep -qE "(^|[= ])${NODE_DIR//./\\.}/node( |$)" ||
+		zgin "$u uruchamia inny node niż NODE_DIR=$NODE_DIR (sprawdź drop-in w /etc/systemd/system/$u.d/)"
+done
 
 BAZA=$(db_nazwa)
 SCHEMAT_JEST=$(db_psql "$BAZA" "select to_regclass('public.campaigns') is not null")
@@ -364,7 +402,7 @@ if [[ -n $POPRZEDNIE ]]; then
 	systemctl stop midrev-esp-worker.service
 fi
 log "migracje z nowego wydania (blokada: flock tego skryptu; migrator nie ma własnej, README 5.4)"
-uruchom_jako_aplikacja "$REL" /usr/bin/node --import tsx scripts/migrate.ts
+uruchom_jako_aplikacja "$REL" "$NODE_DIR/node" --import tsx scripts/migrate.ts
 
 # --- przełączenie ---
 FAZA=przelaczenie
