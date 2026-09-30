@@ -5,6 +5,7 @@ import { poswiadczeniaSklepu, sklep as pobierzSklep } from "../adapters/db/repoz
 import { AdapterWoo } from "../adapters/store/woo/adapter";
 import type { ZamowienieSklepu } from "../domain/store/contract";
 import { upsertProfilKlienta, upsertZamowienie, ZASLEPKA_PAYLOADU } from "./przetworz-zdarzenie";
+import { emitujKlienta } from "./zdarzenia/emisja-sklepu";
 
 export interface PlanImportu {
   /** Zamówienia w sklepie w zakresie (nagłówek X-WP-Total), nie "ile udało się pobrać". */
@@ -237,11 +238,14 @@ export async function wykonajImport(
           }
           if (wynik?.nowy) {
             utworzoneProfileId.add(wynik.profileId);
-            await klient.query(
-              `insert into events (tenant_id, profile_id, event_type, payload, occurred_at)
-               values ($1, $2, 'customer.created', $3, $4)`,
-              [tenantId, wynik.profileId, JSON.stringify({ storeId, externalId: k.externalId, kanal: "import" }), k.occurredAt],
-            );
+            await emitujKlienta(klient, tenantId, {
+              profileId: wynik.profileId,
+              typ: "customer.created",
+              kiedy: k.occurredAt,
+              storeId,
+              klientSklepu: k,
+              kanal: "import",
+            });
           }
         });
         objeciKlienci.add(k.externalId);

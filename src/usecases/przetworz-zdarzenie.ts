@@ -5,6 +5,7 @@ import { mapujKlientaWoo, mapujZamowienieWoo } from "../adapters/store/woo/adapt
 import { bytZKlucza } from "../adapters/store/webhooki";
 import type { KlientSklepu, ZamowienieSklepu } from "../domain/store/contract";
 import { wyslijAlert } from "../jobs/alerty";
+import { emitujKlienta, emitujZamowienie } from "./zdarzenia/emisja-sklepu";
 
 /**
  * Faza 2 ingestu webhooków (AD-4): surowe zdarzenie z raw_events zamienia się
@@ -251,16 +252,14 @@ export async function upsertZamowienie(
   // `kanal: import` pozwala silnikowi automatyzacji pominąć zamówienia z importu
   // historii - hurtowe "dziękujemy za zakup" tydzień po fakcie to nie automatyzacja
   if (wiersz.nowe) {
-    await klient.query(
-      `insert into events (tenant_id, profile_id, event_type, payload, occurred_at)
-       values ($1, $2, 'order.created', $3, $4)`,
-      [
-        tenantId,
-        profileId,
-        JSON.stringify({ orderId: wiersz.id, totalMinor: zamowienie.sumaMinor, kanal: opcje.kanal ?? "webhook" }),
-        zamowienie.occurredAt,
-      ],
-    );
+    // metryki „Placed Order” + „Ordered Product” na pozycję (plan 1.3) przez jedyny punkt
+    // zapisu strumienia; lustro `order.created` w starej tabeli events dla obecnego silnika
+    await emitujZamowienie(klient, tenantId, {
+      orderId: wiersz.id,
+      profileId,
+      zamowienie,
+      kanal: opcje.kanal ?? "webhook",
+    });
   }
   return {
     orderId: wiersz.id,
@@ -342,10 +341,13 @@ async function przetworzKlienta(
   if (!wynik.nowy && !wynik.zaktualizowany) return false;
   const typ = wynik.nowy ? "customer.created" : "customer.updated";
   const kiedy = wynik.nowy ? dane.occurredAt : dane.zmodyfikowaneAt;
-  await klient.query(
-    `insert into events (tenant_id, profile_id, event_type, payload, occurred_at)
-     values ($1, $2, $3, $4, $5)`,
-    [tenantId, wynik.profileId, typ, JSON.stringify({ storeId, externalId: dane.externalId }), kiedy],
-  );
+  await emitujKlienta(klient, tenantId, {
+    profileId: wynik.profileId,
+    typ,
+    kiedy,
+    storeId,
+    klientSklepu: dane,
+    kanal: "webhook",
+  });
   return false;
 }

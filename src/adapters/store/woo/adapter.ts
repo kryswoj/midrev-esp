@@ -21,6 +21,16 @@ export interface PoswiadczeniaWoo {
  * bo z tego samego kształtu korzysta import historyczny (REST) i webhook (faza 2):
  * dwa mapowania rozjechałyby się przy pierwszej zmianie.
  */
+/** Kwota pozycji bywa pusta w starych zamówieniach: brak zamiast błędu całego mapowania. */
+function groszeAlboNull(kwota: unknown): number | null {
+  if (typeof kwota !== "string" && typeof kwota !== "number") return null;
+  try {
+    return naGrosze(kwota);
+  } catch {
+    return null;
+  }
+}
+
 export function mapujZamowienieWoo(z: any): ZamowienieSklepu {
   // data ZE ŹRÓDŁA jest obowiązkowa (AD-10): bez niej `new Date(undefined + "Z")` dawało
   // Invalid Date, które Postgres odrzucał dopiero przy zapisie, bez nazwy przyczyny (N6)
@@ -44,6 +54,9 @@ export function mapujZamowienieWoo(z: any): ZamowienieSklepu {
       nazwa: p.name,
       ilosc: Number(p.quantity),
       cenaMinor: naGrosze(p.price ?? "0"),
+      lineId: p.id !== undefined && p.id !== null ? String(p.id) : null,
+      productId: p.product_id ? String(p.product_id) : null,
+      sumaMinor: groszeAlboNull(p.total),
     })),
     surowe: z,
   };

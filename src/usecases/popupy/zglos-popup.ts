@@ -1,6 +1,9 @@
 import { z } from "zod";
 import { jestWykluczonyGlobalnie } from "../../adapters/db/wykluczenia";
 import { getPool } from "../../adapters/db/pool";
+import { v7 as uuidv7 } from "uuid";
+import { METRYKI_WBUDOWANE } from "../../domain/zdarzenia/kontrakt";
+import { zapiszZdarzenie } from "../zdarzenia/zapisz-zdarzenie";
 
 // Przyjecie zgloszenia z popupu (Epik F). To jedyna sciezka w systemie, ktora
 // tworzy profil BEZ udzialu operatora: dane przychodza z publicznego internetu,
@@ -112,14 +115,25 @@ export async function przyjmijZgloszenie(
       );
     }
 
-    // events.occurred_at nie ma defaultu (0002 celowo go zdjelo), wiec data zdarzenia
-    // musi byc jawna. W payload id popupu, bo licznik zgloszen w panelu liczy sie
-    // wlasnie po nim; adresu e-mail w payloadzie nie ma, bo event zyje dluzej niz
-    // profil i nie moze byc druga kopia danych osobowych poza sciezka RODO.
-    await klient.query(
-      `insert into events (tenant_id, profile_id, event_type, payload, occurred_at)
-       values ($1, $2, 'popup.submitted', $3, now())`,
-      [popup.tenant_id, profileId, JSON.stringify({ popup_id: popup.id, popup_name: popup.name })],
+    // Zdarzenie idzie przez JEDYNY punkt zapisu strumienia (AD-36): metryka „Submitted
+    // Form” w metric_events + lustro `popup.submitted` w starej tabeli events (to samo id),
+    // z ktorej na czas przejscia czyta silnik automatyzacji i licznik zgloszen w panelu.
+    // Czas = teraz (zdarzenie na zywo), zrodlo 'client' (przegladarka). Adresu e-mail
+    // w properties nie ma: zdarzenie zyje dluzej niz profil (sciezka RODO).
+    const idZdarzenia = uuidv7();
+    await zapiszZdarzenie(
+      klient,
+      {
+        tenantId: popup.tenant_id,
+        metryka: METRYKI_WBUDOWANE.zgloszenieFormularza,
+        profileId,
+        occurredAt: new Date(),
+        id: idZdarzenia,
+        uniqueId: `form:${popup.id}:${idZdarzenia}`,
+        properties: { form_id: popup.id, form_name: popup.name },
+        source: "client",
+      },
+      { lustro: { eventType: "popup.submitted", payload: { popup_id: popup.id, popup_name: popup.name } } },
     );
 
     await klient.query("commit");

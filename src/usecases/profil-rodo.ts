@@ -1,9 +1,12 @@
 import type { PoolClient } from "pg";
 import { getPool } from "../adapters/db/pool";
-import { hashAdresu, zaslepkaWykluczenia } from "../adapters/hash-adresu";
+import { hashAdresu, hashIdentyfikatora, zaslepkaWykluczenia } from "../adapters/hash-adresu";
+import { telefonE164 } from "../domain/zdarzenia/telefon";
 import { ZASLEPKA_PAYLOADU } from "./przetworz-zdarzenie";
 import { anonimizujOdbicia, eksportujOdbicia, pozostaleDaneOdbic } from "./wysylka/odbicia";
 import { anonimizujWImporcie } from "./import-klaviyo/zadania";
+import { METRYKI_WBUDOWANE } from "../domain/zdarzenia/kontrakt";
+import { zapiszZdarzenie } from "./zdarzenia/zapisz-zdarzenie";
 
 // Żądanie podmiotu danych: eksport (FR21) i usunięcie (FR22).
 //
@@ -53,6 +56,23 @@ const PREDYKAT_SUROWYCH = `
        or lower(btrim(r.payload ->> 'email')) = lower(btrim($3))))
   )`;
 
+/**
+ * Surowe żądania API zdarzeń (channel 'api') TEJ osoby: po profilu przypisanym przez worker
+ * (`payload.meta.profile_id`), po id profilu w ciele albo po KAŻDYM identyfikatorze osoby
+ * w ciele żądania (e-mail, telefon E.164, external_id, anonymous_id) - zdarzenie jeszcze
+ * nieprzetworzone nie może przeżyć anonimizacji i odtworzyć osoby (review Codeksa R1).
+ * Parametry: $1 tenant, $2 profil, $3 e-mail, $4 telefon E.164, $5 external_id, $6 anonymous_id.
+ */
+const PREDYKAT_SUROWYCH_API = `
+  (r.tenant_id = $1 and r.channel = 'api' and not (r.payload ? 'anonimizowano') and (
+    r.payload -> 'meta' ->> 'profile_id' = $2::text
+    or r.payload #>> '{body,data,attributes,profile,data,id}' = $2::text
+    or ($3::text is not null and lower(btrim(r.payload #>> '{body,data,attributes,profile,data,attributes,email}')) = lower(btrim($3)))
+    or ($4::text is not null and midrev_telefon_e164(r.payload #>> '{body,data,attributes,profile,data,attributes,phone_number}') = $4::text)
+    or ($5::text is not null and r.payload #>> '{body,data,attributes,profile,data,attributes,external_id}' = $5::text)
+    or ($6::text is not null and r.payload #>> '{body,data,attributes,profile,data,attributes,anonymous_id}' = $6::text)
+  ))`;
+
 /** Wzorce danych osoby w wolnym tekście: adres e-mail i numer telefonu. */
 const WZOR_EMAIL = /[\w.+-]+@[\w-]+\.[\w.-]+/;
 const WZOR_TELEFON = /(?:\+?\d[\s-]?){9,}/;
@@ -83,6 +103,8 @@ export interface EksportProfilu {
   /** Otwarcia i kliknięcia z adresem IP i user agentem (message_engagement). */
   zaangazowanie: unknown[];
   zdarzenia: unknown[];
+  /** Zdarzenia ze strumienia metryk (metric_events) z nazwą metryki i właściwościami. */
+  zdarzeniaMetryk: unknown[];
   /** Surowe dokumenty ze sklepu (webhooki i import) dotyczące tej osoby. */
   suroweZdarzenia: unknown[];
   /** Raporty odbić ze skrzynki zwrotnej (adres, temat, klasyfikacja). */
@@ -104,6 +126,7 @@ export async function eksportujProfil(
   const pool = getPool();
   const { rows: profile } = await pool.query(
     `select p.id, p.email, p.phone, p.first_name, p.last_name, p.created_at, p.properties,
+            p.external_id, p.anonymous_id, p.organization, p.title, p.locale, p.location, p.updated_at,
             t.name as sklep_nazwa
        from profiles p join tenants t on t.id = p.tenant_id
       where p.tenant_id = $1 and p.id = $2`,
@@ -114,7 +137,7 @@ export async function eksportujProfil(
   const { sklep_nazwa, ...daneProfilu } = profil;
   const email: string | null = profil.email ? String(profil.email) : null;
 
-  const [zgody, globalne, sklepowe, zamowienia, wiadomosci, klikniecia, zaangazowanie, zdarzenia, surowe, odbicia, bledyImportu, listy] =
+  const [zgody, globalne, sklepowe, zamowienia, wiadomosci, klikniecia, zaangazowanie, zdarzenia, surowe, odbicia, bledyImportu, listy, zdarzeniaMetryk] =
     await Promise.all([
       pool.query(
         `select channel, state, source, wording, occurred_at, recorded_at
@@ -172,8 +195,9 @@ export async function eksportujProfil(
       ),
       pool.query(
         `select r.idempotency_key, r.received_at, r.payload from raw_events r
-          where ${PREDYKAT_SUROWYCH} order by r.received_at`,
-        [tenantId, profileId, email],
+          where ${PREDYKAT_SUROWYCH} or ${PREDYKAT_SUROWYCH_API}
+          order by r.received_at`,
+        [tenantId, profileId, email, telefonE164(profil.phone), profil.external_id ?? null, profil.anonymous_id ?? null],
       ),
       // raporty odbić: funkcja właściciela modułu skrzynki zwrotnej (jedna definicja "jej odbić")
       eksportujOdbicia(tenantId, profileId, email, pool).then((rows) => ({ rows })),
@@ -190,6 +214,14 @@ export async function eksportujProfil(
           where m.tenant_id = $1 and m.profile_id = $2 order by m.added_at`,
         [tenantId, profileId],
       ),
+      pool.query(
+        `select mt.name as metryka, mt.integration_key as integracja, e.occurred_at, e.recorded_at,
+                e.unique_id, e.value_minor::text as value_minor, e.value_currency, e.source, e.properties
+           from metric_events e
+           join metrics mt on mt.tenant_id = e.tenant_id and mt.id = e.metric_id
+          where e.tenant_id = $1 and e.profile_id = $2 order by e.occurred_at, e.id`,
+        [tenantId, profileId],
+      ),
     ]);
 
   return {
@@ -203,6 +235,7 @@ export async function eksportujProfil(
     klikniecia: klikniecia.rows,
     zaangazowanie: zaangazowanie.rows,
     zdarzenia: zdarzenia.rows,
+    zdarzeniaMetryk: zdarzeniaMetryk.rows,
     suroweZdarzenia: surowe.rows,
     odbicia: odbicia.rows,
     bledyImportu: bledyImportu.rows,
@@ -216,11 +249,28 @@ export async function zapiszSladEksportu(
   profileId: string,
   aktor: string,
 ): Promise<void> {
-  await getPool().query(
-    `insert into events (tenant_id, profile_id, event_type, payload, occurred_at)
-     values ($1, $2, 'rodo.eksport', $3, now())`,
-    [tenantId, profileId, JSON.stringify({ aktor })],
-  );
+  const klient = await getPool().connect();
+  try {
+    await klient.query("begin");
+    await zapiszZdarzenie(
+      klient,
+      {
+        tenantId,
+        metryka: METRYKI_WBUDOWANE.rodoEksport,
+        profileId,
+        occurredAt: new Date(),
+        properties: { aktor },
+        source: "system",
+      },
+      { lustro: { eventType: "rodo.eksport", payload: { aktor } } },
+    );
+    await klient.query("commit");
+  } catch (blad) {
+    await klient.query("rollback").catch(() => {});
+    throw blad;
+  } finally {
+    klient.release();
+  }
 }
 
 export interface WynikAnonimizacji {
@@ -246,6 +296,12 @@ export interface WynikAnonimizacji {
   bledyImportu: number;
   /** przebiegi importu, z których próbek wycięto wiersze osoby */
   probkiImportu: number;
+  /** żądania API zdarzeń (raw_events kanału api) z zaślepką zamiast ciała */
+  suroweApi: number;
+  /** zdarzenia strumienia metryk, z których zdjęto właściwości i unique_id */
+  zdarzeniaMetryk: number;
+  /** klucze deduplikacji zdarzeń (event_keys) usunięte */
+  kluczeZdarzen: number;
   /** FAKTYCZNY wynik kontroli zwrotnej po zapisie (false = nic nie zostało; przy true transakcja jest wycofana i leci błąd) */
   danePozostaly: boolean;
 }
@@ -285,8 +341,9 @@ export async function anonimizujProfil(
     // w ogóle należy do tego tenanta (AD-2) - bez niej literówka w identyfikatorze
     // trafiłaby w cudzą, równie prawdziwą osobę. Adres znormalizowany PO STRONIE SQL
     // tym samym wyrażeniem co indeksy (JS `trim` ≠ PG `btrim`).
-    const { rows: profile } = await klient.query<{ email: string | null }>(
-      "select lower(btrim(email)) as email from profiles where tenant_id = $1 and id = $2 for update",
+    const { rows: profile } = await klient.query<{ email: string | null; phone: string | null; external_id: string | null; anonymous_id: string | null }>(
+      `select lower(btrim(email)) as email, phone, external_id, anonymous_id
+         from profiles where tenant_id = $1 and id = $2 for update`,
       [tenantId, profileId],
     );
     if (!profile[0]) {
@@ -295,6 +352,23 @@ export async function anonimizujProfil(
     }
     const email = profile[0].email;
     const hash = email ? hashAdresu(email) : null;
+    // identyfikatory z API (0033): po nich pending żądania API i przyszłe zdarzenia
+    // odtworzyłyby osobę, więc biorą udział w zaślepianiu i w nagrobkach
+    const telefon = telefonE164(profile[0].phone);
+    const externalId = profile[0].external_id;
+    const anonymousId = profile[0].anonymous_id;
+    const nagrobkiId = [
+      ["phone_number", telefon],
+      ["external_id", externalId],
+      ["anonymous_id", anonymousId],
+    ].filter((x): x is [string, string] => Boolean(x[1]));
+    for (const [rodzaj, wartosc] of nagrobkiId) {
+      await klient.query(
+        `insert into rodo_nagrobki_identyfikatorow (tenant_id, rodzaj, hash)
+         values ($1, $2, $3) on conflict do nothing`,
+        [tenantId, rodzaj, hashIdentyfikatora(rodzaj, wartosc)],
+      );
+    }
 
     // Nagrobek (0024) PRZED czymkolwiek: identyfikatory kont w sklepie zbieramy z surowych
     // zdarzeń customer.*, dopóki jeszcze niosą adres. Bez nagrobka następny webhook
@@ -338,9 +412,41 @@ export async function anonimizujProfil(
       [tenantId, profileId, email],
     );
 
+    // Surowe żądania API zdarzeń tej osoby (ciało JSON:API z adresem, telefonem, właściwościami).
+    // Zaślepka bez niczego, co wskazuje osobę; nieprzetworzone dostają processed_at, żeby
+    // worker nie odtworzył z nich profilu.
+    const suroweApi = await klient.query(
+      `update raw_events r
+          set payload = jsonb_build_object('anonimizowano', true),
+              processed_at = coalesce(r.processed_at, now()),
+              process_error = 'anonimizowano'
+        where ${PREDYKAT_SUROWYCH_API}`,
+      [tenantId, profileId, email, telefon, externalId, anonymousId],
+    );
+
+    // Strumień metryk (1.5): właściwości zdarzeń i unique_id (z API bywa pochodną adresu)
+    // znikają; metryka, czas, kwota i źródło zostają (raporty i przychód się nie zmieniają).
+    // Ślady operacji RODO (metryki rodo.*) zostają: to dowód obsłużenia żądania.
+    const strumien = await klient.query(
+      `update metric_events e
+          set properties = '{}'::jsonb, unique_id = 'rodo:' || e.id::text
+         from metrics m
+        where e.tenant_id = $1 and e.profile_id = $2
+          and m.tenant_id = e.tenant_id and m.id = e.metric_id
+          and not (m.integration_key = 'midrev' and m.name like 'rodo.%')
+          and (e.properties <> '{}'::jsonb or e.unique_id not like 'rodo:%')`,
+      [tenantId, profileId],
+    );
+    const klucze = await klient.query(
+      "delete from event_keys where tenant_id = $1 and profile_id = $2",
+      [tenantId, profileId],
+    );
+
     await klient.query(
       `update profiles set email = null, phone = null, first_name = null, last_name = null,
-              properties = '{}'::jsonb, source_updated_at = null
+              properties = '{}'::jsonb, source_updated_at = null,
+              external_id = null, anonymous_id = null, organization = null, title = null,
+              locale = null, location = '{}'::jsonb, updated_at = now()
         where tenant_id = $1 and id = $2`,
       [tenantId, profileId],
     );
@@ -465,23 +571,27 @@ export async function anonimizujProfil(
       [tenantId, profileId],
     );
 
-    await klient.query(
-      `insert into events (tenant_id, profile_id, event_type, payload, occurred_at)
-       values ($1, $2, 'rodo.anonimizacja', $3, now())`,
-      [
+    const sladAnonimizacji = {
+      aktor: opcje.aktor,
+      powod: opcje.powod,
+      ...(powodyGlobalne.length ? { zamaskowaneWykluczeniaGlobalne: powodyGlobalne } : {}),
+    };
+    await zapiszZdarzenie(
+      klient,
+      {
         tenantId,
+        metryka: METRYKI_WBUDOWANE.rodoAnonimizacja,
         profileId,
-        JSON.stringify({
-          aktor: opcje.aktor,
-          powod: opcje.powod,
-          ...(powodyGlobalne.length ? { zamaskowaneWykluczeniaGlobalne: powodyGlobalne } : {}),
-        }),
-      ],
+        occurredAt: new Date(),
+        properties: sladAnonimizacji,
+        source: "system",
+      },
+      { lustro: { eventType: "rodo.anonimizacja", payload: sladAnonimizacji } },
     );
 
     // Odczyt ZWROTNY w tej samej transakcji: licznik ma mówić, co jest w bazie po
     // zapisie, a nie co zamierzaliśmy zrobić. Tu wychodzi też, czy przychód ocalał.
-    const stan = await kontrolaZwrotna(klient, tenantId, profileId, email);
+    const stan = await kontrolaZwrotna(klient, tenantId, profileId, email, [externalId, anonymousId].filter((x): x is string => Boolean(x)));
     stan.pozostalosci["raporty odbić tej osoby (moduł odbić)"] = await pozostaleDaneOdbic(tenantId, profileId, email, klient);
     const pozostalosci = Object.entries(stan.pozostalosci).filter(([, ile]) => ile > 0);
     const danePozostaly =
@@ -511,6 +621,9 @@ export async function anonimizujProfil(
       odbicia,
       bledyImportu,
       probkiImportu,
+      suroweApi: suroweApi.rowCount ?? 0,
+      zdarzeniaMetryk: strumien.rowCount ?? 0,
+      kluczeZdarzen: klucze.rowCount ?? 0,
       danePozostaly,
     };
   } catch (blad) {
@@ -527,7 +640,7 @@ export async function anonimizujProfil(
  * Surowe zdarzenia i zdarzenia wiadomości szukane po tekście z adresem, profil po kolumnach,
  * reszta po powiązaniu z profilem.
  */
-async function kontrolaZwrotna(klient: PoolClient, tenantId: string, profileId: string, email: string | null) {
+async function kontrolaZwrotna(klient: PoolClient, tenantId: string, profileId: string, email: string | null, identyfikatory: string[] = []) {
   const { rows } = await klient.query<{
     email: string | null;
     phone: string | null;
@@ -549,6 +662,10 @@ async function kontrolaZwrotna(klient: PoolClient, tenantId: string, profileId: 
     p_odbicia: number;
     p_bledy_importu: number;
     p_probki_importu: number;
+    p_zdarzenia_metryk: number;
+    p_klucze_zdarzen: number;
+    p_surowe_api: number;
+    p_identyfikatory: number;
   }>(
     `select p.email, p.phone, p.first_name, p.last_name,
             (select count(*)::int from orders o
@@ -591,9 +708,25 @@ async function kontrolaZwrotna(klient: PoolClient, tenantId: string, profileId: 
             (select count(*)::int from import_jobs j
               where j.tenant_id = $1 and $3::text is not null
                 and (j.sample::text ilike '%' || lower(btrim($3)) || '%'
-                     or j.suppression_sample::text ilike '%' || lower(btrim($3)) || '%')) as p_probki_importu
+                     or j.suppression_sample::text ilike '%' || lower(btrim($3)) || '%')) as p_probki_importu,
+            (select count(*)::int from metric_events e
+               join metrics m on m.tenant_id = e.tenant_id and m.id = e.metric_id
+              where e.tenant_id = $1 and e.profile_id = $2
+                and not (m.integration_key = 'midrev' and m.name like 'rodo.%')
+                and (e.properties <> '{}'::jsonb or e.unique_id not like 'rodo:%')) as p_zdarzenia_metryk,
+            (select count(*)::int from event_keys k where k.tenant_id = $1 and k.profile_id = $2) as p_klucze_zdarzen,
+            (select count(*)::int from raw_events r
+              where r.tenant_id = $1 and r.channel = 'api' and not (r.payload ? 'anonimizowano') and (
+                r.payload -> 'meta' ->> 'profile_id' = $2::text
+                or r.payload::text ilike '%' || $2::text || '%'
+                or ($3::text is not null and r.payload::text ilike '%' || lower(btrim($3)) || '%')
+                -- identyfikatory bywają krótkie ("7"): dokładne pole, nie wyszukiwanie w tekście
+                or r.payload #>> '{body,data,attributes,profile,data,attributes,external_id}' = any($5::text[])
+                or r.payload #>> '{body,data,attributes,profile,data,attributes,anonymous_id}' = any($5::text[]))) as p_surowe_api,
+            (case when p.external_id is not null or p.anonymous_id is not null or p.organization is not null
+                       or p.title is not null or p.locale is not null or p.location <> '{}'::jsonb then 1 else 0 end) as p_identyfikatory
        from profiles p where p.tenant_id = $1 and p.id = $2`,
-    [tenantId, profileId, email, ADRES_PO_USUNIECIU],
+    [tenantId, profileId, email, ADRES_PO_USUNIECIU, identyfikatory],
   );
   const w = rows[0];
   return {
@@ -618,6 +751,10 @@ async function kontrolaZwrotna(klient: PoolClient, tenantId: string, profileId: 
       "raporty odbić z adresem": w.p_odbicia,
       "błędy importu z adresem": w.p_bledy_importu,
       "próbki importu z adresem": w.p_probki_importu,
+      "właściwości zdarzeń strumienia metryk": w.p_zdarzenia_metryk,
+      "klucze deduplikacji zdarzeń": w.p_klucze_zdarzen,
+      "surowe żądania API zdarzeń": w.p_surowe_api,
+      "identyfikatory i dane profilu (external_id, lokalizacja…)": w.p_identyfikatory,
     },
   };
 }
