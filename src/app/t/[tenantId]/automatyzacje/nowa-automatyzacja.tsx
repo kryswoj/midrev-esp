@@ -19,7 +19,7 @@ export function NowaAutomatyzacja({
   listy: { id: string; name: string }[];
 }) {
   const [stan, akcja, trwa] = useActionState(utworzAutomatyzacjeAkcja, undefined);
-  const [zdarzenie, setZdarzenie] = useState(stan?.wartosci?.zdarzenie ?? "popup.submitted");
+  const [zdarzenie, setZdarzenie] = useState(stan?.wartosci?.zdarzenie ?? Object.keys(triggery)[0] ?? "list.joined");
 
   return (
     <form action={akcja} className="space-y-4">

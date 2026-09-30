@@ -3,7 +3,7 @@ import { ChevronRight } from "lucide-react";
 import { getPool } from "../../../../adapters/db/pool";
 import { odmien } from "../../../../domain/liczebniki";
 import { zGroszy } from "../../../../domain/kwoty";
-import { BIBLIOTEKA, STATUSY, TRIGGERY, automatyzacjeTenanta } from "../../../../usecases/automatyzacje/journeye";
+import { BIBLIOTEKA, STATUSY, TRIGGERY, automatyzacjeTenanta, etykietaWyzwalacza, metrykiDoWyzwalacza } from "../../../../usecases/automatyzacje/journeye";
 import { przychodPrzegladu } from "../../../../usecases/raport-przegladu";
 import { wymaganyTenant } from "../../../autoryzacja";
 import { Badge, Button, Card, CardHeader, EmptyState, Icon, ResponsiveTable, Table, TBody, Td, Th, THead, type NazwaIkony } from "../../../ui";
@@ -29,11 +29,17 @@ export default async function Automatyzacje({
   // tenantId pochodzi z URL, czyli od klienta: bez sprawdzenia wobec sesji (AD-21)
   // sam adres ujawnialby automatyzacje cudzego tenanta.
   const { tenantId } = await wymaganyTenant(zadany);
-  const [{ lista, przebiegAt }, przeglad, listy] = await Promise.all([
+  const [{ lista, przebiegAt }, przeglad, listy, metryki] = await Promise.all([
     automatyzacjeTenanta(tenantId),
     przychodPrzegladu(tenantId),
     getPool().query("select id, name from lists where tenant_id = $1 order by name", [tenantId]).then((r) => r.rows as { id: string; name: string }[]),
+    metrykiDoWyzwalacza(tenantId),
   ]);
+  // wybor wyzwalacza: metryki tenanta (klucz "m:integracja|nazwa") + dolaczenie do listy
+  const triggery: Record<string, string> = {
+    ...Object.fromEntries(metryki.filter((m) => m.canTrigger).map((m) => [`m:${m.klucz}`, m.etykieta])),
+    "list.joined": TRIGGERY["list.joined"],
+  };
   const wToku = lista.reduce((s, f) => s + f.wToku, 0);
 
   return (
@@ -87,7 +93,7 @@ export default async function Automatyzacje({
                             </div>
                           </Td>
                           <Td><Badge ton={stan.ton}>{stan.etykieta}</Badge></Td>
-                          <Td className="text-[var(--color-tekst-2)]">{f.zdarzenie ? TRIGGERY[f.zdarzenie] ?? f.zdarzenie : "—"}</Td>
+                          <Td className="text-[var(--color-tekst-2)]">{etykietaWyzwalacza(f.zdarzenie)}</Td>
                           <Td num className="font-medium">{f.wToku}</Td>
                           <Td num className="font-medium">{f.wyslane}</Td>
                           <Td num className="font-medium">
@@ -112,7 +118,7 @@ export default async function Automatyzacje({
                         <div className="lista-mobilna-wiersz">
                           <div className="min-w-0">
                             <div className="lista-mobilna-tytul">{f.name}</div>
-                            <div className="lista-mobilna-meta">{f.zdarzenie ? TRIGGERY[f.zdarzenie] ?? f.zdarzenie : "—"} · {f.wToku} w toku · {f.wyslane} wysłane</div>
+                            <div className="lista-mobilna-meta">{etykietaWyzwalacza(f.zdarzenie)} · {f.wToku} w toku · {f.wyslane} wysłane</div>
                           </div>
                           <div className="lista-mobilna-wartosc">{f.przychod ? zGroszy(f.przychod.przychodMinor, przeglad.waluta) : "—"}</div>
                         </div>
@@ -156,7 +162,7 @@ export default async function Automatyzacje({
 
         <Card id="nowa-automatyzacja" className="scroll-mt-4">
           <CardHeader title="Nowa automatyzacja" description="Nazwa i wyzwalacz. Kroki, maile i warunki dodasz na kanwie." />
-          <div className="max-w-[808px] p-6 max-md:p-4"><NowaAutomatyzacja tenantId={tenantId} triggery={TRIGGERY} listy={listy} /></div>
+          <div className="max-w-[808px] p-6 max-md:p-4"><NowaAutomatyzacja tenantId={tenantId} triggery={triggery} listy={listy} /></div>
         </Card>
       </div>
     </>

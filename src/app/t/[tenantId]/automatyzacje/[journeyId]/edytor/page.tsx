@@ -40,6 +40,8 @@ export default async function EdytorAutomatyzacji({
         emaile: widok.emaile,
         listy: widok.listy,
         segmenty: widok.segmenty,
+        metryki: widok.metryki,
+        ponowneWejscieDostepne: widok.ponowneWejscieDostepne,
         bramka: widok.bramka,
         niepublikowane: widok.niepublikowane,
         liveVersion: widok.liveVersion,
