@@ -390,14 +390,44 @@ export function zrodloBezpieczne(surowy: string, scisle = true): boolean {
 }
 
 /** srcset: kazdy kandydat (URL [deskryptor]) musi byc bezpiecznym zrodlem. */
+/**
+ * Adresy z srcset wg algorytmu HTML: pomin biale znaki i przecinki, URL = ciag znakow do
+ * bialego znaku (przecinki w srodku, np. data:image/png;base64,..., naleza do URL-a), koncowe
+ * przecinki URL-a odpadaja; deskryptory do najblizszego przecinka poza nawiasem.
+ */
+export function adresySrcset(wartosc: string): string[] {
+  const adresy: string[] = [];
+  let i = 0;
+  const n = wartosc.length;
+  const bialy = (c: string) => /\s/.test(c);
+  while (i < n) {
+    while (i < n && (bialy(wartosc[i]) || wartosc[i] === ",")) i++;
+    if (i >= n) break;
+    let j = i;
+    while (j < n && !bialy(wartosc[j])) j++;
+    let url = wartosc.slice(i, j);
+    i = j;
+    if (/,+$/.test(url)) {
+      url = url.replace(/,+$/, "");
+    } else {
+      // deskryptory az do przecinka (nawiasy moga zawierac przecinki)
+      let nawias = 0;
+      while (i < n) {
+        const c = wartosc[i];
+        if (c === "(") nawias++;
+        else if (c === ")") nawias = Math.max(0, nawias - 1);
+        else if (c === "," && nawias === 0) break;
+        i++;
+      }
+    }
+    if (url) adresy.push(url);
+  }
+  return adresy;
+}
+
 function srcsetBezpieczny(surowy: string, scisle: boolean): boolean {
-  // kandydaci rozdzieleni przecinkiem i BIALYM ZNAKIEM (przecinek wewnatrz data:image/...;base64,
-  // nie jest separatorem); ostatni kandydat moze konczyc sie samym przecinkiem
-  const kandydaci = dekodujAtrybut(surowy).split(/,\s+/).map((k) => k.trim().replace(/,$/, "")).filter(Boolean);
-  // kazdy token kandydata poza deskryptorem (2x, 480w) musi byc bezpiecznym zrodlem: zlepione
-  // bez spacji "a.png 1x,javascript:x 2x" tez odpada
-  return kandydaci.length > 0 && kandydaci.every((k) =>
-    k.split(/\s+/).every((t, i) => (i > 0 && /^\d+(\.\d+)?[wx]$/i.test(t)) || zrodloBezpieczne(t, scisle)));
+  const adresy = adresySrcset(dekodujAtrybut(surowy));
+  return adresy.length > 0 && adresy.every((u) => zrodloBezpieczne(u, scisle));
 }
 
 const ATRYBUTY_NAWIGACJI = new Set(["href", "xlink:href", "action", "formaction"]);

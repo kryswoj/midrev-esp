@@ -512,6 +512,10 @@ export interface KontekstWalidacji {
 /**
  * Funkcje grafu, ktorych nie da sie zapisac w v1 (poza ponownym wejsciem, ktore ma wlasna
  * bramke). Pusta lista = graf zapisze sie jako v1 i przetrwa rollback kodu.
+ *
+ * Ponowne wejscie celowo NIE jest tu liczone: zapisuje sie w v2, ale tylko gdy jest dostepne,
+ * czyli po 0036. Od 0036 kod sprzed 0035 i tak nie dziala (zdjete unikalnosci), a rollback do
+ * wydania z 0035 czyta v2 - wiec v2 z ponownym wejsciem nie lamie zadnego mozliwego rollbacku.
  */
 export function funkcjeWymagajaceV2(g: Graf): string[] {
   const w = wyzwalaczGrafu(g);

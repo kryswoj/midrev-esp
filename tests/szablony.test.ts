@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   adresBezpieczny,
+  adresySrcset,
   dataDjango,
   zrodloBezpieczne,
   floatformat,
@@ -127,6 +128,8 @@ describe("Adresy w treści: javascript: nie przejdzie także bez zmiennych (prze
       .toBe(`<img ><img srcset="https://a.pl/1.png 1x, https://a.pl/2.png 2x">`);
     expect(sanityzujAdresy(`<img srcset="data:image/png;base64,AAAA 1x, https://a.pl/2.png 2x">`)).toContain("srcset=");
     expect(sanityzujAdresy(`<img srcset="https://a.pl/1.png 1x,javascript:x 2x">`)).toBe(`<img >`);
+    expect(sanityzujAdresy(`<img srcset="https://a.pl/1.png 1x,https://a.pl/2.png 2x">`)).toContain("srcset=");
+    expect(adresySrcset("data:image/png;base64,AA,BB 1x, https://a.pl/2.png 2x,https://a.pl/3.png")).toEqual(["data:image/png;base64,AA,BB", "https://a.pl/2.png", "https://a.pl/3.png"]);
     expect(sanityzujAdresy(`<td background="javascript:x">a</td><video poster='vbscript:x'></video><form action="javascript:x"><button formaction=javascript:x>`))
       .toBe(`<td >a</td><video ></video><form ><button >`);
   });
