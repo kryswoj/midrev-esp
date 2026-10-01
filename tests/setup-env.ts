@@ -1,7 +1,13 @@
 import { adresBazyTestowej, odczytajPlikEnv, wymagajBazyTestowej } from "./baza-testowa";
 
+// Flagi funkcji z .env deweloperskiego nie moga zmieniac wyniku testow: testy, ktore ich
+// potrzebuja, ustawiaja je same. Tak samo flagi wyeksportowane w powloce.
+const FLAGI_FUNKCJI = ["MIDREV_GRAF_V2", "MIDREV_PONOWNE_WEJSCIE", "SES_ZDARZENIA_SNS", "SES_TENANTS"];
+
 // Uruchamiany przed KAZDYM plikiem testow (setupFiles), zanim test dotknie config().
+for (const flaga of FLAGI_FUNKCJI) delete process.env[flaga];
 for (const [klucz, wartosc] of odczytajPlikEnv()) {
+  if (FLAGI_FUNKCJI.includes(klucz)) continue;
   if (!(klucz in process.env)) process.env[klucz] = wartosc;
 }
 
