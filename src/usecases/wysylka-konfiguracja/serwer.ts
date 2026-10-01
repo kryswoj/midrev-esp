@@ -161,7 +161,7 @@ export async function zapiszSerwer(tenantId: string, dane: DaneSerwera, opcje: O
   const domenaAdresu = adresNadawcy.split("@")[1];
   const pool = getPool();
   const { rows: domeny } = await pool.query(
-    "select id from sending_domains where tenant_id = $1 and domain = $2",
+    "select id from sending_domains where tenant_id = $1 and domain = $2 and managed_by = 'klient'",
     [tenantId, domenaAdresu],
   );
   if (!domeny[0]) {
@@ -421,6 +421,8 @@ export async function wyslijWiadomoscTestowa(
 <p>Jeśli ją widzisz, serwer przyjął pocztę od panelu. Sprawdź w nagłówkach wiadomości wyniki SPF, DKIM i DMARC (w Gmailu: „Pokaż oryginał”).</p>`,
       idempotencyKey: `test-${randomUUID()}`,
     });
+    // krok onboardingu „Pierwszy mail testowy" (0040): data pierwszego udanego testu
+    await getPool().query("update tenants set first_test_email_at = coalesce(first_test_email_at, now()) where id = $1", [tenantId]);
     return { ok: true, messageId: wynik.providerId, od: serwer.od };
   } catch (blad) {
     const opis = blad instanceof Error ? blad.message.replace(/^SMTP: /, "") : "nieznany błąd";

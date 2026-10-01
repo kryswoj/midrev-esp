@@ -157,7 +157,13 @@ export async function zapiszDaneNadawcyAkcja(f: FormData) {
   const { tenantId } = await wymaganyTenant(f.get("tenantId"));
   const wynik = await zapiszDaneNadawcy(tenantId, { firma: tekst(f, "firma"), adres: tekst(f, "adres"), nip: tekst(f, "nip") });
   revalidatePath(sciezka(tenantId));
-  wroc(tenantId, wynik.ok ? { ok: "Dane nadawcy zapisane. Pojawią się w stopce każdej nowej wiadomości." } : { blad: wynik.blad });
+  // z onboardingu (ekran Przegląd) wracamy tam, skąd przyszedł formularz; wartość z listy, nie z URL
+  if (tekst(f, "powrot") === "przeglad") {
+    revalidatePath(`/t/${tenantId}`);
+    const q = wynik.ok ? `ok=${encodeURIComponent("Dane firmy zapisane.")}` : `blad=${encodeURIComponent(wynik.blad)}`;
+    redirect(`/t/${tenantId}?${q}`);
+  }
+  wroc(tenantId, wynik.ok ? { ok: "Dane firmy zapisane. Pojawią się w stopce każdej nowej wiadomości." } : { blad: wynik.blad });
 }
 
 // ── Limit dobowy ────────────────────────────────────────────────────────────────
@@ -210,4 +216,86 @@ export async function usunSkrzynkeAkcja(f: FormData) {
   await usunSkrzynke(tenantId);
   revalidatePath(sciezka(tenantId));
   wroc(tenantId, { ok: "Skrzynka zwrotna usunięta. Odbicia nie będą już czytane — do czasu ponownego ustawienia dostarczalność jest ślepa." });
+}
+
+// ── Wysyłka platformowa (0040): kreator „Podłącz domenę" ─────────────────────────
+// Klient nie widzi słów SES/SMTP: komunikaty use-case są już po ludzku. Domenę,
+// strefę i układ liczy ZAWSZE serwer z samego wpisu klienta (formularz niesie tylko wpis,
+// prefiks, część przed @, nazwę i adres odpowiedzi).
+
+export async function podlaczDomeneAkcja(_poprzedni: StanFormularza | undefined, f: FormData): Promise<StanFormularza> {
+  const { tenantId } = await wymaganyTenant(f.get("tenantId"));
+  const dane = {
+    wpis: tekst(f, "wpis"),
+    prefiks: tekst(f, "prefiks"),
+    lokalna: tekst(f, "lokalna"),
+    nazwaNadawcy: tekst(f, "nazwaNadawcy"),
+    odpowiedzDo: tekst(f, "odpowiedzDo"),
+  };
+  const { podlaczDomene, sprawdzDomenePlatformowa } = await import("../../../../../usecases/wysylka-konfiguracja/domena-platformowa");
+  const wynik = await podlaczDomene(tenantId, dane);
+  if (!wynik.ok) return { blad: wynik.blad, wartosci: dane };
+  // pierwsze sprawdzenie od razu: klient widzi stan rekordów bez czekania na workera
+  await sprawdzDomenePlatformowa(tenantId, wynik.domainId).catch(() => null);
+  revalidatePath(sciezka(tenantId));
+  wroc(tenantId, { ok: "Domena podłączona. Teraz dodaj rekordy z tabeli poniżej — resztę sprawdzimy sami." });
+}
+
+export async function sprawdzPlatformoweAkcja(f: FormData) {
+  const { tenantId } = await wymaganyTenant(f.get("tenantId"));
+  const { domenaPlatformowa, sprawdzDomenePlatformowa } = await import("../../../../../usecases/wysylka-konfiguracja/domena-platformowa");
+  const d = await domenaPlatformowa(tenantId);
+  if (!d) wroc(tenantId, { blad: "Najpierw podłącz domenę." });
+  const w = await sprawdzDomenePlatformowa(tenantId, d!.id);
+  revalidatePath(sciezka(tenantId));
+  if (!w.ok) wroc(tenantId, { blad: w.blad });
+  const brakuje = w.domena.rekordy.filter((r) => w.domena.raport?.rekordy[r.klucz]?.stan !== "ok").length;
+  wroc(tenantId, w.domena.gotowa
+    ? { ok: "Wszystko na miejscu. Domena jest gotowa do wysyłki." }
+    : { ok: brakuje ? `Sprawdzone. Do dokończenia: ${brakuje} z ${w.domena.rekordy.length} rekordów.` : "Sprawdzone. Rekordy są na miejscu, czekamy na ostatnie potwierdzenie." });
+}
+
+export async function linkInstrukcjiAkcja(
+  _poprzedni: { url?: string; wygasa?: string; blad?: string } | undefined,
+  f: FormData,
+): Promise<{ url?: string; wygasa?: string; blad?: string }> {
+  const { tenantId } = await wymaganyTenant(f.get("tenantId"));
+  const { domenaPlatformowa } = await import("../../../../../usecases/wysylka-konfiguracja/domena-platformowa");
+  const { utworzLinkInstrukcji } = await import("../../../../../usecases/wysylka-konfiguracja/instrukcja-dns");
+  const d = await domenaPlatformowa(tenantId);
+  if (!d) return { blad: "Najpierw podłącz domenę." };
+  const w = await utworzLinkInstrukcji(tenantId, d.id);
+  if (!w.ok) return { blad: w.blad };
+  return { url: w.url, wygasa: w.wygasa.toISOString() };
+}
+
+export async function zapiszNadawcePlatformyAkcja(f: FormData) {
+  const { tenantId } = await wymaganyTenant(f.get("tenantId"));
+  const { zapiszNadawcePlatformy } = await import("../../../../../usecases/wysylka-konfiguracja/domena-platformowa");
+  const w = await zapiszNadawcePlatformy(tenantId, {
+    nazwaNadawcy: tekst(f, "nazwaNadawcy"),
+    lokalna: tekst(f, "lokalna"),
+    odpowiedzDo: tekst(f, "odpowiedzDo"),
+  });
+  revalidatePath(sciezka(tenantId));
+  wroc(tenantId, w.ok ? { ok: "Nadawca zapisany. Nowe maile wyjdą już z tymi danymi." } : { blad: w.blad });
+}
+
+export async function odlaczDomeneAkcja(f: FormData) {
+  const { tenantId } = await wymaganyTenant(f.get("tenantId"));
+  if (tekst(f, "potwierdzenie").trim().toLowerCase() !== "odłącz") {
+    wroc(tenantId, { blad: "Żeby odłączyć domenę, wpisz słowo „odłącz”." });
+  }
+  const { odlaczDomenePlatformowa } = await import("../../../../../usecases/wysylka-konfiguracja/domena-platformowa");
+  const w = await odlaczDomenePlatformowa(tenantId);
+  revalidatePath(sciezka(tenantId));
+  wroc(tenantId, w.ok ? { ok: "Domena odłączona. Wysyłka jest wstrzymana, dopóki nie podłączysz domeny ponownie." } : { blad: w.blad });
+}
+
+export async function wyslijTestPlatformyAkcja(f: FormData) {
+  const { tenantId } = await wymaganyTenant(f.get("tenantId"));
+  const { wyslijTestPlatformy } = await import("../../../../../usecases/wysylka-konfiguracja/wysylka-platformowa");
+  const w = await wyslijTestPlatformy(tenantId, tekst(f, "adres"));
+  revalidatePath(sciezka(tenantId));
+  wroc(tenantId, w.ok ? { ok: `Test wysłany z ${w.od}. Sprawdź skrzynkę (także folder Oferty i Spam).` } : { blad: w.blad });
 }

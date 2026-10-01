@@ -6,6 +6,8 @@ import {
   type Klasyfikacja,
 } from "../../domain/email/klasyfikacja";
 import { zapiszZdarzenie, type TypZdarzeniaWiadomosci } from "./wyslij-kampanie";
+import { emitujMetrykeEmail } from "./metryki-email";
+import type { ZrodloZdarzenia } from "../../domain/zdarzenia/kontrakt";
 
 /**
  * Zdarzenia zaraportowane przez dostawcę: dostarczenie, odbicie, skarga, odrzucenie
@@ -104,11 +106,18 @@ function przygotuj(zgloszenie: ZgloszenieDostawcy): {
 
 export async function zapiszZgloszenieDostawcy(
   tenantId: string,
-  identyfikator: { providerId: string } | { messageId: string },
+  /**
+   * providerId = nasz Message-ID (messages.provider_id), providerMessageId = identyfikator
+   * nadany przez SES (messages.provider_message_id, 0029; to on jest w `mail.messageId`
+   * zdarzeń SNS), messageId = id wiadomości. Zawsze w obrębie tenanta.
+   */
+  identyfikator: { providerId: string } | { providerMessageId: string } | { messageId: string },
   zgloszenie: ZgloszenieDostawcy,
   opcje: {
     /** patrz OpcjeZdarzenia.wykluczenieGlobalne; domyślnie true (webhook dostawcy = zaufany) */
     wykluczenieGlobalne?: boolean;
+    /** źródło metryki e-mail w strumieniu (SNS = webhook, skrzynka zwrotna = system) */
+    zrodloMetryki?: ZrodloZdarzenia;
   } = {},
 ): Promise<WynikZgloszenia> {
   if (!(zgloszenie.kiedy instanceof Date) || Number.isNaN(zgloszenie.kiedy.getTime())) {
@@ -119,8 +128,17 @@ export async function zapiszZgloszenieDostawcy(
   const { rows } = await pool.query<{ id: string }>(
     "providerId" in identyfikator
       ? "select id from messages where tenant_id = $1 and provider_id = $2"
-      : "select id from messages where tenant_id = $1 and id = $2",
-    [tenantId, "providerId" in identyfikator ? identyfikator.providerId : identyfikator.messageId],
+      : "providerMessageId" in identyfikator
+        ? "select id from messages where tenant_id = $1 and provider_message_id = $2"
+        : "select id from messages where tenant_id = $1 and id = $2",
+    [
+      tenantId,
+      "providerId" in identyfikator
+        ? identyfikator.providerId
+        : "providerMessageId" in identyfikator
+          ? identyfikator.providerMessageId
+          : identyfikator.messageId,
+    ],
   );
   const messageId = rows[0]?.id;
   if (!messageId) return { zapisane: false, powodOdrzucenia: "brak_wiadomosci" };
@@ -134,12 +152,25 @@ export async function zapiszZgloszenieDostawcy(
     // Data zdarzenia to data OD DOSTAWCY (AD-10), nie chwila, w której webhook do nas
     // dotarł. Powiadomienie potrafi przyjść z godzinnym opóźnieniem, a raport
     // dostarczalności liczony po dacie zapisu pokazałby szczyt odbić, którego nie było.
-    await zapiszZdarzenie(klient, tenantId, messageId, przygotowane.typ, {
+    const nowe = await zapiszZdarzenie(klient, tenantId, messageId, przygotowane.typ, {
       kiedy: zgloszenie.kiedy,
       payload: przygotowane.payload,
       klasyfikacja: przygotowane.klasyfikacja,
       wykluczenieGlobalne: opcje.wykluczenieGlobalne,
     });
+    // Metryka (Received / Bounced Email, Marked Email as Spam) w TEJ SAMEJ transakcji co
+    // zdarzenie wiadomości (AD-36) i tylko przy NOWYM zdarzeniu: powtórka SNS albo drugi
+    // przebieg skrzynki nie podbija licznika drugi raz.
+    if (nowe) {
+      await emitujMetrykeEmail(klient, {
+        tenantId,
+        messageId,
+        typ: przygotowane.typ,
+        kiedy: zgloszenie.kiedy,
+        klasyfikacja: przygotowane.klasyfikacja,
+        zrodlo: opcje.zrodloMetryki ?? "webhook",
+      });
+    }
     await klient.query("commit");
   } catch (blad) {
     await klient.query("rollback").catch(() => {});

@@ -75,7 +75,7 @@ export async function zapiszZdarzenie(
   messageId: string,
   typ: TypZdarzeniaWiadomosci,
   opcje: OpcjeZdarzenia,
-) {
+): Promise<boolean> {
   const k = opcje.klasyfikacja;
   // Zdarzenie jest append-only z unikalnością (message_id, event_type): powtórka
   // (np. ponowiony job) nie tworzy drugiego wpisu i nie przesuwa stanu wstecz.
@@ -140,6 +140,8 @@ export async function zapiszZdarzenie(
       }
     }
   }
+  // true = zdarzenie zapisane teraz (nie duplikat): wołający emituje metrykę tylko raz
+  return Boolean(zapis.rowCount);
 }
 
 /** Adres-zaślepka po anonimizacji RODO (profil-rodo.ts) albo zaślepka globalnej listy (0022). */

@@ -50,30 +50,51 @@ describe("Onboarding: lista kroków wdrożenia", () => {
     await closePool();
   });
 
-  it("puste konto nie ma odhaczonego ani jednego kroku", async () => {
+  it("puste konto nie ma odhaczonego ani jednego kroku; kolejność = prosty przepływ (0040)", async () => {
     const stan = await stanOnboardingu(tenantA);
+    expect(stan.kroki.map((k) => k.klucz)).toEqual(["firma", "domena", "domena_gotowa", "sklep", "odbiorcy", "test"]);
     expect(stan.wszystkie).toBe(6);
     expect(stan.zrobione).toBe(0);
     expect(stan.gotowe).toBe(false);
     expect(stan.kroki.every((k) => k.href.startsWith("/"))).toBe(true);
     expect(stan.kroki.every((k) => k.poCo.length > 0 && k.akcja.length > 0)).toBe(true);
+    // bez żargonu w tytułach i opisach kroków
+    for (const k of stan.kroki) expect(`${k.tytul} ${k.poCo} ${k.szczegol}`).not.toMatch(/SES|SMTP|IMAP|MAIL FROM|DKIM|SPF|DMARC/);
   });
 
-  it("sama zweryfikowana domena nie odhacza kroku — bez serwera nie ma czym wysłać", async () => {
+  it("dane firmy: odhaczone dopiero z nazwą i adresem (adres jest bramką wysyłki)", async () => {
+    const pool = getPool();
+    await pool.query("update tenants set sender_company_name = 'ONB sp. z o.o.' where id = $1", [tenantA]);
+    expect(krok((await stanOnboardingu(tenantA)).kroki, "firma").zrobiony).toBe(false);
+    await pool.query("update tenants set sender_postal_address = 'ul. Onb 1, 00-001 Warszawa' where id = $1", [tenantA]);
+    expect(await zrobione(tenantA)).toEqual(["firma"]);
+  });
+
+  it("domena klienta bez serwera nie odhacza niczego; platformowa odhacza „podłącz”, a „gotowa” dopiero po weryfikacji SES", async () => {
     const pool = getPool();
     await pool.query(
       `insert into sending_domains (tenant_id, domain, status, verified_at)
        values ($1, 'onb.example', 'verified', now())`,
       [tenantA],
     );
-    const domena = krok((await stanOnboardingu(tenantA)).kroki, "domena");
-    expect(domena.wBudowie).toBe(false);
-    expect(domena.zrobiony).toBe(false);
-    expect(domena.href).toBe("/ustawienia/wysylka");
-    expect(domena.szczegol).toContain("serwer wysyłkowy nie jest ustawiony");
+    expect(await zrobione(tenantA)).toEqual(["firma"]);
+    const { rows } = await pool.query(
+      `insert into sending_domains (tenant_id, domain, managed_by, zone_apex, status)
+       values ($1, 'news.onb-platforma.example', 'platforma', 'onb-platforma.example', 'partial') returning id`,
+      [tenantA],
+    );
+    expect(await zrobione(tenantA)).toEqual(["firma", "domena"]);
+    expect(krok((await stanOnboardingu(tenantA)).kroki, "domena_gotowa").szczegol).toContain("część rekordów");
+    // status verified bez potwierdzenia SES to jeszcze nie „gotowa" (ta sama bramka co wysyłka)
+    await pool.query("update sending_domains set status = 'verified' where id = $1", [rows[0].id]);
+    expect(krok((await stanOnboardingu(tenantA)).kroki, "domena_gotowa").zrobiony).toBe(false);
+    await pool.query("update sending_domains set ses_verified_for_sending = true where id = $1", [rows[0].id]);
+    expect(await zrobione(tenantA)).toEqual(["firma", "domena", "domena_gotowa"]);
+    // domena innego tenanta nie odhacza niczego na koncie B
+    expect(await zrobione(tenantB)).toEqual([]);
   });
 
-  it("podłączony sklep odhacza krok sklepu, ale nie webhooków", async () => {
+  it("sklep odhacza się dopiero, gdy odpowiada I powiadomienia (webhooki) są potwierdzone odczytem", async () => {
     const pool = getPool();
     const { rows } = await pool.query(
       `insert into stores (tenant_id, platform, base_url, credentials_encrypted, status)
@@ -81,46 +102,10 @@ describe("Onboarding: lista kroków wdrożenia", () => {
       [tenantA, zaszyfruj(JSON.stringify({ ck: "x", cs: "y" }))],
     );
     sklepA = rows[0].id;
-
-    expect(await zrobione(tenantA)).toEqual(["sklep"]);
     // sklep bez zapisanego stanu webhooków = webhooki nieustawione, nie „nie wiemy"
-    expect(krok((await stanOnboardingu(tenantA)).kroki, "webhooki").zrobiony).toBe(false);
-  });
+    expect(krok((await stanOnboardingu(tenantA)).kroki, "sklep").zrobiony).toBe(false);
 
-  it("sklep w stanie pending nie odhacza kroku sklepu", async () => {
-    const pool = getPool();
-    const { rows } = await pool.query(
-      `insert into stores (tenant_id, platform, base_url, credentials_encrypted, status)
-       values ($1, 'woocommerce', 'http://onb-b.example', $2, 'pending') returning id`,
-      [tenantB, zaszyfruj(JSON.stringify({ ck: "x", cs: "y" }))],
-    );
-    sklepB = rows[0].id;
-    expect(await zrobione(tenantB)).toEqual([]);
-  });
-
-  it("zamówienia obcego tenanta nie odhaczają historii na naszym koncie", async () => {
-    const pool = getPool();
-    await pool.query(
-      `insert into orders (tenant_id, store_id, external_id, status, total_minor, currency, occurred_at)
-       values ($1, $2, 'onb-obce-1', 'completed', 10000, 'PLN', now())`,
-      [tenantB, sklepB],
-    );
-    expect(await zrobione(tenantA)).toEqual(["sklep"]);
-  });
-
-  it("własne zamówienie odhacza krok historii", async () => {
-    const pool = getPool();
-    await pool.query(
-      `insert into orders (tenant_id, store_id, external_id, status, total_minor, currency, occurred_at)
-       values ($1, $2, 'onb-1', 'completed', 25000, 'PLN', now())`,
-      [tenantA, sklepA],
-    );
-    expect(await zrobione(tenantA)).toEqual(["sklep", "historia"]);
-  });
-
-  it("webhooki odhaczają się dopiero po potwierdzeniu KAŻDEGO tematu odczytem zwrotnym", async () => {
-    // Woo oddaje 201 i potrafi zostawić webhooka wstrzymanego, więc sam zapis stanu
-    // bez `potwierdzonyAt` nie może wystarczyć (por. `wszystkieAktywne`).
+    // Woo oddaje 201 i potrafi zostawić webhooka wstrzymanego (por. `wszystkieAktywne`)
     await zapiszStanWebhookow(tenantA, sklepA, {
       adresDostawy: "http://app.example/api/webhooks/woo/x",
       sprawdzonyAt: new Date().toISOString(),
@@ -134,8 +119,7 @@ describe("Onboarding: lista kroków wdrożenia", () => {
         blad: null,
       })),
     });
-    expect(krok((await stanOnboardingu(tenantA)).kroki, "webhooki").zrobiony).toBe(false);
-
+    expect(krok((await stanOnboardingu(tenantA)).kroki, "sklep").zrobiony).toBe(false);
     await zapiszStanWebhookow(tenantA, sklepA, {
       adresDostawy: "http://app.example/api/webhooks/woo/x",
       sprawdzonyAt: new Date().toISOString(),
@@ -149,7 +133,19 @@ describe("Onboarding: lista kroków wdrożenia", () => {
         blad: null,
       })),
     });
-    expect(await zrobione(tenantA)).toEqual(["sklep", "historia", "webhooki"]);
+    expect(krok((await stanOnboardingu(tenantA)).kroki, "sklep").zrobiony).toBe(true);
+  });
+
+  it("sklep obcego tenanta w stanie pending nie odhacza niczego", async () => {
+    const pool = getPool();
+    const { rows } = await pool.query(
+      `insert into stores (tenant_id, platform, base_url, credentials_encrypted, status)
+       values ($1, 'woocommerce', 'http://onb-b.example', $2, 'pending') returning id`,
+      [tenantB, zaszyfruj(JSON.stringify({ ck: "x", cs: "y" }))],
+    );
+    sklepB = rows[0].id;
+    expect(sklepB).toBeTruthy();
+    expect(await zrobione(tenantB)).toEqual([]);
   });
 
   it("odbiorcy liczą się bramką wysyłki, a nie liczbą profili", async () => {
@@ -160,6 +156,7 @@ describe("Onboarding: lista kroków wdrożenia", () => {
     );
     // profil bez zgody: bramka go nie przepuszcza, więc krok zostaje niezrobiony
     expect(krok((await stanOnboardingu(tenantA)).kroki, "odbiorcy").zrobiony).toBe(false);
+    expect(krok((await stanOnboardingu(tenantA)).kroki, "odbiorcy").href).toBe("/popupy");
 
     await pool.query(
       `insert into consents (tenant_id, profile_id, channel, state, source, occurred_at)
@@ -185,52 +182,38 @@ describe("Onboarding: lista kroków wdrożenia", () => {
     expect(krok((await stanOnboardingu(tenantA)).kroki, "odbiorcy").zrobiony).toBe(true);
   });
 
-  it("kampania w szkicu nie liczy się jako wysłana, wysłana liczy się", async () => {
+  it("pierwszy mail testowy: z ustawień (data w tenants) albo test kampanii, który naprawdę wyszedł", async () => {
     const pool = getPool();
+    expect(krok((await stanOnboardingu(tenantA)).kroki, "test").zrobiony).toBe(false);
+    // kampania w szkicu nie jest testem
     await pool.query("insert into campaigns (tenant_id, name) values ($1, 'ONB szkic')", [tenantA]);
-    expect(krok((await stanOnboardingu(tenantA)).kroki, "kampania").zrobiony).toBe(false);
-
-    await pool.query(
-      "insert into campaigns (tenant_id, name, status) values ($1, 'ONB wyslana', 'sent')",
-      [tenantA],
-    );
+    expect(krok((await stanOnboardingu(tenantA)).kroki, "test").zrobiony).toBe(false);
+    await pool.query("update tenants set first_test_email_at = now() where id = $1", [tenantA]);
     const stan = await stanOnboardingu(tenantA);
-    expect(krok(stan.kroki, "kampania").zrobiony).toBe(true);
-    // pięć z sześciu: domena jest zweryfikowana, ale serwera wysyłkowego wciąż nie ma
-    expect(stan.zrobione).toBe(5);
-    expect(stan.gotowe).toBe(false);
-  });
-
-  it("krok domeny wymaga tego samego co silnik: sprawdzonego serwera i domeny verified", async () => {
-    const pool = getPool();
-    const { rows: d } = await pool.query(
-      "select id from sending_domains where tenant_id = $1 and domain = 'onb.example'",
-      [tenantA],
-    );
-    // serwer zapisany, ale bez udanego testu połączenia: krok niezrobiony
-    await pool.query(
-      `insert into tenant_smtp_configs (tenant_id, sending_domain_id, host, port, security, from_name, from_email)
-       values ($1, $2, 'smtp.onb.example', 587, 'starttls', 'ONB', 'sklep@onb.example')`,
-      [tenantA, d[0].id],
-    );
-    let domena = krok((await stanOnboardingu(tenantA)).kroki, "domena");
-    expect(domena.zrobiony).toBe(false);
-    expect(domena.szczegol).toContain("testu połączenia");
-
-    // serwer sprawdzony, domena spada do partial (np. ktoś usunął DMARC): nadal niezrobiony
-    await pool.query("update tenant_smtp_configs set connection_verified_at = now() where tenant_id = $1", [tenantA]);
-    await pool.query("update sending_domains set status = 'partial' where tenant_id = $1", [tenantA]);
-    domena = krok((await stanOnboardingu(tenantA)).kroki, "domena");
-    expect(domena.zrobiony).toBe(false);
-    expect(domena.szczegol).toContain("częściowo");
-
-    await pool.query("update sending_domains set status = 'verified' where tenant_id = $1", [tenantA]);
-    const stan = await stanOnboardingu(tenantA);
-    expect(krok(stan.kroki, "domena").zrobiony).toBe(true);
+    expect(krok(stan.kroki, "test").zrobiony).toBe(true);
     expect(stan.zrobione).toBe(6);
     expect(stan.gotowe).toBe(true);
+    // nic z konta A nie odhacza się na koncie B
+    expect(await zrobione(tenantB)).toEqual([]);
+  });
 
-    // serwer i domena obcego tenanta nie odhaczają niczego na koncie B
-    expect(krok((await stanOnboardingu(tenantB)).kroki, "domena").zrobiony).toBe(false);
+  it("konto z własnym serwerem: „gotowa” wymaga sprawdzonego serwera i domeny verified (FR45)", async () => {
+    const pool = getPool();
+    const { rows: d } = await pool.query(
+      "insert into sending_domains (tenant_id, domain, status) values ($1, 'onb-b.example', 'verified') returning id",
+      [tenantB],
+    );
+    await pool.query(
+      `insert into tenant_smtp_configs (tenant_id, sending_domain_id, host, port, security, from_name, from_email)
+       values ($1, $2, 'smtp.onb.example', 587, 'starttls', 'ONB', 'sklep@onb-b.example')`,
+      [tenantB, d[0].id],
+    );
+    let gotowa = krok((await stanOnboardingu(tenantB)).kroki, "domena_gotowa");
+    expect(krok((await stanOnboardingu(tenantB)).kroki, "domena").zrobiony).toBe(true);
+    expect(gotowa.zrobiony).toBe(false);
+    expect(gotowa.szczegol).toContain("testu połączenia");
+    await pool.query("update tenant_smtp_configs set connection_verified_at = now() where tenant_id = $1", [tenantB]);
+    gotowa = krok((await stanOnboardingu(tenantB)).kroki, "domena_gotowa");
+    expect(gotowa.zrobiony).toBe(true);
   });
 });

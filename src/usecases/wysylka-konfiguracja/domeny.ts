@@ -15,8 +15,9 @@ import {
 } from "./weryfikacja-dns";
 
 /**
- * Domeny wysyłkowe tenanta: dodanie, ustawienia (selektor DKIM, mechanizm SPF),
- * sprawdzenie DNS z zapisem wyniku.
+ * Domeny wysyłkowe tenanta pod WŁASNY serwer (managed_by = 'klient'): dodanie, ustawienia
+ * (selektor DKIM, mechanizm SPF), sprawdzenie DNS z zapisem wyniku. Domeny platformowe
+ * (0040) obsługuje domena-platformowa.ts — każde zapytanie tutaj je wyklucza.
  *
  * DŁUG: SQL powinien mieszkać w `adapters/db/repozytoria.ts` (AD-18). Leży tu z tego
  * samego powodu co w onboarding.ts — tamten plik należy w tej rundzie do innego agenta.
@@ -78,7 +79,7 @@ function zWiersza(w: Record<string, any>): DomenaWysylkowa {
 
 export async function listaDomen(tenantId: string): Promise<DomenaWysylkowa[]> {
   const { rows } = await getPool().query(
-    `select ${KOLUMNY} from sending_domains where tenant_id = $1 order by created_at`,
+    `select ${KOLUMNY} from sending_domains where tenant_id = $1 and managed_by = 'klient' order by created_at`,
     [tenantId],
   );
   return rows.map(zWiersza);
@@ -86,7 +87,7 @@ export async function listaDomen(tenantId: string): Promise<DomenaWysylkowa[]> {
 
 export async function domena(tenantId: string, domainId: string): Promise<DomenaWysylkowa | null> {
   const { rows } = await getPool().query(
-    `select ${KOLUMNY} from sending_domains where tenant_id = $1 and id = $2`,
+    `select ${KOLUMNY} from sending_domains where tenant_id = $1 and id = $2 and managed_by = 'klient'`,
     [tenantId, domainId],
   );
   return rows[0] ? zWiersza(rows[0]) : null;
@@ -167,7 +168,7 @@ export async function zmienUstawieniaDomeny(
         set dkim_selector = $3, spf_mechanism = $4, status = 'pending', verified_at = null,
             spf_status = null, dkim_status = null, dmarc_status = null, dmarc_policy = null,
             check_details = '{}'::jsonb, last_error = null
-      where tenant_id = $1 and id = $2
+      where tenant_id = $1 and id = $2 and managed_by = 'klient'
         and (dkim_selector is distinct from $3 or spf_mechanism is distinct from $4)`,
     [tenantId, domainId, selektor, mechanizm],
   );
@@ -181,7 +182,7 @@ export async function zmienUstawieniaDomeny(
 
 export async function usunDomene(tenantId: string, domainId: string): Promise<Wynik> {
   try {
-    await getPool().query("delete from sending_domains where tenant_id = $1 and id = $2", [tenantId, domainId]);
+    await getPool().query("delete from sending_domains where tenant_id = $1 and id = $2 and managed_by = 'klient'", [tenantId, domainId]);
   } catch (blad) {
     if ((blad as { code?: string }).code === "23503") {
       return { ok: false, blad: "Z tej domeny wysyła skonfigurowany serwer SMTP. Najpierw zmień adres nadawcy." };
@@ -252,7 +253,7 @@ export async function sprawdzDomene(
       .map((r) => r.problem)
       .join(" ");
     await pool.query(
-      `update sending_domains set last_error = $3, dns_records = $4 where tenant_id = $1 and id = $2`,
+      `update sending_domains set last_error = $3, dns_records = $4 where tenant_id = $1 and id = $2 and managed_by = 'klient'`,
       [tenantId, domainId, opis || "DNS nie odpowiedział", JSON.stringify(rekordy)],
     );
   } else {
@@ -263,7 +264,7 @@ export async function sprawdzDomene(
               check_details = $8, dns_records = $9, last_checked_at = $10, last_error = null,
               -- data weryfikacji zostaje z PIERWSZEGO przejścia w verified; spadek ją zeruje
               verified_at = case when $3 = 'verified' then coalesce(verified_at, $10) else null end
-        where tenant_id = $1 and id = $2`,
+        where tenant_id = $1 and id = $2 and managed_by = 'klient'`,
       [
         tenantId,
         domainId,

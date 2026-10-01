@@ -32,6 +32,12 @@ export interface KonfiguracjaSerwera {
   rodzaj?: RodzajSerwera;
   /** domena koperty (Return-Path), np. bounce.news.midrev.pl; null = koperta = From */
   domenaKoperty?: string | null;
+  /**
+   * Stałe nagłówki dla wszystkich wiadomości tego adaptera (0040, wysyłka platformowa):
+   * X-SES-CONFIGURATION-SET (po nim zdarzenie SNS trafia do tenanta) i opcjonalnie
+   * X-SES-TENANT. Ustawia je KOD z danych tenanta w bazie, nigdy dane z żądania.
+   */
+  naglowkiDodatkowe?: Readonly<Record<string, string>>;
 }
 
 export type RodzajSerwera = "wlasny_serwer" | "przekaznik";
@@ -386,6 +392,10 @@ export class AdapterNodemailer implements DostawcaWysylki {
     // Message-ID własnym). Wraca w kopii nagłówków oryginału w DSN/ARF i jest pierwszym
     // kluczem dopasowania odbicia (dsn.ts), przed ID dostawcy i Message-ID.
     const naglowki: Record<string, string> = { "X-MidRev-Message-Id": bezNowychLinii(w.idempotencyKey) };
+    for (const [nazwa, wartosc] of Object.entries(this.#konfiguracja.naglowkiDodatkowe ?? {})) {
+      // nazwa wg RFC 5322 (bez dwukropka i spacji), wartość bez CRLF: wstrzyknięcie nagłówka niemożliwe
+      if (/^[A-Za-z0-9-]{1,64}$/.test(nazwa)) naglowki[nazwa] = bezNowychLinii(wartosc).slice(0, 500);
+    }
     if (w.adresWypisania) {
       // RFC 8058: wypisanie jednym kliknięciem
       naglowki["List-Unsubscribe"] = `<${bezNowychLinii(w.adresWypisania)}>`;

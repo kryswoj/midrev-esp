@@ -18,6 +18,7 @@ import { HANDLERY_CYKLICZNE, zarejestrujCykliczne } from "./handlery-cykliczne";
 import { HANDLERY_ODBICIA, ODSTEP_ODBIC_MS, zaplanujOdbicia } from "./handlery-odbicia";
 import { HANDLERY_IMPORTU } from "./handlery-import";
 import { HANDLERY_ZDARZEN, zaplanujZdarzenia } from "./handlery-zdarzenia";
+import { ODSTEP_DOMEN_MS, tikDomen } from "./handlery-domeny";
 
 /**
  * Worker: jedna pętla, zajmowanie pojedynczo przez SKIP LOCKED, każdy handler idempotentny
@@ -289,6 +290,13 @@ coIle("rekoncyliacja", 900_000, zaplanujRekoncyliacje);
 // nigdy nie trafiały do wykluczeń, a progi reputacji liczyły na pustym mianowniku.
 await zaplanujOdbicia().catch((b) => console.error(`[${workerId}] odbicia (start):`, b));
 coIle("odbicia", ODSTEP_ODBIC_MS, zaplanujOdbicia);
+
+// Domeny platformowe (0040): automatyczne sprawdzanie rekordów i powiadomienie „gotowa".
+// Bez tego klient po wpisaniu rekordów musiałby klikać „Sprawdź" — a ma nie musieć.
+coIle("domeny", ODSTEP_DOMEN_MS, async () => {
+  const w = await tikDomen();
+  if (w.sprawdzone) console.log(`[${workerId}] domeny: sprawdzone ${w.sprawdzone}, gotowe ${w.gotowe}`);
+});
 
 // B1: dispatcher zaplanowanych kampanii, co minutę. Do tej pory `scheduled_at` czytał
 // wyłącznie panel, więc plan wysyłki był napisem na ekranie. Dwa workery robiące ten tik

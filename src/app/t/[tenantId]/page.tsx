@@ -5,6 +5,7 @@ import { kampanieTenanta } from "../../../adapters/db/repozytoria";
 import { STATUSY, automatyzacjeTenanta } from "../../../usecases/automatyzacje/journeye";
 import { ZDARZENIA_WYZWALACZA } from "../../../domain/automatyzacje/graf";
 import { stanOnboardingu } from "../../../usecases/onboarding";
+import { odczytajDaneNadawcy } from "../../../usecases/wysylka-konfiguracja/dane-nadawcy";
 import { ostatnieKampanie, przychodPrzegladu } from "../../../usecases/raport-przegladu";
 import { przychodAutomatyzacji } from "../../../usecases/przelicz-atrybucje";
 import { formatujDate } from "../../../domain/daty";
@@ -41,13 +42,14 @@ export default async function Przeglad({ params, searchParams }: {
   await wymaganyTenant(tenantId);
   const { ok, blad } = await searchParams;
 
-  const [przychod, kampanie, automatyzacje, wszystkieKampanie, onboarding, atrybucjaAutomatyzacji] = await Promise.all([
+  const [przychod, kampanie, automatyzacje, wszystkieKampanie, onboarding, atrybucjaAutomatyzacji, daneFirmy] = await Promise.all([
     przychodPrzegladu(tenantId),
     ostatnieKampanie(tenantId, 6),
     automatyzacjeTenanta(tenantId),
     kampanieTenanta(tenantId),
     stanOnboardingu(tenantId),
     przychodAutomatyzacji(tenantId),
+    odczytajDaneNadawcy(tenantId),
   ]);
 
   const doAkceptacji = wszystkieKampanie.filter((k: { status: string }) => k.status === "awaiting_approval").length;
@@ -63,7 +65,7 @@ export default async function Przeglad({ params, searchParams }: {
     .sort((a, b) => przychodJourneya(b.id) - przychodJourneya(a.id) || b.wyslane - a.wyslane)
     .slice(0, 6);
   const onboardingNaGorze = !onboarding.gotowe && kampanie.length === 0;
-  const sekcjaOnboardingu = <Onboarding tenantId={tenantId} stan={onboarding} />;
+  const sekcjaOnboardingu = <Onboarding tenantId={tenantId} stan={onboarding} daneFirmy={daneFirmy} />;
   const zakres = przychod.odKiedy && przychod.doKiedy
     ? `${formatujDate(przychod.odKiedy)} – ${formatujDate(przychod.doKiedy)}`
     : "Brak zamówień w wybranym sklepie";

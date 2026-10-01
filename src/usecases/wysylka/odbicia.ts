@@ -201,7 +201,8 @@ export async function przetworzRaport(
     // brak adresata w raporcie = brak dowodu (review Codeksa r2): tylko wykluczenie sklepowe
     const adresZgodny = Boolean(o.adres) && o.adres!.trim().toLowerCase() === dop.email.trim().toLowerCase();
     const zaufany = dop.jak !== "adres" && raport.pewnosc === "wysoka" && adresZgodny;
-    const opcjeZapisu = { wykluczenieGlobalne: zaufany };
+    // skrzynka zwrotna = raport czytany przez nas, nie webhook dostawcy (źródło metryki „system”)
+    const opcjeZapisu = { wykluczenieGlobalne: zaufany, zrodloMetryki: "system" as const };
     let zapis: WynikZgloszenia;
     if (raport.rodzaj === "arf") {
       zapis = await zapiszZgloszenieDostawcy(tenantId, { messageId: dop.messageId }, {

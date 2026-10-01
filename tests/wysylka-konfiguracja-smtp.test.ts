@@ -91,6 +91,45 @@ describe("Adapter nodemailer na Mailpicie", () => {
     expect(h["Return-Path"]?.[0]).toContain("sklep@nadawca.test");
   });
 
+  it("wysyłka platformowa (0040): stałe nagłówki tenanta (X-SES-CONFIGURATION-SET) idą w mailu, wstrzyknięcie nagłówka niemożliwe", async () => {
+    const adapter = new AdapterNodemailer(
+      {
+        host: "127.0.0.1",
+        port: 1025,
+        bezpieczenstwo: "none",
+        uzytkownik: null,
+        haslo: null,
+        rodzaj: "przekaznik",
+        domenaKoperty: "bounce.news.nadawca.test",
+        naglowkiDodatkowe: {
+          "X-SES-CONFIGURATION-SET": "midrev-t-abc",
+          "X-SES-TENANT": "midrev-abc\r\nBcc: ofiara@example.test",
+          "Zla Nazwa": "x",
+        },
+      },
+      { hostyDeweloperskie: DEV },
+    );
+    const klucz = randomUUID();
+    const wynik = await adapter.wyslij({
+      do: "odbiorca@example.test",
+      od: "newsletter@news.nadawca.test",
+      odNazwa: "Sklep",
+      temat: "Platforma",
+      html: "<p>x</p>",
+      adresWypisania: "http://app.example/u/t",
+      idempotencyKey: klucz,
+    });
+    await adapter.zamknij();
+    const m = await znajdzWMailpicie(wynik.providerId);
+    const h = await naglowki(m!.ID);
+    expect(h["X-Ses-Configuration-Set"]?.[0] ?? h["X-SES-CONFIGURATION-SET"]?.[0]).toBe("midrev-t-abc");
+    // CRLF zamienione na spację: brak drugiego nagłówka Bcc; nazwa ze spacją pominięta
+    expect(h.Bcc).toBeUndefined();
+    expect(Object.keys(h).some((k) => /zla/i.test(k))).toBe(false);
+    // przy przekaźniku koperta = From (SES sam przepisuje ją na bounce.<domena>)
+    expect(h["Return-Path"]?.[0]).toContain("newsletter@news.nadawca.test");
+  });
+
   it("bez jawnej listy deweloperskiej ten sam Mailpit jest odrzucony przez bramkę SSRF", async () => {
     const adapter = new AdapterNodemailer(
       { host: "127.0.0.1", port: 1025, bezpieczenstwo: "none", uzytkownik: null, haslo: null },

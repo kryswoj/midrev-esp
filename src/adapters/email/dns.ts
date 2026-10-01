@@ -18,6 +18,8 @@ export interface ResolverDns {
   cname(nazwa: string): Promise<string[]>;
   a(nazwa: string): Promise<string[]>;
   aaaa(nazwa: string): Promise<string[]>;
+  /** serwery NS strefy (wysyłka platformowa: strefa i dostawca DNS). Opcjonalne: starsze atrapy go nie mają. */
+  ns?(nazwa: string): Promise<string[]>;
 }
 
 export const KODY_BRAKU_REKORDU = new Set(["ENODATA", "ENOTFOUND"]);
@@ -52,5 +54,6 @@ export function resolverSystemowy(): ResolverDns {
     cname: (n) => zLimitem(r.resolveCname(n), n),
     a: (n) => zLimitem(r.resolve4(n), n),
     aaaa: (n) => zLimitem(r.resolve6(n), n),
+    ns: (n) => zLimitem(r.resolveNs(n), n),
   };
 }

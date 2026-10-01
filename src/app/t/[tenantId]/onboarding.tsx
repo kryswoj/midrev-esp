@@ -1,8 +1,10 @@
 /** Onboarding liczony ze stanu konta, z postępem i realnymi akcjami kroków. */
 import type { StanOnboardingu } from "../../../usecases/onboarding";
+import type { DaneNadawcy } from "../../../usecases/wysylka-konfiguracja/dane-nadawcy";
 import { Badge, Button, Card, CardHeader, Icon } from "../../ui";
+import { FormularzDanychFirmy } from "./ustawienia/wysylka/dane-firmy";
 
-export function Onboarding({ tenantId, stan }: { tenantId: string; stan: StanOnboardingu }) {
+export function Onboarding({ tenantId, stan, daneFirmy }: { tenantId: string; stan: StanOnboardingu; daneFirmy?: DaneNadawcy }) {
   if (stan.gotowe) return null;
   const postep = stan.wszystkie > 0 ? (stan.zrobione / stan.wszystkie) * 100 : 0;
   const zrobione = stan.kroki.filter((krok) => krok.zrobiony);
@@ -22,8 +24,12 @@ export function Onboarding({ tenantId, stan }: { tenantId: string; stan: StanOnb
           </Badge>
         </div>
         {!krok.zrobiony ? <><p className="krok-opis">{krok.poCo}</p><p className="tekst-meta mt-1">{krok.szczegol}</p></> : null}
+        {/* dane firmy wpisuje się TU, bez szukania ich w ustawieniach (0040) */}
+        {!krok.zrobiony && krok.klucz === "firma" && daneFirmy ? (
+          <div className="mt-4 max-w-[640px]"><FormularzDanychFirmy tenantId={tenantId} dane={daneFirmy} powrot="przeglad" /></div>
+        ) : null}
       </div>
-      {!krok.zrobiony ? <Button href={`/t/${tenantId}${krok.href}`} variant="secondary" size="sm">{krok.akcja}</Button> : null}
+      {!krok.zrobiony && !(krok.klucz === "firma" && daneFirmy) ? <Button href={`/t/${tenantId}${krok.href}`} variant="secondary" size="sm">{krok.akcja}</Button> : null}
     </li>
   );
 

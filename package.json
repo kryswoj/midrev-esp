@@ -18,7 +18,9 @@
     "start": "next start -p 3005",
     "worker": "node --env-file=.env --import tsx src/jobs/worker.ts",
     "worker:prod": "NODE_ENV=production node --import tsx src/jobs/worker.ts",
-    "migrate:prod": "NODE_ENV=production node --import tsx scripts/migrate.ts"
+    "migrate:prod": "NODE_ENV=production node --import tsx scripts/migrate.ts",
+    "ses:zdarzenia": "node --env-file=.env --import tsx scripts/ses-zdarzenia.ts",
+    "ses:zdarzenia:prod": "NODE_ENV=production node --import tsx scripts/ses-zdarzenia.ts"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.3",

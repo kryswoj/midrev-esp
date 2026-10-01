@@ -213,7 +213,9 @@ describe("Serwer w trybie przekaźnika (baza) i ścieżka domyślna poza sandbok
     stan.sandbox = false;
     const w = await wybierzWysylke(bezSerwera);
     expect(w).toMatchObject({ rodzaj: "blokada" });
-    expect(w.rodzaj === "blokada" && w.powod).toContain("nie ma skonfigurowanego serwera");
+    // 0040: zdanie po ludzku i prowadzi do kreatora (bez słów SMTP/SES)
+    expect(w.rodzaj === "blokada" && w.powod).toContain("nie ma jeszcze podłączonej domeny");
+    expect(w.rodzaj === "blokada" && w.powod).not.toMatch(/SMTP|SES/);
     stan.sandbox = true;
     const dev = await wybierzWysylke(bezSerwera);
     expect(dev.rodzaj).toBe("domyslny");

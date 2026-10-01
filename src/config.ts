@@ -117,6 +117,54 @@ const schemat = z.object({
     .string()
     .optional()
     .transform((w) => TAK.has(String(w ?? "").trim().toLowerCase())),
+  /* ── Wysyłka platformowa (0040): konto SES platformy, tenant nie konfiguruje serwera ──
+     Region: konto „projektowe" MidRev ma SES wyłącznie w eu-north-1 (Sztokholm). */
+  AWS_REGION: z.string().regex(/^[a-z]{2}(-[a-z]+)+-\d$/, "AWS_REGION ma postać np. eu-north-1").default("eu-north-1"),
+  /* Klucz API użytkownika APLIKACJI (zakładanie tożsamości, odczyt stanu, event destination).
+     NIE klucz administratora. Polityka IAM w raporcie 07-prosta-domena.md. */
+  AWS_SES_ACCESS_KEY_ID: z.string().regex(/^[A-Z0-9]{16,128}$/, "AWS_SES_ACCESS_KEY_ID ma niepoprawny format").optional(),
+  AWS_SES_SECRET_ACCESS_KEY: z.string().min(16, "AWS_SES_SECRET_ACCESS_KEY jest za krótki").optional(),
+  /* numer konta AWS: zdarzenie SNS z innego konta (sendingAccountId) jest odrzucane */
+  AWS_ACCOUNT_ID: z.string().regex(/^\d{12}$/, "AWS_ACCOUNT_ID to 12 cyfr").optional(),
+  /* SMTP SES (poświadczenia SMTP wyprowadzone z klucza IAM). Wspólne dla wszystkich
+     tenantów w trybie platformowym; nadawcę i tenanta wybiera kod, nie żądanie. */
+  SES_SMTP_HOST: z.string().regex(/^email-smtp\.[a-z0-9-]+\.amazonaws\.com$/, "SES_SMTP_HOST ma postać email-smtp.<region>.amazonaws.com").optional(),
+  SES_SMTP_PORT: z.coerce.number().int().refine((p) => [587, 465, 2587, 2465].includes(p), "SES_SMTP_PORT: 587, 465, 2587 albo 2465").default(587),
+  SES_SMTP_USER: z.string().min(1).optional(),
+  SES_SMTP_PASSWORD: z.string().min(1).optional(),
+  /* Allowlista tematów SNS ze zdarzeniami SES (ARN po przecinku). Wiadomość z innego
+     tematu = 403, subskrypcja innego tematu nigdy nie jest potwierdzana. */
+  SES_SNS_TOPIC_ARN: z
+    .string()
+    .default("")
+    .transform((w) =>
+      w
+        .split(",")
+        .map((a) => a.trim())
+        .filter(Boolean),
+    )
+    .pipe(z.array(z.string().regex(/^arn:aws:sns:[a-z]{2}(-[a-z]+)+-\d:\d{12}:[A-Za-z0-9_-]{1,256}$/, "SES_SNS_TOPIC_ARN: ARN tematu SNS"))),
+  /* Zdarzenia SES przez SNS włączone (uprawnienia SNS nadane). Bez flagi: kreator nie
+     dokłada event destination, a wysyłka platformowa POZA sandboksem jest wstrzymana,
+     bo odbicia i skargi nie miałyby którędy wrócić. */
+  SES_ZDARZENIA_SNS: z
+    .string()
+    .optional()
+    .transform((w) => TAK.has(String(w ?? "").trim().toLowerCase())),
+  /* SES Tenants (izolacja reputacji per klient, nagłówek X-SES-TENANT). Domyślnie wyłączone:
+     dostępności w eu-north-1 nie potwierdziliśmy odczytem (patrz raport). */
+  SES_TENANTS: z
+    .string()
+    .optional()
+    .transform((w) => TAK.has(String(w ?? "").trim().toLowerCase())),
+  /* Adres, z którego idzie powiadomienie „domena gotowa" (musi być w zweryfikowanej
+     tożsamości platformy, np. powiadomienia@news.midrev.pl). Brak = tylko panel. */
+  SES_POWIADOMIENIA_OD: z.string().regex(/^[^@\s<>,;"]+@[^@\s<>,;"]+\.[a-z]{2,}$/i, "SES_POWIADOMIENIA_OD: jeden adres e-mail").optional(),
+  /* Tylko sandbox: atrapa SES w pamięci procesu (kreator i zrzuty ekranu bez AWS). */
+  SES_ATRAPA: z
+    .string()
+    .optional()
+    .transform((w) => TAK.has(String(w ?? "").trim().toLowerCase())),
   NODE_ENV: z.string().optional(),
 });
 
@@ -153,7 +201,19 @@ export function zbudujKonfiguracje(env: Record<string, string | undefined>): Kon
   if (k.MIDREV_SANDBOX && k.NODE_ENV === "production") {
     throw blad("MIDREV_SANDBOX nie może być ustawiony przy NODE_ENV=production");
   }
+  // Temat SNS z innego regionu niż SES nigdy nie dostanie naszych zdarzeń, a certyfikat
+  // sprawdzamy wyłącznie z sns.<AWS_REGION>: rozjazd = cicha dziura w odbiciach.
+  for (const arn of k.SES_SNS_TOPIC_ARN) {
+    if (arn.split(":")[3] !== k.AWS_REGION) throw blad("SES_SNS_TOPIC_ARN musi być w regionie AWS_REGION");
+  }
+  if (Boolean(k.AWS_SES_ACCESS_KEY_ID) !== Boolean(k.AWS_SES_SECRET_ACCESS_KEY)) {
+    throw blad("AWS_SES_ACCESS_KEY_ID i AWS_SES_SECRET_ACCESS_KEY podaje się razem");
+  }
+  if (k.SES_SMTP_HOST && k.SES_SMTP_HOST !== `email-smtp.${k.AWS_REGION}.amazonaws.com`) {
+    throw blad("SES_SMTP_HOST musi być w regionie AWS_REGION");
+  }
   if (k.MIDREV_SANDBOX) return k;
+  if (k.SES_ATRAPA) throw blad("SES_ATRAPA jest dozwolona wyłącznie w sandboksie");
 
   // ── Poniżej: wszystko, co nie jest jawnym sandboksem ──────────────────────────
   // Lista serwerów deweloperskich omija blokadę SSRF i blokadę domeny (FR45). Poza

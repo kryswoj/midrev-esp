@@ -32,8 +32,10 @@ export const TRASY_PUBLICZNE = [
   // strona sklepu: skrypt popupów i zgłoszenie zapisu (CORS, limit, walidacja)
   "/s",
   "/api/popup",
-  // sklep: webhooki Woo/Shopify (podpis HMAC, nie sesja)
+  // sklep: webhooki Woo/Shopify (podpis HMAC, nie sesja); SES/SNS: podpis SNS (0040)
   "/api/webhooks",
+  // informatyk klienta bez konta: rekordy DNS do wpisania (token 14 dni, tylko odczyt)
+  "/dns",
   // monitoring z zewnątrz: bez danych, tylko stan (200/503)
   "/api/zdrowie",
   // API zgodne z Klaviyo (klucz API tenanta w nagłówku Authorization, nie sesja);

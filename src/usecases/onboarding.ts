@@ -53,22 +53,28 @@ interface LiczbyKont {
   sklepy: number;
   sklepyPolaczone: number;
   zamowienia: number;
-  domeny: number;
-  domenyZweryfikowane: number;
   kampanieWyslane: number;
+  testyWyslane: number;
+  popupy: number;
+  firma: boolean;
+  adres: boolean;
+  pierwszyTestAt: Date | null;
 }
 
 /**
- * Stan wysyłki konta dla kroku „domena": serwer SMTP klienta i domena JEGO adresu
- * nadawcy. Krok jest zrobiony dopiero wtedy, gdy obie rzeczy przechodzą to samo, co
- * sprawdza silnik przed partią (FR45): domena `verified` i serwer po udanym teście.
- * Sama zweryfikowana domena bez serwera nie wystarcza — nie ma czym wysłać.
+ * Stan wysyłki konta (0040). Dwa tryby:
+ *   platforma      — domena podłączona kreatorem; „gotowa" = ten sam warunek co bramka
+ *                    przed partią (status verified + potwierdzenie SES),
+ *   własny serwer  — dotychczasowy model (Zaawansowane): domena adresu nadawcy verified
+ *                    i serwer po udanym teście (FR45).
  */
 interface StanWysylki {
-  host: string;
-  adresNadawcy: string;
+  tryb: "platforma" | "wlasny_serwer";
+  host: string | null;
+  adresNadawcy: string | null;
   domena: string;
   statusDomeny: string;
+  gotowa: boolean;
   polaczenieSprawdzone: boolean;
 }
 
@@ -81,8 +87,36 @@ async function stanWysylki(tenantId: string): Promise<StanWysylki | null> {
     [tenantId],
   );
   const w = rows[0];
-  return w
-    ? { host: w.host, adresNadawcy: w.from_email, domena: w.domain, statusDomeny: w.status, polaczenieSprawdzone: w.sprawdzone }
+  if (w) {
+    return {
+      tryb: "wlasny_serwer",
+      host: w.host,
+      adresNadawcy: w.from_email,
+      domena: w.domain,
+      statusDomeny: w.status,
+      polaczenieSprawdzone: w.sprawdzone,
+      gotowa: w.status === "verified" && w.sprawdzone,
+    };
+  }
+  const { rows: p } = await getPool().query(
+    `select d.domain, d.status, d.ses_verified_for_sending, s.from_email
+       from sending_domains d
+       left join tenant_platform_senders s on s.tenant_id = d.tenant_id and s.sending_domain_id = d.id
+      where d.tenant_id = $1 and d.managed_by = 'platforma'
+      order by d.created_at limit 1`,
+    [tenantId],
+  );
+  const d = p[0];
+  return d
+    ? {
+        tryb: "platforma",
+        host: null,
+        adresNadawcy: d.from_email ?? null,
+        domena: d.domain,
+        statusDomeny: d.status,
+        polaczenieSprawdzone: true,
+        gotowa: d.status === "verified" && d.ses_verified_for_sending === true,
+      }
     : null;
 }
 
@@ -129,54 +163,33 @@ async function odbiorcyZeZgoda(tenantId: string): Promise<number> {
   return ilu;
 }
 
+
 async function liczbyKonta(tenantId: string): Promise<LiczbyKont> {
   const { rows } = await getPool().query(
     `select
        (select count(*)::int from stores where tenant_id = $1) as sklepy,
        (select count(*)::int from stores where tenant_id = $1 and status = 'connected') as sklepy_polaczone,
        (select count(*)::int from orders where tenant_id = $1) as zamowienia,
-       (select count(*)::int from sending_domains where tenant_id = $1) as domeny,
-       (select count(*)::int from sending_domains where tenant_id = $1 and status = 'verified') as domeny_zweryfikowane,
-       (select count(*)::int from campaigns where tenant_id = $1 and status = 'sent') as kampanie_wyslane`,
+       (select count(*)::int from campaigns where tenant_id = $1 and status = 'sent') as kampanie_wyslane,
+       -- test kampanii z edytora, który naprawdę wyszedł (stan wiadomości, nie kliknięcie)
+       (select count(*)::int from messages where tenant_id = $1 and source_type = 'test'
+          and current_state in ('sent', 'delivered')) as testy_wyslane,
+       (select count(*)::int from popups where tenant_id = $1) as popupy,
+       t.sender_company_name, t.sender_postal_address, t.first_test_email_at
+       from tenants t where t.id = $1`,
     [tenantId],
   );
-  const w = rows[0];
+  const w = rows[0] ?? {};
   return {
-    sklepy: w.sklepy,
-    sklepyPolaczone: w.sklepy_polaczone,
-    zamowienia: w.zamowienia,
-    domeny: w.domeny,
-    domenyZweryfikowane: w.domeny_zweryfikowane,
-    kampanieWyslane: w.kampanie_wyslane,
-  };
-}
-
-/** Werdykt i opis kroku domeny — z tego samego stanu, który sprawdza silnik (FR45). */
-function krokDomeny(liczby: LiczbyKont, wysylka: StanWysylki | null): { zrobiony: boolean; akcja: string; szczegol: string } {
-  if (wysylka) {
-    const domenaOk = wysylka.statusDomeny === "verified";
-    if (domenaOk && wysylka.polaczenieSprawdzone) {
-      return { zrobiony: true, akcja: "Zobacz ustawienia", szczegol: `wysyłka z ${wysylka.adresNadawcy} przez ${wysylka.host}, domena zweryfikowana` };
-    }
-    if (!wysylka.polaczenieSprawdzone) {
-      return { zrobiony: false, akcja: "Przetestuj serwer", szczegol: `serwer ${wysylka.host} nie przeszedł testu połączenia` };
-    }
-    return {
-      zrobiony: false,
-      akcja: "Sprawdź domenę",
-      szczegol: `domena ${wysylka.domena} ${wysylka.statusDomeny === "partial" ? "zweryfikowana częściowo" : "niezweryfikowana"} — wysyłka z niej jest zablokowana`,
-    };
-  }
-  if (liczby.domeny === 0) {
-    return { zrobiony: false, akcja: "Dodaj domenę", szczegol: "żadna domena nie jest dodana" };
-  }
-  return {
-    zrobiony: false,
-    akcja: "Ustaw serwer",
-    szczegol:
-      liczby.domenyZweryfikowane > 0
-        ? "domena zweryfikowana, ale serwer wysyłkowy nie jest ustawiony"
-        : `${odmien(liczby.domeny, "domena dodana", "domeny dodane", "domen dodanych")}, żadna nie jest zweryfikowana, serwer wysyłkowy nieustawiony`,
+    sklepy: w.sklepy ?? 0,
+    sklepyPolaczone: w.sklepy_polaczone ?? 0,
+    zamowienia: w.zamowienia ?? 0,
+    kampanieWyslane: w.kampanie_wyslane ?? 0,
+    testyWyslane: w.testy_wyslane ?? 0,
+    popupy: w.popupy ?? 0,
+    firma: Boolean(String(w.sender_company_name ?? "").trim()),
+    adres: Boolean(String(w.sender_postal_address ?? "").trim()),
+    pierwszyTestAt: w.first_test_email_at ?? null,
   };
 }
 
@@ -187,104 +200,94 @@ export async function stanOnboardingu(tenantId: string): Promise<StanOnboardingu
     sklepyZeStanemWebhookow(tenantId),
     stanWysylki(tenantId),
   ]);
-  const domena = krokDomeny(liczby, wysylka);
 
   // Webhooki: „aktywne" wolno napisać wyłącznie na podstawie ODCZYTU ZWROTNEGO ze sklepu
   // (wszystkieAktywne sprawdza potwierdzonyAt), bo Woo oddaje 201 i zostawia webhooka
   // wstrzymanego. Sklep bez zapisanego stanu = webhooki nieustawione, nie „nie wiemy".
   const zWebhookami = sklepy.filter((s) => wszystkieAktywne(s.stan));
-  const milczace = sklepy.filter((s) => s.ostatnie_zdarzenie_at === null);
+  const sklepGotowy = liczby.sklepyPolaczone > 0 && sklepy.length > 0 && zWebhookami.length === sklepy.length;
+  const testZrobiony = liczby.pierwszyTestAt !== null || liczby.testyWyslane > 0 || liczby.kampanieWyslane > 0;
 
+  // 0040: kolejność = prosty przepływ z kreatora. Dane firmy są PIERWSZE, bo bez adresu
+  // pocztowego w stopce silnik i tak nie wypuści ani jednego maila (nadawca.ts).
   const kroki: KrokWdrozenia[] = [
     {
-      klucz: "sklep",
-      tytul: "Podłącz sklep",
-      poCo: "Bez sklepu panel nie ma skąd wziąć ani zamówień, ani kartotek klientów.",
-      zrobiony: liczby.sklepyPolaczone > 0,
+      klucz: "firma",
+      tytul: "Uzupełnij dane firmy do stopki",
+      poCo: "Każdy newsletter musi mieć w stopce nazwę i adres firmy. Bez nich nic nie wyjdzie.",
+      zrobiony: liczby.firma && liczby.adres,
       wBudowie: false,
-      href: "/sklepy",
-      akcja: liczby.sklepy > 0 ? "Sprawdź połączenie" : "Podłącz sklep",
-      szczegol:
-        liczby.sklepyPolaczone > 0
-          ? liczby.sklepy === 1
-            ? "sklep odpowiada"
-            : `${liczby.sklepyPolaczone} z ${liczby.sklepy} sklepów odpowiada`
-          : liczby.sklepy > 0
-            ? `${odmien(liczby.sklepy, "sklep dodany", "sklepy dodane", "sklepów dodanych")}, żaden nie odpowiada`
-            : "żaden sklep nie jest dodany",
-    },
-    {
-      klucz: "historia",
-      tytul: "Zaimportuj historię zamówień",
-      poCo: "Segmenty i raport przychodu liczą się z zamówień, więc puste konto pokazuje zero.",
-      zrobiony: liczby.zamowienia > 0,
-      wBudowie: false,
-      href: "/sklepy",
-      akcja: liczby.zamowienia > 0 ? "Zobacz importy" : "Uruchom import",
-      szczegol:
-        liczby.zamowienia > 0
-          ? `${odmien(liczby.zamowienia, "zamówienie", "zamówienia", "zamówień")} w bazie`
-          : "brak zamówień w bazie",
-    },
-    {
-      klucz: "webhooki",
-      tytul: "Włącz webhooki w sklepie",
-      poCo: "Bez nich dane stają po imporcie: nowe zamówienie nie dojdzie, a automatyzacja nigdy nie wystrzeli.",
-      zrobiony: sklepy.length > 0 && zWebhookami.length === sklepy.length,
-      wBudowie: false,
-      href: "/sklepy",
-      akcja: "Sprawdź webhooki",
-      szczegol:
-        sklepy.length === 0
-          ? "najpierw sklep"
-          : zWebhookami.length === sklepy.length
-            ? milczace.length > 0
-              ? `tematy potwierdzone, ale ${odmien(milczace.length, "sklep nie przysłał", "sklepy nie przysłały", "sklepów nie przysłało")} jeszcze żadnego zdarzenia`
-              : "wszystkie tematy potwierdzone odczytem ze sklepu"
-            : sklepy.length === 1
-              ? "tematy nie są potwierdzone odczytem ze sklepu"
-              : `potwierdzone w ${zWebhookami.length} z ${sklepy.length} sklepów`,
+      href: "/ustawienia/wysylka#dane-firmy",
+      akcja: "Uzupełnij",
+      szczegol: liczby.adres ? (liczby.firma ? "dane w stopce są kompletne" : "brakuje nazwy firmy") : "brakuje adresu firmy",
     },
     {
       klucz: "domena",
-      tytul: "Zweryfikuj domenę i ustaw serwer wysyłkowy",
-      poCo: "Maile z niepodpisanej domeny lądują w spamie i psują reputację nadawcy na miesiące.",
-      zrobiony: domena.zrobiony,
+      tytul: "Podłącz domenę",
+      poCo: "Maile wyjdą z adresu w Twojej domenie, np. newsletter@news.twojsklep.pl.",
+      zrobiony: wysylka !== null,
       wBudowie: false,
       href: "/ustawienia/wysylka",
-      akcja: domena.akcja,
-      szczegol: domena.szczegol,
+      akcja: "Podłącz domenę",
+      szczegol: wysylka ? `${wysylka.domena} podłączona` : "żadna domena nie jest podłączona",
+    },
+    {
+      klucz: "domena_gotowa",
+      tytul: "Poczekaj na weryfikację domeny",
+      poCo: "Sprawdzamy rekordy sami, co kilka minut. Dopóki domena nie jest gotowa, nic nie wysyłamy.",
+      zrobiony: wysylka?.gotowa ?? false,
+      wBudowie: false,
+      href: "/ustawienia/wysylka",
+      akcja: wysylka ? "Zobacz, czego brakuje" : "Najpierw podłącz domenę",
+      szczegol: !wysylka
+        ? "najpierw podłącz domenę"
+        : wysylka.gotowa
+          ? `${wysylka.domena} gotowa do wysyłki`
+          : wysylka.tryb === "wlasny_serwer" && !wysylka.polaczenieSprawdzone
+            ? `serwer ${wysylka.host} nie przeszedł testu połączenia`
+            : `${wysylka.domena}: ${wysylka.statusDomeny === "partial" ? "część rekordów jest już na miejscu" : "czekamy na rekordy DNS"}`,
+    },
+    {
+      klucz: "sklep",
+      tytul: "Podłącz sklep",
+      poCo: "Ze sklepu przychodzą klienci i zamówienia, a automatyzacje reagują na zakupy.",
+      zrobiony: sklepGotowy,
+      wBudowie: false,
+      href: "/sklepy",
+      akcja: liczby.sklepy > 0 ? "Sprawdź połączenie" : "Podłącz sklep",
+      szczegol: sklepGotowy
+        ? `${odmien(liczby.zamowienia, "zamówienie", "zamówienia", "zamówień")} w bazie`
+        : liczby.sklepy === 0
+          ? "żaden sklep nie jest podłączony"
+          : liczby.sklepyPolaczone === 0
+            ? "sklep nie odpowiada"
+            : "sklep odpowiada, ale powiadomienia o zamówieniach nie są jeszcze włączone",
     },
     {
       klucz: "odbiorcy",
-      tytul: "Zbierz odbiorców ze zgodą",
-      poCo: "Wysyłka przepuszcza tylko profile z aktualną zgodą i bez wykluczenia — reszta odpada tuż przed nadaniem.",
+      tytul: "Dodaj odbiorców",
+      poCo: "Wysyłamy tylko do osób, które zgodziły się na newsletter: z formularza zapisu albo z importu.",
       zrobiony: odbiorcy > 0,
       wBudowie: false,
-      href: "/zgody",
-      akcja: odbiorcy > 0 ? "Zobacz zgody" : "Sprawdź zgody",
+      href: odbiorcy > 0 ? "/zgody" : liczby.popupy > 0 ? "/import" : "/popupy",
+      akcja: odbiorcy > 0 ? "Zobacz odbiorców" : liczby.popupy > 0 ? "Zaimportuj listę" : "Dodaj formularz zapisu",
       szczegol:
         odbiorcy > 0
-          ? `${odmien(odbiorcy, "profil przechodzi", "profile przechodzą", "profili przechodzi")} bramkę wysyłki`
-          : "żaden profil nie przechodzi bramki wysyłki",
+          ? `${odmien(odbiorcy, "osoba może", "osoby mogą", "osób może")} dostać newsletter`
+          : "nikt jeszcze nie zgodził się na newsletter",
     },
     {
-      klucz: "kampania",
-      tytul: "Wyślij pierwszą kampanię",
-      poCo: "Dopóki nic nie wyszło, raport przychodu nie ma czego przypisać do e-maila.",
-      zrobiony: liczby.kampanieWyslane > 0,
+      klucz: "test",
+      tytul: "Wyślij pierwszy mail testowy",
+      poCo: "Zobaczysz, jak mail wygląda w prawdziwej skrzynce, zanim dostaną go klienci.",
+      zrobiony: testZrobiony,
       wBudowie: false,
-      href: "/kampanie",
-      akcja: liczby.kampanieWyslane > 0 ? "Zobacz kampanie" : "Przygotuj kampanię",
-      szczegol:
-        liczby.kampanieWyslane > 0
-          ? `${odmien(liczby.kampanieWyslane, "kampania wyszła", "kampanie wyszły", "kampanii wyszło")}`
-          : "żadna kampania jeszcze nie wyszła",
+      href: "/ustawienia/wysylka#test",
+      akcja: "Wyślij test",
+      szczegol: testZrobiony ? "test wyszedł" : wysylka?.gotowa ? "domena gotowa, możesz wysłać test" : "test wyślesz, gdy domena będzie gotowa",
     },
   ];
 
-  // `gotowe` steruje zniknięciem całej sekcji z ekranu startowego: zapala się dopiero,
-  // gdy konto wysyła z własnej, zweryfikowanej domeny przez sprawdzony serwer.
   const zrobione = kroki.filter((k) => k.zrobiony).length;
   return { kroki, zrobione, wszystkie: kroki.length, gotowe: zrobione === kroki.length };
 }

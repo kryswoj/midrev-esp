@@ -4,6 +4,7 @@ import { config, trybSandbox } from "../../config";
 import type { DostawcaWysylki } from "../../domain/email/port";
 import { sprawdzDomene, type OpcjeDns } from "./domeny";
 import { zaladujSerwer, zapiszWynikTestu } from "./serwer";
+import { adresNadawcyPlatformy, nadawcaPlatformyBezSmtp, wybierzWysylkePlatformowa } from "./wysylka-platformowa";
 
 /**
  * Wybór dostawcy i nadawcy dla partii wysyłki tenanta (moduł „Wysyłka i domeny").
@@ -33,7 +34,7 @@ export interface Nadawca {
 
 export type WyborWysylki =
   | {
-      rodzaj: "domyslny" | "serwer_klienta";
+      rodzaj: "domyslny" | "serwer_klienta" | "platforma";
       dostawca: DostawcaWysylki;
       nadawca: Nadawca;
       /** `updated_at` konfiguracji SMTP (tekst z bazy), z którą wybrano serwer klienta */
@@ -57,7 +58,7 @@ const NAZWY_REKORDOW: Record<string, string> = { ok: "poprawny", brak: "brak", b
 /** Adres nadawcy tenanta — do przypisania domeny wysyłkowej przy budowie wiadomości (A3). */
 export async function adresNadawcyTenanta(tenantId: string): Promise<string> {
   const { rows } = await getPool().query("select from_email from tenant_smtp_configs where tenant_id = $1", [tenantId]);
-  return rows[0]?.from_email ?? config().MAIL_FROM;
+  return rows[0]?.from_email ?? (await adresNadawcyPlatformy(tenantId)) ?? config().MAIL_FROM;
 }
 
 export async function wybierzWysylke(
@@ -83,6 +84,10 @@ export async function wybierzWysylke(
   const serwer = await zaladujSerwer(tenantId, { lookup: opcje.dns?.lookup });
 
   if (!serwer) {
+    // 0040: tenant bez własnego serwera wysyła przez platformę (SES MidRev) ze swojej
+    // zweryfikowanej domeny platformowej. Brak domeny platformowej = jak dotąd niżej.
+    const platforma = await wybierzWysylkePlatformowa(tenantId, { dostawca: opcje.dostawca, dns: opcje.dns });
+    if (platforma) return platforma;
     // Poza sandboksem ścieżki domyślnej NIE MA (audyt 28.09, P1-1): adapter systemowy to
     // klient pod Mailpita (bez TLS, bez AUTH, EHLO midrev-esp.local, adres
     // kampanie@midrev-esp.local) i nie przechodzi przez FR45. Wysyłka poszłaby w pętlę
@@ -91,16 +96,17 @@ export async function wybierzWysylke(
     if (!trybSandbox()) {
       return {
         rodzaj: "blokada",
-        powod:
-          "Konto nie ma skonfigurowanego serwera wysyłki. Ustawienia → Wysyłka i domeny: dodaj domenę, serwer SMTP (np. Amazon SES) i przejdź weryfikację DNS.",
+        powod: "Konto nie ma jeszcze podłączonej domeny. Ustawienia → Wysyłka → „Podłącz domenę” (trzy proste kroki).",
       };
     }
     const { rows } = await getPool().query("select name from tenants where id = $1", [tenantId]);
+    // sandbox: Mailpit, ale z nadawcą platformowym, gdy domena jest gotowa (podgląd prawdziwego From)
+    const platformowy = await nadawcaPlatformyBezSmtp(tenantId);
     return {
       rodzaj: "domyslny",
       dostawca: opcje.dostawca ?? new AdapterSmtp(config().SMTP_HOST, config().SMTP_PORT),
       // nazwa konta zamiast zaszytego na sztywno „Sklep Testowy MidRev"
-      nadawca: { od: config().MAIL_FROM, odNazwa: String(rows[0]?.name ?? "").trim() || config().MAIL_FROM },
+      nadawca: platformowy ?? { od: config().MAIL_FROM, odNazwa: String(rows[0]?.name ?? "").trim() || config().MAIL_FROM },
     };
   }
 

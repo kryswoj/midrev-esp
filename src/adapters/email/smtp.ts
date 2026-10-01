@@ -100,8 +100,8 @@ export class AdapterSmtp implements DostawcaWysylki {
         `Message-ID: ${messageId}`,
         `Date: ${new Date().toUTCString()}`,
         // RFC 8058: wypisanie jednym kliknięciem, obsłużone przez POST bez żadnej strony pośredniej
-        `List-Unsubscribe: <${w.adresWypisania}>`,
-        `List-Unsubscribe-Post: List-Unsubscribe=One-Click`,
+        // (mail testowy z ustawień nie idzie do listy, więc nie ma czego wypisywać)
+        ...(w.adresWypisania ? [`List-Unsubscribe: <${w.adresWypisania}>`, `List-Unsubscribe-Post: List-Unsubscribe=One-Click`] : []),
         `X-MidRev-Message-Id: ${w.idempotencyKey.replace(/[\r\n]/g, "")}`,
         `MIME-Version: 1.0`,
         `Content-Type: multipart/alternative; boundary="${granica}"`,

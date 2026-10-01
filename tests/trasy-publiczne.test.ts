@@ -33,6 +33,10 @@ const OCZEKIWANE_PUBLICZNE = new Set([
   "/s/[tenantId]",
   "/api/popup/[popupId]",
   "/api/webhooks/woo/[storeId]",
+  // zdarzenia SES przez SNS (podpis SNS + allowlista tematu, 0040)
+  "/api/webhooks/ses",
+  // instrukcja DNS dla informatyka klienta (token 14 dni, tylko odczyt, 0040)
+  "/dns/[token]",
   "/api/zdrowie",
   "/api/events",
 ]);
