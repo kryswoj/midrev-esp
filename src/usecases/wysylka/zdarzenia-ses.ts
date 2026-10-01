@@ -57,9 +57,12 @@ async function potwierdzDomyslnie(adres: string): Promise<void> {
  */
 async function zajmij(w: WiadomoscSns): Promise<boolean> {
   const { rowCount } = await getPool().query(
+    // Wiersz 'w_toku' starszy niż 5 minut = proces padł w trakcie (review r2, P1): przejmujemy
+    // go, inaczej każde ponowienie SNS dostałoby „duplikat" i zdarzenie przepadłoby na zawsze.
     `insert into ses_sns_messages (sns_message_id, topic_arn, type, outcome, sns_timestamp)
      values ($1, $2, $3, 'w_toku', $4)
-     on conflict (sns_message_id) do nothing`,
+     on conflict (sns_message_id) do update set received_at = now()
+       where ses_sns_messages.outcome = 'w_toku' and ses_sns_messages.received_at < now() - interval '5 minutes'`,
     [w.MessageId, w.TopicArn, w.Type, new Date(w.Timestamp)],
   );
   return Boolean(rowCount);

@@ -20,7 +20,7 @@ import {
 } from "../src/adapters/aws/podpis-sns";
 import { AtrapaSes, AtrapaSns } from "../src/adapters/aws/atrapa-ses";
 import { closePool, getPool } from "../src/adapters/db/pool";
-import { BladAws } from "../src/domain/email/ses";
+import { BladAws, celKompletny } from "../src/domain/email/ses";
 import { skonfigurujZdarzeniaSes } from "../src/usecases/wysylka-konfiguracja/zdarzenia-ses-konfiguracja";
 import { przetworzWiadomoscSns } from "../src/usecases/wysylka/zdarzenia-ses";
 import { POST } from "../src/app/api/webhooks/ses/route";
@@ -239,6 +239,17 @@ describe("Zdarzenia SES → wiadomości, wykluczenia i metryki", () => {
     expect(await metryki(m.rows[0].id)).toHaveLength(1);
   });
 
+  it("wiersz 'w_toku' po padnięciu procesu: świeży blokuje, starszy niż 5 min zostaje przejęty", async () => {
+    const w = powiadomienie(zdarzenieSes("Send", { sesId: "0107sesz-dorecz-000000", cs: csA, zrodlo: "newsletter@news.sesz-a.test" }));
+    await getPool().query(
+      "insert into ses_sns_messages (sns_message_id, topic_arn, type, outcome, sns_timestamp) values ($1, $2, 'Notification', 'w_toku', now())",
+      [w.MessageId, TEMAT],
+    );
+    expect((await przetworzWiadomoscSns(w, { alert })).wynik).toBe("duplikat");
+    await getPool().query("update ses_sns_messages set received_at = now() - interval '10 minutes' where sns_message_id = $1", [w.MessageId]);
+    expect((await przetworzWiadomoscSns(w, { alert })).wynik).toBe("pominiete");
+  });
+
   it("skarga → Marked Email as Spam; „not-spam” nie jest skargą", async () => {
     await przetworzWiadomoscSns(powiadomienie(zdarzenieSes("Complaint", { sesId: "0107sesz-skarga-000000", cs: csA, zrodlo: "newsletter@news.sesz-a.test" })), { alert });
     expect((await metryki(msg.skarga)).map((r) => r.name)).toEqual(["Marked Email as Spam"]);
@@ -340,6 +351,13 @@ describe("Konfiguracja SNS przez operatora", () => {
     expect(atr.SignatureVersion).toBe("2");
     expect(JSON.parse(atr.Policy).Statement[0]).toMatchObject({ Principal: { Service: "ses.amazonaws.com" }, Condition: { StringEquals: { "AWS:SourceAccount": KONTO } } });
     expect(sns.subskrypcje).toEqual([{ topicArn: TEMAT, endpoint: "https://esp.midrev.pl/api/webhooks/ses" }]);
+  });
+
+  it("cel zdarzeń bez skarg albo na obcy temat NIE jest uznany za kompletny", () => {
+    expect(celKompletny({ wlaczony: true, topicArn: TEMAT, typy: ["BOUNCE", "COMPLAINT", "DELIVERY"] }, TEMAT)).toBe(true);
+    expect(celKompletny({ wlaczony: true, topicArn: TEMAT, typy: ["BOUNCE", "DELIVERY"] }, TEMAT)).toBe(false);
+    expect(celKompletny({ wlaczony: false, topicArn: TEMAT, typy: ["BOUNCE", "COMPLAINT", "DELIVERY"] }, TEMAT)).toBe(false);
+    expect(celKompletny({ wlaczony: true, topicArn: "arn:aws:sns:eu-north-1:1:inny", typy: ["BOUNCE", "COMPLAINT", "DELIVERY"] }, TEMAT)).toBe(false);
   });
 
   it("brak uprawnień SNS: czytelny komunikat dla operatora i stop, bez dalszych kroków", async () => {

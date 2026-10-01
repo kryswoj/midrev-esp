@@ -110,9 +110,16 @@ export async function tikDomen(o: OpcjeDomeny & { wyslij?: WyslijPowiadomienie; 
           `select t.id, t.ses_configuration_set, d.domain from tenants t
              join sending_domains d on d.tenant_id = t.id and d.managed_by = 'platforma'
             where t.ses_configuration_set is not null and t.ses_events_destination_at is null
+              and (t.ses_events_attempted_at is null or t.ses_events_attempted_at < now() - interval '1 hour')
+            order by t.ses_events_attempted_at nulls first, t.id
             limit 5`,
         );
-        for (const t of bezCelu) await podepnijZasobyOpcjonalne(t.id, t.domain, t.ses_configuration_set, ses, o);
+        // próba odnotowana PRZED wywołaniem: trwale psujący się tenant wraca najwcześniej za godzinę
+        // i nie zasłania kolejnych (rotacja po dacie próby)
+        for (const t of bezCelu) {
+          await pool.query("update tenants set ses_events_attempted_at = now() where id = $1", [t.id]);
+          await podepnijZasobyOpcjonalne(t.id, t.domain, t.ses_configuration_set, ses, o);
+        }
       }
     } finally {
       await klient.query("select pg_advisory_unlock($1)", [BLOKADA]);

@@ -15,7 +15,7 @@ import {
   type UkladDomeny,
 } from "../../domain/email/domena-platformowa";
 import { dostawcaPoKluczu, rozpoznajDostawce, type DostawcaDns } from "../../domain/email/dostawcy-dns";
-import { BladAws, nazwaConfigurationSetu, nazwaTenantaSes, type PortSes, type StatusSes, type TozsamoscSes } from "../../domain/email/ses";
+import { BladAws, celKompletny, nazwaConfigurationSetu, nazwaTenantaSes, type PortSes, type StatusSes, type TozsamoscSes } from "../../domain/email/ses";
 
 /**
  * Wysyłka platformowa: kreator „Podłącz domenę" (krok a: propozycja, b: założenie
@@ -309,7 +309,7 @@ export async function podepnijZasobyOpcjonalne(tenantId: string, domena: string,
       await ses.dodajCelZdarzen(cs, "midrev-sns", k.SES_SNS_TOPIC_ARN[0]);
       // potwierdzenie odczytem: cel jest w zestawie i wskazuje NASZ temat
       const cele = await ses.celeZdarzen(cs);
-      if (cele.some((c) => c.wlaczony && c.topicArn === k.SES_SNS_TOPIC_ARN[0])) {
+      if (cele.some((c) => celKompletny(c, k.SES_SNS_TOPIC_ARN[0]))) {
         await getPool().query("update tenants set ses_events_destination_at = coalesce(ses_events_destination_at, now()) where id = $1 and ses_configuration_set = $2", [tenantId, cs]);
       }
     } catch (b) {

@@ -1,5 +1,5 @@
 import { getPool } from "../../adapters/db/pool";
-import { BladAws, type PortSes, type PortSns } from "../../domain/email/ses";
+import { BladAws, celKompletny, type PortSes, type PortSns } from "../../domain/email/ses";
 
 /**
  * Podpięcie zdarzeń SES → SNS → nasz endpoint (operator, jednorazowo + przy nowych
@@ -99,7 +99,7 @@ export async function skonfigurujZdarzeniaSes(o: {
     try {
       await o.ses.dodajCelZdarzen(r.ses_configuration_set, "midrev-sns", topicArn);
       const cele = await o.ses.celeZdarzen(r.ses_configuration_set);
-      if (!cele.some((c) => c.wlaczony && c.topicArn === topicArn)) throw new Error("cel zdarzeń nie widoczny w odczycie zwrotnym");
+      if (!cele.some((c) => celKompletny(c, topicArn))) throw new Error("cel zdarzeń nie widoczny w odczycie zwrotnym");
       await getPool().query("update tenants set ses_events_destination_at = coalesce(ses_events_destination_at, now()) where id = $1 and ses_configuration_set = $2", [r.id, r.ses_configuration_set]);
       kroki.push({ krok: `cel:${r.ses_configuration_set}`, stan: "ok", opis: `tenant ${r.id} (potwierdzone odczytem)` });
     } catch (b) {

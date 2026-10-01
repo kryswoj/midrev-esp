@@ -76,7 +76,11 @@ export async function wybierzWysylkePlatformowa(
   }
 
   const przeterminowana = !w.last_checked_at || teraz.getTime() - new Date(w.last_checked_at).getTime() > WAZNOSC_STANU_H * 3600_000;
-  if (w.status === "verified" && przeterminowana && portSes()) {
+  if (w.status === "verified" && przeterminowana && !portSes()) {
+    // bez kluczy API nie da się potwierdzić stanu: stare „verified" nie wystarcza (review r2)
+    return { rodzaj: "blokada", powod: `Nie udało się potwierdzić domeny ${w.domain} przed wysyłką. Spróbujemy ponownie za kilka minut.` };
+  }
+  if (w.status === "verified" && przeterminowana) {
     const spr = await sprawdzDomenePlatformowa(tenantId, w.domain_id, { resolver: opcje.dns?.resolver });
     // odświeżenie bez odpowiedzi SES nie potwierdza niczego: stary „verified" to tylko pamięć
     if (!spr.ok || !spr.swiezySes) return { rodzaj: "blokada", powod: `Nie udało się potwierdzić domeny ${w.domain} przed wysyłką. Spróbujemy ponownie za kilka minut.` };

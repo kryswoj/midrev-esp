@@ -73,6 +73,8 @@ alter table tenants
   -- cel zdarzeń (SNS) potwierdzony w configuration secie TEGO tenanta. Bramka wysyłki
   -- poza sandboksem wymaga tej daty: bez niej odbicia i skargi tenanta nie wracają
   add column ses_events_destination_at timestamptz,
+  -- ostatnia próba dopięcia celu zdarzeń przez worker (odstęp między próbami, bez spamu alertami)
+  add column ses_events_attempted_at timestamptz,
   -- krok onboardingu „Pierwszy mail testowy": data UDANEGO przyjęcia testu przez serwer
   add column first_test_email_at timestamptz;
 

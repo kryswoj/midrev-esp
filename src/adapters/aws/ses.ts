@@ -1,4 +1,4 @@
-import { BladAws, type PortSes, type StatusSes, type TozsamoscSes } from "../../domain/email/ses";
+import { BladAws, TYPY_ZDARZEN, type PortSes, type StatusSes, type TozsamoscSes } from "../../domain/email/ses";
 import { kodujUri, podpiszZadanie, type KluczeAws } from "./sigv4";
 
 /**
@@ -165,23 +165,24 @@ export class KlientSes implements PortSes {
       nazwa: String(d.Name ?? ""),
       topicArn: typeof d.SnsDestination?.TopicArn === "string" ? d.SnsDestination.TopicArn : null,
       wlaczony: d.Enabled === true,
+      typy: Array.isArray(d.MatchingEventTypes) ? d.MatchingEventTypes.map(String) : [],
     }));
   }
 
   async dodajCelZdarzen(configurationSet: string, nazwa: string, topicArn: string): Promise<void> {
+    // otwarcia i kliknięcia liczy nasz pixel i nasz redirect, nie SES
+    const definicja = { Enabled: true, MatchingEventTypes: [...TYPY_ZDARZEN], SnsDestination: { TopicArn: topicArn } };
     try {
       await this.#wolaj("POST", `/v2/email/configuration-sets/${kodujUri(configurationSet)}/event-destinations`, {
         EventDestinationName: nazwa,
-        EventDestination: {
-          Enabled: true,
-          // otwarcia i kliknięcia liczy nasz pixel i nasz redirect, nie SES
-          MatchingEventTypes: ["SEND", "REJECT", "BOUNCE", "COMPLAINT", "DELIVERY", "DELIVERY_DELAY", "RENDERING_FAILURE"],
-          SnsDestination: { TopicArn: topicArn },
-        },
+        EventDestination: definicja,
       });
     } catch (b) {
-      if (b instanceof BladAws && b.juzIstnieje) return;
-      throw b;
+      if (!(b instanceof BladAws && b.juzIstnieje)) throw b;
+      // istniejący cel (np. stary, bez skarg) nadpisujemy pełną definicją, nie zakładamy, że jest dobry
+      await this.#wolaj("PUT", `/v2/email/configuration-sets/${kodujUri(configurationSet)}/event-destinations/${kodujUri(nazwa)}`, {
+        EventDestination: definicja,
+      });
     }
   }
 

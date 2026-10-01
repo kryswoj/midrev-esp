@@ -60,7 +60,8 @@ export interface PortSes {
   utworzConfigurationSet(nazwa: string, tagi: Record<string, string>): Promise<void>;
   ustawConfigurationSetTozsamosci(domena: string, nazwa: string): Promise<void>;
   /** cele zdarzeń zestawu (nazwy i ARN tematów) */
-  celeZdarzen(configurationSet: string): Promise<{ nazwa: string; topicArn: string | null; wlaczony: boolean }[]>;
+  celeZdarzen(configurationSet: string): Promise<{ nazwa: string; topicArn: string | null; wlaczony: boolean; typy: string[] }[]>;
+  /** idempotentne: istniejący cel o tej nazwie jest NADPISYWANY pełną definicją */
   dodajCelZdarzen(configurationSet: string, nazwa: string, topicArn: string): Promise<void>;
   /** SES Tenants (opcjonalne, flaga SES_TENANTS); idempotentne */
   utworzTenanta(nazwa: string, tagi: Record<string, string>): Promise<void>;
@@ -82,4 +83,13 @@ export function nazwaConfigurationSetu(tenantId: string): string {
 /** Nazwa tenanta SES (≤ 64, [A-Za-z0-9_-]). */
 export function nazwaTenantaSes(tenantId: string): string {
   return `midrev-${tenantId.replace(/-/g, "")}`;
+}
+
+/** Typy zdarzeń, które MUSZĄ dochodzić, żeby wysyłka była „widząca" (odbicia, skargi). */
+export const WYMAGANE_TYPY_ZDARZEN = ["BOUNCE", "COMPLAINT", "DELIVERY"] as const;
+export const TYPY_ZDARZEN = ["SEND", "REJECT", "BOUNCE", "COMPLAINT", "DELIVERY", "DELIVERY_DELAY", "RENDERING_FAILURE"] as const;
+
+/** Czy cel zdarzeń jest kompletny: włączony, nasz temat, wszystkie wymagane typy. */
+export function celKompletny(c: { wlaczony: boolean; topicArn: string | null; typy: string[] }, topicArn: string): boolean {
+  return c.wlaczony && c.topicArn === topicArn && WYMAGANE_TYPY_ZDARZEN.every((t) => c.typy.includes(t));
 }

@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { BladAws, type PortSes, type PortSns, type TozsamoscSes } from "../../domain/email/ses";
+import { BladAws, TYPY_ZDARZEN, type PortSes, type PortSns, type TozsamoscSes } from "../../domain/email/ses";
 
 /**
  * Atrapy SES i SNS w pamięci: testy (zawsze) i sandbox z SES_ATRAPA=1 (kreator, zrzuty
@@ -15,7 +15,7 @@ export class AtrapaSes implements PortSes {
   readonly region: string;
   readonly tozsamosci = new Map<string, TozsamoscSes>();
   readonly zestawy = new Map<string, Record<string, string>>();
-  readonly cele = new Map<string, { nazwa: string; topicArn: string }[]>();
+  readonly cele = new Map<string, { nazwa: string; topicArn: string; typy: string[] }[]>();
   readonly tenanty = new Set<string>();
   readonly powiazania: { tenant: string; arn: string }[] = [];
   readonly wywolania: string[] = [];
@@ -89,8 +89,8 @@ export class AtrapaSes implements PortSes {
 
   async dodajCelZdarzen(configurationSet: string, nazwa: string, topicArn: string): Promise<void> {
     this.#sprawdz("dodajCelZdarzen");
-    const lista = this.cele.get(configurationSet) ?? [];
-    if (!lista.some((c) => c.nazwa === nazwa)) lista.push({ nazwa, topicArn });
+    const lista = (this.cele.get(configurationSet) ?? []).filter((c) => c.nazwa !== nazwa);
+    lista.push({ nazwa, topicArn, typy: [...TYPY_ZDARZEN] });
     this.cele.set(configurationSet, lista);
   }
 
