@@ -1,4 +1,3 @@
-import { notFound } from "next/navigation";
 import { odczytajInstrukcje } from "../../../usecases/wysylka-konfiguracja/instrukcja-dns";
 import { TabelaRekordow } from "../../_dns/tabela-rekordow";
 import { WskazowkaDostawcy } from "../../_dns/wskazowka-dostawcy";
@@ -11,13 +10,26 @@ export const metadata = { title: "Rekordy DNS do wpisania", robots: { index: fal
 /**
  * Publiczna instrukcja dla informatyka klienta (bez konta). Token 14 dni, tylko odczyt.
  * Pokazuje WYŁĄCZNIE domenę i rekordy: bez nazwy konta, adresów e-mail i danych firmy.
- * Token nieznany, wygasły albo unieważniony = 404 (bez rozróżnienia, żeby nie zdradzać,
- * czy link kiedyś istniał).
+ * Token nieznany, wygasły albo unieważniony = ta sama strona „link nie działa" (bez
+ * rozróżnienia, żeby nie zdradzać, czy link kiedyś istniał), z podpowiedzią, co zrobić.
  */
 export default async function InstrukcjaDns({ params }: { params: Promise<{ token: string }> }) {
   const { token } = await params;
   const i = await odczytajInstrukcje(token);
-  if (!i) notFound();
+  if (!i) {
+    return (
+      <main className="min-h-screen bg-[var(--color-plotno)] px-4 py-10">
+        <div className="mx-auto max-w-[560px]">
+          <section className="karta p-6">
+            <h1 className="text-[22px] font-[650] leading-[29px] tracking-[-0.02em]">Ten link już nie działa</h1>
+            <p className="tekst-pomocniczy mt-2">
+              Link wygasł albo właściciel konta utworzył nowy. Poproś osobę, która go wysłała, o aktualny link z rekordami DNS.
+            </p>
+          </section>
+        </div>
+      </main>
+    );
+  }
   const oceny = i.raport?.rekordy ?? {};
   const zostalo = i.rekordy.filter((r) => oceny[r.klucz]?.stan !== "ok").length;
   return (
@@ -41,7 +53,7 @@ export default async function InstrukcjaDns({ params }: { params: Promise<{ toke
               <Alert tone="ok" title="Wszystko gotowe">Rekordy są na miejscu i potwierdzone. Nic więcej nie trzeba robić.</Alert>
             ) : (
               <p className="tekst-pomocniczy">
-                Do dodania: {zostalo} z {i.rekordy.length}. Nazwy podajemy względem strefy {i.strefa} (bez niej na końcu). Stan rekordów odświeża się sam co kilka minut — odśwież stronę, żeby go zobaczyć.
+                Gotowe: {i.rekordy.length - zostalo} z {i.rekordy.length}. Nazwy podajemy względem strefy {i.strefa} (bez niej na końcu). Stan rekordów odświeża się sam co kilka minut — odśwież stronę, żeby go zobaczyć.
               </p>
             )}
             {(i.raport?.ostrzezenia ?? []).map((o) => (

@@ -34,6 +34,7 @@ export function FormularzPodlaczenia({
   const w = stan?.wartosci ?? {};
   const [pre, ustawPre] = useState(w.prefiks ?? prefiks);
   const [lok, ustawLok] = useState(w.lokalna ?? lokalna);
+  const [nazwa, ustawNazwa] = useState(w.nazwaNadawcy ?? nazwaNadawcy);
   const domenaWysylkowa = wpisJestSubdomena ? wpis.split("@").pop()!.toLowerCase().replace(/^www\./, "") : pre.trim() ? `${pre.trim().toLowerCase()}.${strefa}` : strefa;
   return (
     <form action={akcja} className="space-y-5">
@@ -42,9 +43,9 @@ export function FormularzPodlaczenia({
       <BladFormularza blad={stan?.blad} />
 
       <div className="rounded-[10px] border border-[var(--color-akcent-ramka)] bg-[var(--color-akcent-tlo)] px-4 py-3.5">
-        <div className="tekst-meta !text-[var(--color-tekst-2)]">Maile będą wychodzić z adresu</div>
+        <div className="tekst-meta !text-[var(--color-tekst-2)]">Odbiorca zobaczy w polu „Od”</div>
         <div className="mt-1 break-all text-[17px] font-[650] leading-[24px] text-[var(--color-tekst)]">
-          {lok.trim().toLowerCase() || "newsletter"}@{domenaWysylkowa}
+          {nazwa.trim() || "Twój sklep"} <span className="font-normal text-[var(--color-tekst-2)]">&lt;{lok.trim().toLowerCase() || "newsletter"}@{domenaWysylkowa}&gt;</span>
         </div>
         {!wpisJestSubdomena && pre.trim() ? (
           <p className="mt-1.5 text-[13px] leading-[19px] text-[var(--color-tekst-2)]">
@@ -60,19 +61,18 @@ export function FormularzPodlaczenia({
 
       <div className="grid gap-4 sm:grid-cols-2">
         <label className="block">
-          <span className="etykieta mb-1.5 block">Nazwa nadawcy</span>
-          <input name="nazwaNadawcy" required maxLength={200} defaultValue={w.nazwaNadawcy ?? nazwaNadawcy} className="pole" />
-          <span className="tekst-meta mt-1.5 block">Tak podpisane będą maile w skrzynce odbiorcy.</span>
+          <span className="etykieta mb-1.5 block">Nazwa widoczna jako nadawca</span>
+          <input name="nazwaNadawcy" required maxLength={200} value={nazwa} onChange={(e) => ustawNazwa(e.target.value)} className="pole" />
         </label>
         <label className="block">
-          <span className="etykieta mb-1.5 block">Odpowiedzi trafią na</span>
+          <span className="etykieta mb-1.5 block">Adres do odpowiedzi</span>
           <input name="odpowiedzDo" type="email" maxLength={320} defaultValue={w.odpowiedzDo ?? odpowiedzDo} className="pole" />
-          <span className="tekst-meta mt-1.5 block">Gdy klient kliknie „Odpowiedz”.</span>
+          <span className="tekst-meta mt-1.5 block">Tu trafi mail, gdy klient kliknie „Odpowiedz”.</span>
         </label>
       </div>
 
       <details className="rounded-[8px] border border-[var(--color-linia-0)] px-3 py-2">
-        <summary className="cursor-pointer text-[13px] font-medium text-[var(--color-tekst-2)]">Zmień adres nadawcy</summary>
+        <summary className="cursor-pointer text-[13px] font-medium text-[var(--color-tekst-2)]">Zmień adres w polu „Od”</summary>
         <div className="mt-3 flex flex-wrap items-end gap-2">
           <label className="block">
             <span className="etykieta mb-1.5 block">Przed @</span>
@@ -110,15 +110,17 @@ export function InstrukcjaInformatyka({ tenantId, domena }: { tenantId: string; 
     <div className="space-y-3">
       <form action={akcja}>
         <input type="hidden" name="tenantId" value={tenantId} />
-        <button type="submit" className="przycisk przycisk-wtorny" disabled={trwa}>
-          {trwa ? "Przygotowuję link…" : stan?.url ? "Utwórz nowy link" : "Wyślij instrukcję informatykowi"}
-        </button>
+        {stan?.url ? null : (
+          <button type="submit" className="przycisk przycisk-wtorny" disabled={trwa}>
+            {trwa ? "Przygotowuję link…" : "Wyślij instrukcję informatykowi"}
+          </button>
+        )}
       </form>
       <BladFormularza blad={stan?.blad} />
       {stan?.url ? (
         <div className="karta-plaska space-y-2 p-3">
           <p className="text-[13px] leading-[19px] text-[var(--color-tekst-2)]">
-            Prześlij ten link osobie, która zajmuje się Twoją domeną. Zobaczy tylko rekordy do wpisania, bez dostępu do konta. Link działa 14 dni; nowy link unieważnia poprzedni.
+            Prześlij ten link osobie, która zajmuje się Twoją domeną. Zobaczy tylko rekordy do wpisania. Ważny do {stan.wygasa ? new Date(stan.wygasa).toLocaleDateString("pl-PL") : "14 dni"}.
           </p>
           <div className="flex items-start gap-2">
             <code className="min-w-0 flex-1 break-all font-mono text-[12px] leading-[17px]">{stan.url}</code>
@@ -130,6 +132,17 @@ export function InstrukcjaInformatyka({ tenantId, domena }: { tenantId: string; 
           >
             Otwórz w programie pocztowym
           </a>
+          <form
+            action={akcja}
+            onSubmit={(e) => {
+              if (!window.confirm("Poprzedni link przestanie działać. Utworzyć nowy?")) e.preventDefault();
+            }}
+          >
+            <input type="hidden" name="tenantId" value={tenantId} />
+            <button type="submit" disabled={trwa} className="text-[12px] text-[var(--color-tekst-3)] underline hover:text-[var(--color-blad)]">
+              {trwa ? "Tworzę nowy link…" : "Unieważnij i utwórz nowy link"}
+            </button>
+          </form>
         </div>
       ) : null}
     </div>

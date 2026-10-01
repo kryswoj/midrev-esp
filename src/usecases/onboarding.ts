@@ -238,7 +238,8 @@ export async function stanOnboardingu(tenantId: string): Promise<StanOnboardingu
       zrobiony: wysylka?.gotowa ?? false,
       wBudowie: false,
       href: "/ustawienia/wysylka",
-      akcja: wysylka ? "Zobacz, czego brakuje" : "Najpierw podłącz domenę",
+      // bez domeny nie ma tu nic do kliknięcia: zależność opisuje `szczegol`, nie przycisk
+      akcja: wysylka ? "Zobacz, czego brakuje" : "",
       szczegol: !wysylka
         ? "najpierw podłącz domenę"
         : wysylka.gotowa
@@ -283,7 +284,7 @@ export async function stanOnboardingu(tenantId: string): Promise<StanOnboardingu
       zrobiony: testZrobiony,
       wBudowie: false,
       href: "/ustawienia/wysylka#test",
-      akcja: "Wyślij test",
+      akcja: wysylka?.gotowa || testZrobiony ? "Wyślij test" : "",
       szczegol: testZrobiony ? "test wyszedł" : wysylka?.gotowa ? "domena gotowa, możesz wysłać test" : "test wyślesz, gdy domena będzie gotowa",
     },
   ];

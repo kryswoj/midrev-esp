@@ -479,7 +479,7 @@ export async function ocenRekordyWDns(d: Pick<DomenaPlatformowa, "domena" | "str
           wynik === "ok"
             ? { stan: "ok", komunikat: null }
             : wynik === "doklejona_strefa"
-              ? { stan: "zle", komunikat: `Wartość ma na końcu .${strefa} — panel dopisał nazwę domeny. Wpisz wartość z kropką na końcu: ${r.oczekiwana}.` }
+              ? { stan: "zle", komunikat: `Teraz w DNS jest ta wartość z dopisanym .${strefa} na końcu. Edytuj ten rekord (nie dodawaj drugiego) i wklej wartość z tabeli razem z kropką na końcu.` }
               : { stan: "zle", komunikat: `Wartość jest inna niż podana. Skopiuj ją jeszcze raz przyciskiem „Kopiuj”.` };
         continue;
       }
@@ -507,7 +507,7 @@ export async function ocenRekordyWDns(d: Pick<DomenaPlatformowa, "domena" | "str
           wynik === "ok"
             ? { stan: "ok", komunikat: null }
             : wynik === "doklejona_strefa"
-              ? { stan: "zle", komunikat: `Wartość ma na końcu .${strefa} — panel dopisał nazwę domeny. Wpisz wartość z kropką na końcu: ${r.oczekiwana}.` }
+              ? { stan: "zle", komunikat: `Teraz w DNS jest ta wartość z dopisanym .${strefa} na końcu. Edytuj ten rekord (nie dodawaj drugiego) i wklej wartość z tabeli razem z kropką na końcu.` }
               : { stan: "zle", komunikat: "Wartość jest inna niż podana. Skopiuj ją jeszcze raz przyciskiem „Kopiuj”." };
         continue;
       }

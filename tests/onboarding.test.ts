@@ -57,7 +57,9 @@ describe("Onboarding: lista kroków wdrożenia", () => {
     expect(stan.zrobione).toBe(0);
     expect(stan.gotowe).toBe(false);
     expect(stan.kroki.every((k) => k.href.startsWith("/"))).toBe(true);
-    expect(stan.kroki.every((k) => k.poCo.length > 0 && k.akcja.length > 0)).toBe(true);
+    // krok zablokowany zależnością (np. weryfikacja bez domeny) nie ma przycisku, tylko opis
+    expect(stan.kroki.every((k) => k.poCo.length > 0 && k.szczegol.length > 0)).toBe(true);
+    expect(stan.kroki.filter((k) => !k.akcja).map((k) => k.klucz)).toEqual(["domena_gotowa", "test"]);
     // bez żargonu w tytułach i opisach kroków
     for (const k of stan.kroki) expect(`${k.tytul} ${k.poCo} ${k.szczegol}`).not.toMatch(/SES|SMTP|IMAP|MAIL FROM|DKIM|SPF|DMARC/);
   });

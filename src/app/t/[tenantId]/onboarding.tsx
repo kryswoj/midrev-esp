@@ -29,7 +29,7 @@ export function Onboarding({ tenantId, stan, daneFirmy }: { tenantId: string; st
           <div className="mt-4 max-w-[640px]"><FormularzDanychFirmy tenantId={tenantId} dane={daneFirmy} powrot="przeglad" /></div>
         ) : null}
       </div>
-      {!krok.zrobiony && !(krok.klucz === "firma" && daneFirmy) ? <Button href={`/t/${tenantId}${krok.href}`} variant="secondary" size="sm">{krok.akcja}</Button> : null}
+      {!krok.zrobiony && krok.akcja && !(krok.klucz === "firma" && daneFirmy) ? <Button href={`/t/${tenantId}${krok.href}`} variant="secondary" size="sm">{krok.akcja}</Button> : null}
     </li>
   );
 

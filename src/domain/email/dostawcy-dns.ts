@@ -29,7 +29,7 @@ export const DOSTAWCY_DNS: readonly DostawcaDns[] = [
     kropkaNaKoncu: true,
     gdzie: "Panel klienta Hostido → Twoje usługi → DirectAdmin → Zarządzanie DNS (wybierz domenę).",
     link: "https://panel.hostido.pl",
-    uwaga: "Ten panel dokleja nazwę domeny do wartości bez kropki na końcu. Kopiuj wartości razem z kropką.",
+    uwaga: "Ten panel dokleja nazwę domeny do adresów bez kropki na końcu. Wartości rekordów CNAME i MX kopiuj razem z kropką; rekordy TXT wklej bez zmian.",
   },
   {
     klucz: "homepl",
@@ -79,7 +79,7 @@ export const DOSTAWCY_DNS: readonly DostawcaDns[] = [
     kropkaNaKoncu: true,
     gdzie: "Panel cyber_Folks → DirectAdmin → Zarządzanie DNS (wybierz domenę).",
     link: "https://panel.cyberfolks.pl",
-    uwaga: "Ten panel dokleja nazwę domeny do wartości bez kropki na końcu. Kopiuj wartości razem z kropką.",
+    uwaga: "Ten panel dokleja nazwę domeny do adresów bez kropki na końcu. Wartości rekordów CNAME i MX kopiuj razem z kropką; rekordy TXT wklej bez zmian.",
   },
   {
     klucz: "lhpl",

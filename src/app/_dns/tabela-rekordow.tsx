@@ -24,7 +24,7 @@ function Stan({ ocena }: { ocena: OcenaRekordu | undefined }) {
 }
 
 function Wartosc({ tekst }: { tekst: string }) {
-  return <code className="font-mono text-[12px] leading-[17px] break-all text-[var(--color-tekst)]">{tekst}</code>;
+  return <code className="font-mono text-[12px] leading-[17px] [overflow-wrap:anywhere] text-[var(--color-tekst)] max-md:text-[13px] max-md:leading-[19px]">{tekst}</code>;
 }
 
 export function TabelaRekordow({
@@ -34,6 +34,9 @@ export function TabelaRekordow({
   rekordy: RekordPlatformowy[];
   oceny: Partial<Record<RekordPlatformowy["klucz"], OcenaRekordu>>;
 }) {
+  // najpierw to, co wymaga działania: do poprawy, do dodania, potem oczekujące i gotowe
+  const kolejnosc: Record<string, number> = { zle: 0, brak: 1, czeka: 2, ok: 3 };
+  rekordy = [...rekordy].sort((a, b) => (kolejnosc[oceny[a.klucz]?.stan ?? "brak"] ?? 1) - (kolejnosc[oceny[b.klucz]?.stan ?? "brak"] ?? 1));
   return (
     <>
       <div className="tabela-responsywna-desktop overflow-x-auto">

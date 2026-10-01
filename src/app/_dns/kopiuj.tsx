@@ -12,7 +12,7 @@ export function Kopiuj({ wartosc, etykieta }: { wartosc: string; etykieta: strin
   return (
     <button
       type="button"
-      className="przycisk przycisk-wtorny przycisk-maly shrink-0"
+      className="przycisk przycisk-wtorny przycisk-maly shrink-0 max-md:min-h-11 max-md:min-w-[84px]"
       aria-label={`Kopiuj ${etykieta}`}
       onClick={async () => {
         try {
@@ -25,7 +25,7 @@ export function Kopiuj({ wartosc, etykieta }: { wartosc: string; etykieta: strin
         setTimeout(() => ustawStan(""), 2000);
       }}
     >
-      {stan === "ok" ? "Skopiowano" : stan === "blad" ? "Zaznacz ręcznie" : "Kopiuj"}
+      {stan === "ok" ? "Skopiowano ✓" : stan === "blad" ? "Zaznacz ręcznie" : "Kopiuj"}
     </button>
   );
 }

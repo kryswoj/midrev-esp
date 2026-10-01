@@ -206,7 +206,7 @@ describe("Wysyłka platformowa: kreator domeny", () => {
     expect(w.ok).toBe(true);
     if (!w.ok) return;
     const o = w.domena.raport!;
-    expect(o.rekordy.podpis1).toEqual({ stan: "zle", komunikat: expect.stringContaining("Wartość ma na końcu .dom-a.test") });
+    expect(o.rekordy.podpis1).toEqual({ stan: "zle", komunikat: expect.stringContaining("z dopisanym .dom-a.test na końcu") });
     expect(o.rekordy.podpis2).toEqual({ stan: "zle", komunikat: expect.stringContaining("W polu Nazwa wpisz tylko") });
     expect(o.ostrzezenia.some((x) => x.startsWith("PILNE") && x.includes("zwykłą pocztę firmy"))).toBe(true);
   });

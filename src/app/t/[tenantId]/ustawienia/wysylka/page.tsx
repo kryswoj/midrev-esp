@@ -93,7 +93,7 @@ async function KrokAdresu({ tenantId, wpis, prefiks, lokalna, nazwaKonta, email 
         ) : propozycja?.ok ? (
           <>
             <a href={`/t/${tenantId}/ustawienia/wysylka`} className="inline-flex text-[13px] font-medium text-[var(--color-akcent)] hover:underline">
-              ← Zmień adres
+              ← Wpisz inną domenę
             </a>
             <FormularzPodlaczenia
               tenantId={tenantId}
@@ -137,9 +137,17 @@ function StatusDomeny({ d }: { d: DomenaPlatformowa }) {
 function WidokDomeny({ tenantId, d }: { tenantId: string; d: DomenaPlatformowa }) {
   const oceny = d.raport?.rekordy ?? {};
   const doZrobienia = d.rekordy.filter((r) => oceny[r.klucz]?.stan !== "ok").length;
+  const licz = (stan: string) => d.rekordy.filter((r) => (oceny[r.klucz]?.stan ?? "brak") === stan).length;
+  const podsumowanie = [
+    licz("brak") ? `do dodania: ${licz("brak")}` : "",
+    licz("zle") ? `do poprawy: ${licz("zle")}` : "",
+    licz("czeka") ? `sprawdzamy: ${licz("czeka")}` : "",
+  ].filter(Boolean).join(" · ");
   const pilne = (d.raport?.ostrzezenia ?? []).filter((o) => o.startsWith("PILNE"));
   const inne = (d.raport?.ostrzezenia ?? []).filter((o) => !o.startsWith("PILNE"));
-  const aktywny: 2 | 3 = d.status === "pending" ? 2 : 3;
+  // krok 3 („Gotowe" = czekamy na potwierdzenie) dopiero, gdy klient wpisał WSZYSTKO
+  const wszystkieWpisane = d.rekordy.length > 0 && d.rekordy.every((r) => ["ok", "czeka"].includes(oceny[r.klucz]?.stan ?? ""));
+  const aktywny: 2 | 3 = wszystkieWpisane ? 3 : 2;
   return (
     <section className="karta overflow-hidden">
       <Odswiezanie aktywne={!d.gotowa} />
@@ -162,14 +170,21 @@ function WidokDomeny({ tenantId, d }: { tenantId: string; d: DomenaPlatformowa }
         ))}
 
         {d.gotowa ? (
-          <Alert tone="ok" title="Domena gotowa">Wszystkie rekordy są na miejscu. Możesz wysyłać kampanie i automatyzacje.</Alert>
+          <Alert tone="ok" title="Domena gotowa">
+            Wszystkie rekordy są na miejscu. Możesz wysyłać kampanie i automatyzacje.
+            <span className="mt-3 flex flex-wrap gap-2">
+              <a href="#test" className="przycisk przycisk-maly">Wyślij mail testowy</a>
+              <a href={`/t/${tenantId}/kampanie`} className="przycisk przycisk-wtorny przycisk-maly">Przygotuj kampanię</a>
+            </span>
+          </Alert>
         ) : (
           <div className="space-y-1">
             <p className="text-[15px] font-semibold leading-[22px]">
               {doZrobienia === d.rekordy.length
-                ? `Dodaj ${d.rekordy.length} rekordy u dostawcy domeny`
-                : `Zostało ${doZrobienia} z ${d.rekordy.length} rekordów`}
+                ? `Dodaj ${d.rekordy.length} rekordów u dostawcy domeny`
+                : `Gotowe: ${d.rekordy.length - doZrobienia} z ${d.rekordy.length} rekordów`}
             </p>
+            {podsumowanie ? <p className="text-[13px] leading-[19px] text-[var(--color-tekst-2)]">{podsumowanie}</p> : null}
             <p className="tekst-pomocniczy">
               Skopiuj każdy wiersz z tabeli do panelu, w którym zarządzasz domeną {d.strefa}. Sprawdzamy sami co kilka minut — możesz zamknąć tę stronę, damy znać mailem, gdy wszystko będzie gotowe.
             </p>
@@ -180,23 +195,45 @@ function WidokDomeny({ tenantId, d }: { tenantId: string; d: DomenaPlatformowa }
           <Alert key={o} tone="uwaga">{o}</Alert>
         ))}
 
-        {!d.gotowa ? <WskazowkaDostawcy dostawca={d.dostawca} strefa={d.strefa} /> : null}
-
-        <div className="overflow-hidden rounded-[10px] border border-[var(--color-linia)]">
-          <TabelaRekordow rekordy={d.rekordy} oceny={oceny} />
-        </div>
-
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="flex flex-wrap items-center gap-3">
-            <form action={sprawdzPlatformoweAkcja}>
-              <input type="hidden" name="tenantId" value={tenantId} />
-              <PrzyciskAkcji trwa="Sprawdzam…" wariant={d.gotowa ? "przycisk-wtorny" : ""} maly={false}>
-                Sprawdź teraz
-              </PrzyciskAkcji>
-            </form>
-            <span className="tekst-meta">{ileTemu(d.sprawdzonoAt)}</span>
+        {!d.gotowa ? (
+          <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_280px]">
+            <WskazowkaDostawcy dostawca={d.dostawca} strefa={d.strefa} />
+            <div className="karta-plaska space-y-2 p-4">
+              <p className="text-[13px] font-semibold leading-[19px]">Domeną zajmuje się ktoś inny?</p>
+              <p className="text-[13px] leading-[19px] text-[var(--color-tekst-2)]">Wyślij mu link z rekordami. Nie dostanie dostępu do konta.</p>
+              <InstrukcjaInformatyka tenantId={tenantId} domena={d.domena} />
+            </div>
           </div>
-          {!d.gotowa ? <InstrukcjaInformatyka tenantId={tenantId} domena={d.domena} /> : null}
+        ) : null}
+
+        {d.gotowa ? (
+          <details className="rounded-[10px] border border-[var(--color-linia)]">
+            <summary className="cursor-pointer px-4 py-3 text-[13px] font-medium text-[var(--color-tekst-2)]">Pokaż rekordy DNS</summary>
+            <div className="border-t border-[var(--color-linia)]">
+              <TabelaRekordow rekordy={d.rekordy} oceny={oceny} />
+            </div>
+          </details>
+        ) : (
+          <div className="overflow-hidden rounded-[10px] border border-[var(--color-linia)]">
+            <TabelaRekordow rekordy={d.rekordy} oceny={oceny} />
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center gap-3">
+          {!d.gotowa ? (
+            <span className="inline-flex items-center gap-2 text-[13px] leading-[19px] text-[var(--color-tekst-2)]">
+              <span className="h-2 w-2 animate-pulse rounded-full bg-[var(--color-czeka)]" aria-hidden="true" />
+              Sprawdzamy automatycznie co kilka minut · {ileTemu(d.sprawdzonoAt)}
+            </span>
+          ) : (
+            <span className="tekst-meta">{ileTemu(d.sprawdzonoAt)}</span>
+          )}
+          <form action={sprawdzPlatformoweAkcja}>
+            <input type="hidden" name="tenantId" value={tenantId} />
+            <PrzyciskAkcji trwa="Sprawdzam…" wariant="przycisk-wtorny">
+              Sprawdź ponownie
+            </PrzyciskAkcji>
+          </form>
         </div>
       </div>
 

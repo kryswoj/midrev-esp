@@ -30,6 +30,23 @@ export function FormularzDanychFirmy({ tenantId, dane, powrot }: { tenantId: str
 }
 
 export function SekcjaDanychFirmy({ tenantId, dane }: { tenantId: string; dane: DaneNadawcy }) {
+  // komplet danych = jeden zwarty wiersz; formularz dopiero po rozwinięciu
+  if (dane.firma && dane.adres) {
+    return (
+      <details id="dane-firmy" className="karta overflow-hidden scroll-mt-24">
+        <summary className="flex cursor-pointer list-none flex-wrap items-center gap-x-3 gap-y-1 px-6 py-4 max-md:px-4">
+          <span className="text-[14px] font-semibold">Dane firmy w stopce</span>
+          <span className="min-w-0 flex-1 truncate text-[13px] text-[var(--color-tekst-2)]">
+            {dane.firma}, {dane.adres.replace(/\n/g, ", ")}
+          </span>
+          <span className="text-[13px] font-medium text-[var(--color-akcent)]">Zmień</span>
+        </summary>
+        <div className="border-t border-[var(--color-linia)] p-6 max-md:p-4">
+          <FormularzDanychFirmy tenantId={tenantId} dane={dane} />
+        </div>
+      </details>
+    );
+  }
   return (
     <section id="dane-firmy" className="karta overflow-hidden scroll-mt-24">
       <div className="karta-naglowek">
