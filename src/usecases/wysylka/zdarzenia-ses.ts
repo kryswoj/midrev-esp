@@ -50,20 +50,37 @@ async function potwierdzDomyslnie(adres: string): Promise<void> {
   if (!odp.ok) throw new Error(`potwierdzenie subskrypcji: HTTP ${odp.status}`);
 }
 
+/**
+ * Zajęcie MessageId PRZED przetwarzaniem (review r1, P2): dwa równoległe dostarczenia tej
+ * samej wiadomości SNS — tylko jedno dostaje wiersz i robi cokolwiek. Błąd w trakcie
+ * zwalnia zajęcie (zwolnij), żeby ponowienie SNS przetworzyło wiadomość od nowa.
+ */
+async function zajmij(w: WiadomoscSns): Promise<boolean> {
+  const { rowCount } = await getPool().query(
+    `insert into ses_sns_messages (sns_message_id, topic_arn, type, outcome, sns_timestamp)
+     values ($1, $2, $3, 'w_toku', $4)
+     on conflict (sns_message_id) do nothing`,
+    [w.MessageId, w.TopicArn, w.Type, new Date(w.Timestamp)],
+  );
+  return Boolean(rowCount);
+}
+
+async function zwolnij(w: WiadomoscSns): Promise<void> {
+  await getPool().query("delete from ses_sns_messages where sns_message_id = $1 and outcome = 'w_toku'", [w.MessageId]);
+}
+
 async function zapiszWynik(w: WiadomoscSns, p: {
   outcome: string;
   eventType?: string | null;
   sesMessageId?: string | null;
   tenantId?: string | null;
   messageId?: string | null;
-}): Promise<boolean> {
-  const { rowCount } = await getPool().query(
-    `insert into ses_sns_messages (sns_message_id, topic_arn, type, event_type, ses_message_id, tenant_id, message_id, outcome, sns_timestamp)
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-     on conflict (sns_message_id) do nothing`,
-    [w.MessageId, w.TopicArn, w.Type, p.eventType ?? null, p.sesMessageId?.slice(0, 500) ?? null, p.tenantId ?? null, p.messageId ?? null, p.outcome, new Date(w.Timestamp)],
+}): Promise<void> {
+  await getPool().query(
+    `update ses_sns_messages set outcome = $2, event_type = $3, ses_message_id = $4, tenant_id = $5, message_id = $6
+      where sns_message_id = $1`,
+    [w.MessageId, p.outcome, p.eventType ?? null, p.sesMessageId?.slice(0, 500) ?? null, p.tenantId ?? null, p.messageId ?? null],
   );
-  return Boolean(rowCount);
 }
 
 function data(w: unknown): Date | null {
@@ -118,12 +135,27 @@ export async function przetworzWiadomoscSns(w: WiadomoscSns, o: OpcjeSns = {}): 
   const arn = rozbierzArnTematu(w.TopicArn);
   if (!arn) return { status: 403, wynik: "nieznany_temat" };
 
-  // 2. Powtórka po MessageId SNS: od razu 200, bez ponownego przetwarzania.
-  const { rows: byla } = await getPool().query("select outcome from ses_sns_messages where sns_message_id = $1", [w.MessageId]);
-  if (byla[0]) return { status: 200, wynik: "duplikat" };
+  // 2. Powtórka po MessageId SNS: od razu 200, bez ponownego przetwarzania. Wiadomość
+  //    zajęta przez równoległe dostarczenie, które jeszcze trwa, też jest duplikatem.
+  if (!(await zajmij(w))) return { status: 200, wynik: "duplikat" };
+  try {
+    return await przetworzZajeta(w, k, arn, o);
+  } catch (b) {
+    await zwolnij(w).catch(() => {});
+    throw b;
+  }
+}
+
+async function przetworzZajeta(
+  w: WiadomoscSns,
+  k: ReturnType<typeof config>,
+  arn: NonNullable<ReturnType<typeof rozbierzArnTematu>>,
+  o: OpcjeSns,
+): Promise<WynikSns> {
 
   if (w.Type === "SubscriptionConfirmation") {
     if (!w.SubscribeURL || !poprawnyAdresPotwierdzenia(w.SubscribeURL, k.AWS_REGION, w.TopicArn)) {
+      await zwolnij(w);
       return { status: 400, wynik: "zly_adres_potwierdzenia" };
     }
     await (o.potwierdz ?? potwierdzDomyslnie)(w.SubscribeURL);

@@ -37,12 +37,13 @@ interface Wiersz {
   reply_to: string | null;
   ses_configuration_set: string | null;
   ses_tenant_name: string | null;
+  ses_events_destination_at: Date | null;
 }
 
 async function wczytaj(tenantId: string): Promise<Wiersz | null> {
   const { rows } = await getPool().query<Wiersz>(
     `select d.id as domain_id, d.domain, d.status, d.ses_verified_for_sending, d.ses_mail_from_domain, d.last_checked_at,
-            s.from_name, s.from_email, s.reply_to, t.ses_configuration_set, t.ses_tenant_name
+            s.from_name, s.from_email, s.reply_to, t.ses_configuration_set, t.ses_tenant_name, t.ses_events_destination_at
        from tenant_platform_senders s
        join sending_domains d on d.tenant_id = s.tenant_id and d.id = s.sending_domain_id and d.managed_by = 'platforma'
        join tenants t on t.id = s.tenant_id
@@ -77,7 +78,8 @@ export async function wybierzWysylkePlatformowa(
   const przeterminowana = !w.last_checked_at || teraz.getTime() - new Date(w.last_checked_at).getTime() > WAZNOSC_STANU_H * 3600_000;
   if (w.status === "verified" && przeterminowana && portSes()) {
     const spr = await sprawdzDomenePlatformowa(tenantId, w.domain_id, { resolver: opcje.dns?.resolver });
-    if (!spr.ok) return { rodzaj: "blokada", powod: `Nie udało się potwierdzić domeny ${w.domain} przed wysyłką. Spróbujemy ponownie za kilka minut.` };
+    // odświeżenie bez odpowiedzi SES nie potwierdza niczego: stary „verified" to tylko pamięć
+    if (!spr.ok || !spr.swiezySes) return { rodzaj: "blokada", powod: `Nie udało się potwierdzić domeny ${w.domain} przed wysyłką. Spróbujemy ponownie za kilka minut.` };
     w = (await wczytaj(tenantId)) ?? w;
   }
   if (w.status !== "verified" || !w.ses_verified_for_sending) {
@@ -88,19 +90,20 @@ export async function wybierzWysylkePlatformowa(
   }
 
   const nadawca = { od: w.from_email, odNazwa: w.from_name, ...(w.reply_to ? { odpowiedzDo: w.reply_to } : {}) };
-  // atrapa w testach: transport podmieniony, zasady (nadawca, gotowość domeny) te same
-  if (opcje.dostawca) return { rodzaj: "platforma", dostawca: opcje.dostawca, nadawca };
-
   const k = config();
   const smtp = smtpPlatformy();
   if (!trybSandbox()) {
     // Odbicia i skargi platformowe wracają WYŁĄCZNIE przez SNS. Bez niego wysyłka byłaby
     // ślepa: martwe adresy nie trafiałyby na wykluczenia, a konto SES poszłoby pod review.
-    if (!k.SES_ZDARZENIA_SNS || k.SES_SNS_TOPIC_ARN.length === 0 || !w.ses_configuration_set) {
+    // per tenant: cel zdarzeń potwierdzony w JEGO zestawie (review r1, P1), nie tylko flaga globalna
+    if (!k.SES_ZDARZENIA_SNS || k.SES_SNS_TOPIC_ARN.length === 0 || !w.ses_configuration_set || !w.ses_events_destination_at) {
       return { rodzaj: "blokada", powod: "Wysyłka ruszy, gdy zakończymy konfigurację po naszej stronie. Nic nie musisz robić — damy znać." };
     }
-    if (!smtp) return { rodzaj: "blokada", powod: "Wysyłka ruszy, gdy zakończymy konfigurację po naszej stronie. Nic nie musisz robić — damy znać." };
+    if (!smtp && !opcje.dostawca) return { rodzaj: "blokada", powod: "Wysyłka ruszy, gdy zakończymy konfigurację po naszej stronie. Nic nie musisz robić — damy znać." };
   }
+  // atrapa w testach: transport podmieniony, zasady (nadawca, gotowość domeny, bramka
+  // zdarzeń w produkcji) te same
+  if (opcje.dostawca) return { rodzaj: "platforma", dostawca: opcje.dostawca, nadawca };
   if (!smtp) return null; // sandbox bez poświadczeń: wołający użyje Mailpita z nadawcą platformowym
 
   const naglowki: Record<string, string> = {};

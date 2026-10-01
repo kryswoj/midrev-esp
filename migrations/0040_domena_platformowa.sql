@@ -70,6 +70,9 @@ alter table tenants
   -- UNIQUE: dwa tenanty z tym samym zestawem = zdarzenia jednego w statystykach drugiego
   add column ses_configuration_set text unique check (ses_configuration_set is null or ses_configuration_set ~ '^[A-Za-z0-9_-]{1,64}$'),
   add column ses_tenant_name text unique check (ses_tenant_name is null or ses_tenant_name ~ '^[A-Za-z0-9_-]{1,64}$'),
+  -- cel zdarzeń (SNS) potwierdzony w configuration secie TEGO tenanta. Bramka wysyłki
+  -- poza sandboksem wymaga tej daty: bez niej odbicia i skargi tenanta nie wracają
+  add column ses_events_destination_at timestamptz,
   -- krok onboardingu „Pierwszy mail testowy": data UDANEGO przyjęcia testu przez serwer
   add column first_test_email_at timestamptz;
 

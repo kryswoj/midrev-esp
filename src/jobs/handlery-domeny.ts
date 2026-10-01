@@ -2,7 +2,8 @@ import { getPool } from "../adapters/db/pool";
 import { smtpPlatformy } from "../adapters/aws/fabryka";
 import { AdapterNodemailer } from "../adapters/email/nodemailer";
 import { config } from "../config";
-import { sprawdzDomenePlatformowa, type OpcjeDomeny } from "../usecases/wysylka-konfiguracja/domena-platformowa";
+import { portSes } from "../adapters/aws/fabryka";
+import { podepnijZasobyOpcjonalne, sprawdzDomenePlatformowa, type OpcjeDomeny } from "../usecases/wysylka-konfiguracja/domena-platformowa";
 
 /**
  * Automatyczne sprawdzanie domen platformowych (krok c kreatora). Tik co 2 minuty bierze
@@ -100,6 +101,18 @@ export async function tikDomen(o: OpcjeDomeny & { wyslij?: WyslijPowiadomienie; 
           console.error(`[domeny] sprawdzenie domeny ${d.id} (tenant ${d.tenant_id}) nie powiodło się: ${String((b as Error)?.message ?? b).slice(0, 200)}`);
           await pool.query("update sending_domains set next_check_at = $3 where tenant_id = $1 and id = $2", [d.tenant_id, d.id, new Date(Date.now() + 15 * 60_000)]);
         }
+      }
+      // Cel zdarzeń (SNS) nie powstał przy podłączeniu (np. uprawnienia SNS doszły później):
+      // ponawiamy tu, bez udziału klienta. Bez niego bramka nie wypuści wysyłki tenanta.
+      const ses = o.ses === undefined ? portSes() : o.ses;
+      if (config().SES_ZDARZENIA_SNS && config().SES_SNS_TOPIC_ARN[0] && ses) {
+        const { rows: bezCelu } = await klient.query<{ id: string; ses_configuration_set: string; domain: string }>(
+          `select t.id, t.ses_configuration_set, d.domain from tenants t
+             join sending_domains d on d.tenant_id = t.id and d.managed_by = 'platforma'
+            where t.ses_configuration_set is not null and t.ses_events_destination_at is null
+            limit 5`,
+        );
+        for (const t of bezCelu) await podepnijZasobyOpcjonalne(t.id, t.domain, t.ses_configuration_set, ses, o);
       }
     } finally {
       await klient.query("select pg_advisory_unlock($1)", [BLOKADA]);

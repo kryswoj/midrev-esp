@@ -234,6 +234,28 @@ describe("Wysyłka platformowa: kreator domeny", () => {
     expect(w.ok && w.domena.status).toBe("verified");
   });
 
+  it("przeterminowany stan + SES nie odpowiada = blokada (stare „verified” to tylko pamięć)", async () => {
+    await getPool().query("update sending_domains set last_checked_at = now() - interval '30 hours' where tenant_id = $1 and managed_by = 'platforma'", [tenantA]);
+    ses.bledy.set("odczytajTozsamosc", new BladAws("Throttling", 400, "SES: Throttling"));
+    const wybor = await wybierzWysylke(tenantA, { dostawca: new DostawcaAtrapa(), dns: { resolver: resolver({ ...strefaSklepu("dom-a.test"), ...wpisaneRekordy("dom-a.test") }) } });
+    expect(wybor.rodzaj).toBe("blokada");
+    // następne odświeżenie z odpowiedzią SES przywraca wysyłkę
+    const ponownie = await wybierzWysylke(tenantA, { dostawca: new DostawcaAtrapa(), dns: { resolver: resolver({ ...strefaSklepu("dom-a.test"), ...wpisaneRekordy("dom-a.test") }) } });
+    expect(ponownie.rodzaj).toBe("platforma");
+  });
+
+  it("równoległe podłączenie domeny i jej subdomeny przez dwa konta: wygrywa jedno (blokada globalna)", async () => {
+    const pool = getPool();
+    const x = (await pool.query("insert into tenants (name) values ('DOM Wyscig X') returning id")).rows[0].id;
+    const y = (await pool.query("insert into tenants (name) values ('DOM Wyscig Y') returning id")).rows[0].id;
+    const r = resolver(strefaSklepu("wyscig.test"));
+    const [wx, wy] = await Promise.all([
+      podlaczDomene(x, { wpis: "wyscig.test", prefiks: "", nazwaNadawcy: "X", odpowiedzDo: "" }, { resolver: r, alert }),
+      podlaczDomene(y, { wpis: "wyscig.test", nazwaNadawcy: "Y", odpowiedzDo: "" }, { resolver: r, alert }),
+    ]);
+    expect([wx.ok, wy.ok].filter(Boolean)).toHaveLength(1);
+  });
+
   it("gotowa domena: nadawca Z BAZY tenanta, nie z żądania; adres zawsze w jego domenie", async () => {
     const dost = new DostawcaAtrapa();
     const wybor = await wybierzWysylke(tenantA, { dostawca: dost });

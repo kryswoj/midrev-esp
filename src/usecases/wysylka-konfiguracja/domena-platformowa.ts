@@ -189,8 +189,11 @@ export async function podlaczDomene(tenantId: string, dane: DanePodlaczenia, o: 
   let domainId: string;
   try {
     await klient.query("begin");
-    // blokada per tenant: dwa kliknięcia „Podłącz" naraz nie tworzą dwóch domen
-    await klient.query("select pg_advisory_xact_lock(hashtext('domena-platformowa:' || $1::text))", [tenantId]);
+    // Blokada GLOBALNA (nie per tenant): kolizję „ta sama / nadrzędna / subdomena innego
+    // tenanta" sprawdzamy odczytem, a indeks unikalny łapie tylko identyczną nazwę. Bez
+    // wspólnej blokady dwa tenanty mogłyby równolegle zarezerwować example.com i
+    // news.example.com (review Codeksa r1, P1). Podłączenie domeny to rzadka operacja.
+    await klient.query("select pg_advisory_xact_lock(hashtext('domena-platformowa:globalna'))");
     const { rows: wlasny } = await klient.query("select 1 from tenant_smtp_configs where tenant_id = $1", [tenantId]);
     if (wlasny.length) {
       await klient.query("rollback");
@@ -242,7 +245,6 @@ export async function podlaczDomene(tenantId: string, dane: DanePodlaczenia, o: 
   let tozsamosc: TozsamoscSes;
   try {
     await ses.utworzConfigurationSet(cs, { midrev_tenant: tenantId });
-    await pool.query("update tenants set ses_configuration_set = $2 where id = $1 and ses_configuration_set is distinct from $2", [tenantId, cs]);
     try {
       tozsamosc = await ses.utworzTozsamosc(domena, { configurationSet: cs, tagi: { midrev_tenant: tenantId, midrev_domena: domainId } });
     } catch (b) {
@@ -259,6 +261,8 @@ export async function podlaczDomene(tenantId: string, dane: DanePodlaczenia, o: 
       tozsamosc = { ...istniejaca, configurationSet: cs };
     }
     await ses.ustawMailFrom(domena, uklad.mailFrom);
+    // zestaw przypisany tenantowi dopiero po udanym założeniu tożsamości (review r1, P2)
+    await pool.query("update tenants set ses_configuration_set = $2 where id = $1 and ses_configuration_set is distinct from $2", [tenantId, cs]);
   } catch (b) {
     await cofnij();
     const opis = b instanceof BladAws ? `${b.kod}: ${b.message}` : String((b as Error)?.message ?? b).slice(0, 300);
@@ -303,6 +307,11 @@ export async function podepnijZasobyOpcjonalne(tenantId: string, domena: string,
   if (k.SES_ZDARZENIA_SNS && k.SES_SNS_TOPIC_ARN[0]) {
     try {
       await ses.dodajCelZdarzen(cs, "midrev-sns", k.SES_SNS_TOPIC_ARN[0]);
+      // potwierdzenie odczytem: cel jest w zestawie i wskazuje NASZ temat
+      const cele = await ses.celeZdarzen(cs);
+      if (cele.some((c) => c.wlaczony && c.topicArn === k.SES_SNS_TOPIC_ARN[0])) {
+        await getPool().query("update tenants set ses_events_destination_at = coalesce(ses_events_destination_at, now()) where id = $1 and ses_configuration_set = $2", [tenantId, cs]);
+      }
     } catch (b) {
       await alertOperatora(
         o,
@@ -611,6 +620,8 @@ export function nastepneSprawdzenie(utworzono: Date, gotowa: boolean, teraz: Dat
 
 export interface WynikSprawdzenia {
   domena: DomenaPlatformowa;
+  /** SES odpowiedział w TYM sprawdzeniu (bez tego stan „verified" jest tylko pamięcią) */
+  swiezySes: boolean;
   /** to sprawdzenie przestawiło domenę w „gotowa" (do powiadomienia) */
   wlasnieGotowa: boolean;
 }
@@ -705,7 +716,7 @@ export async function sprawdzDomenePlatformowa(tenantId: string, domainId: strin
   );
   const zapisana = await domenaPlatformowaPoId(tenantId, domainId);
   if (!zapisana || zapisana.status !== nowyStatus) return { ok: false, blad: "Wynik sprawdzenia nie zapisał się poprawnie." };
-  return { ok: true, domena: zapisana, wlasnieGotowa: gotowa && przed[0]?.status !== "verified" };
+  return { ok: true, domena: zapisana, wlasnieGotowa: gotowa && przed[0]?.status !== "verified", swiezySes: t !== null };
 }
 
 // ── Nadawca i usunięcie ────────────────────────────────────────────────────────

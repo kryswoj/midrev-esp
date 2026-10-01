@@ -222,6 +222,23 @@ describe("Zdarzenia SES → wiadomości, wykluczenia i metryki", () => {
     expect(JSON.stringify(m[0].properties)).not.toContain("sesz-twarde@");
   });
 
+  it("dwa RÓWNOLEGŁE dostarczenia tej samej wiadomości SNS: przetwarza jedno, drugie to duplikat", async () => {
+    const pool = getPool();
+    const k = await pool.query("select source_id from messages where id = $1", [msg.twarde]);
+    const p = await pool.query("insert into profiles (tenant_id, email) values ($1, 'sesz-rownolegle@example.test') returning id", [tenantA]);
+    const m = await pool.query(
+      `insert into messages (tenant_id, profile_id, source_type, source_id, email, subject, body_html, click_token, unsubscribe_token, provider_message_id, current_state, current_rank)
+       values ($1, $2, 'campaign', $3, 'sesz-rownolegle@example.test', 'T', '<p>x</p>', 'sesz-k-r', 'sesz-u-r', '0107sesz-rown-000000', 'sent', 3) returning id`,
+      [tenantA, p.rows[0].id, k.rows[0].source_id],
+    );
+    const w = powiadomienie(zdarzenieSes("Bounce", { sesId: "0107sesz-rown-000000", cs: csA, zrodlo: "newsletter@news.sesz-a.test" }));
+    const wyniki = await Promise.all([przetworzWiadomoscSns(w, { alert }), przetworzWiadomoscSns(w, { alert })]);
+    expect(wyniki.map((x) => x.wynik).sort()).toEqual(["duplikat", "zapisane"]);
+    const { rows } = await pool.query("select count(*)::int as n from tenant_suppressions where tenant_id = $1 and email = 'sesz-rownolegle@example.test'", [tenantA]);
+    expect(rows[0].n).toBe(1);
+    expect(await metryki(m.rows[0].id)).toHaveLength(1);
+  });
+
   it("skarga → Marked Email as Spam; „not-spam” nie jest skargą", async () => {
     await przetworzWiadomoscSns(powiadomienie(zdarzenieSes("Complaint", { sesId: "0107sesz-skarga-000000", cs: csA, zrodlo: "newsletter@news.sesz-a.test" })), { alert });
     expect((await metryki(msg.skarga)).map((r) => r.name)).toEqual(["Marked Email as Spam"]);
