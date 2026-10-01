@@ -103,7 +103,7 @@ export async function skonfigurujZdarzeniaSes(o: {
       await getPool().query("update tenants set ses_events_destination_at = coalesce(ses_events_destination_at, now()) where id = $1 and ses_configuration_set = $2", [r.id, r.ses_configuration_set]);
       kroki.push({ krok: `cel:${r.ses_configuration_set}`, stan: "ok", opis: `tenant ${r.id} (potwierdzone odczytem)` });
     } catch (b) {
-      kroki.push({ krok: `cel:${r.ses_configuration_set}`, ...opisBledu(b, "ses:CreateConfigurationSetEventDestination") });
+      kroki.push({ krok: `cel:${r.ses_configuration_set}`, ...opisBledu(b, "ses:CreateConfigurationSetEventDestination / ses:UpdateConfigurationSetEventDestination / ses:GetConfigurationSetEventDestinations") });
     }
   }
   return { kroki, topicArn };

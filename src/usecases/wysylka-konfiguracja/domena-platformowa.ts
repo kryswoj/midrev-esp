@@ -316,7 +316,7 @@ export async function podepnijZasobyOpcjonalne(tenantId: string, domena: string,
       await alertOperatora(
         o,
         b instanceof BladAws && b.brakUprawnien
-          ? `zdarzenia SES: brak uprawnień do dodania celu SNS w zestawie ${cs} (tenant ${tenantId}). Odbicia i skargi tego klienta NIE dotrą, dopóki polityka IAM nie dostanie ses:CreateConfigurationSetEventDestination i sns:Publish dla SES.`
+          ? `zdarzenia SES: brak uprawnień do dodania celu SNS w zestawie ${cs} (tenant ${tenantId}). Odbicia i skargi tego klienta NIE dotrą, dopóki polityka IAM nie dostanie ses:CreateConfigurationSetEventDestination, ses:UpdateConfigurationSetEventDestination i ses:GetConfigurationSetEventDestinations.`
           : `zdarzenia SES: nie udało się dodać celu SNS w zestawie ${cs} (tenant ${tenantId}): ${String((b as Error)?.message ?? b).slice(0, 300)}`,
       );
     }
