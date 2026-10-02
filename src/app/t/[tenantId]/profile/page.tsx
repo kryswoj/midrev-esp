@@ -2,7 +2,7 @@ import Link from "next/link";
 import { wymaganyTenant } from "../../../autoryzacja";
 import { formatujDate } from "../../../../domain/daty";
 import { zGroszy } from "../../../../domain/kwoty";
-import { odmien } from "../../../../domain/liczebniki";
+import { formaOdmiany, odmien } from "../../../../domain/liczebniki";
 import { STANY_ZGODY, stronaProfili, zanonimizowaneSposrod, type StanZgodyFiltr } from "../../../../usecases/lista-profili";
 import { Search } from "lucide-react";
 import { Badge, Button, Card, CardHeader, EmptyState, ResponsiveTable, Table, TBody, Td, Th, THead } from "../../../ui";
@@ -70,7 +70,7 @@ export default async function Profile({
         opis="Tożsamość profilu to znormalizowany adres e-mail: bez wielkości liter i bez spacji na brzegach. Dzięki temu Anna@Sklep.pl i anna@sklep.pl to jedna osoba, a nie dwie kartoteki. Kliknięcie w wiersz otwiera kartotekę osoby: zgody z datą i źródłem, oś czasu, historia wysyłek oraz eksport i usunięcie danych."
         akcja={
           <span className="tekst-licznik !text-[var(--color-tekst-3)]">
-            {strona.ponadLimit ? "ponad " : ""}{odmien(strona.razem, "osoba", "osoby", "osób").replace(/^(\d+)/, (n) => Number(n).toLocaleString("pl-PL"))}{filtrowane ? " pasuje" : ""}
+            {strona.ponadLimit ? "ponad " : ""}{odmien(strona.razem, "osoba", "osoby", "osób").replace(/^(\d+)/, (n) => Number(n).toLocaleString("pl-PL"))}{filtrowane ? ` ${formaOdmiany(strona.razem, "pasuje", "pasują", "pasuje")}` : ""}
           </span>
         }
       />
