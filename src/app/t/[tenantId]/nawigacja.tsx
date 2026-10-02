@@ -91,14 +91,14 @@ export function Nawigacja({ tenantId, sekcje, liczniki }: { tenantId: string; se
     <nav aria-label="Główna nawigacja" className="mt-5 space-y-4">
       {sekcje.map((sekcja, indeks) => (
         <div key={`${sekcja.tytul}-${indeks}`}>
-          {sekcja.tytul ? <div className="mb-1.5 px-3 text-[12px] leading-4 font-semibold text-[var(--color-tekst-3)]">{sekcja.tytul}</div> : null}
+          {sekcja.tytul ? <div className="nawigacja-tytul mb-1.5 px-3 text-[12px] leading-4 font-semibold text-[var(--color-tekst-3)]">{sekcja.tytul}</div> : null}
           <div className="space-y-0.5">
             {sekcja.pozycje.map((p) => {
               const aktywna = aktywnyLink(sciezka, baza, p.href);
               return (
-                <Link key={p.href} href={`${baza}${p.href}`} className="nawigacja-pozycja" aria-current={aktywna ? "page" : undefined}>
+                <Link key={p.href} href={`${baza}${p.href}`} className="nawigacja-pozycja" data-etykieta={p.etykieta} aria-current={aktywna ? "page" : undefined}>
                   <Icon name={IKONY[p.ikona] ?? "dokument"} size={18} />
-                  <span className="min-w-0 flex-1 whitespace-nowrap">{p.etykieta}</span>
+                  <span className="nawigacja-etykieta min-w-0 flex-1 whitespace-nowrap">{p.etykieta}</span>
                   {liczniki[p.ikona] !== undefined ? <span className="nawigacja-licznik">{liczniki[p.ikona]}</span> : null}
                 </Link>
               );
