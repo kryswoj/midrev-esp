@@ -63,7 +63,7 @@ export async function utworzPopupAkcja(
     // limity dlugosci z use-case'u: za dluga tresc to komunikat w panelu, nie piecsetka
     if (blad instanceof ZodError) {
       return {
-        blad: "Sprawdź długości: nagłówek do 200, treść do 1000, przycisk do 80, kod do 60, klauzula do 2000 znaków; adres polityki zaczyna się od https://",
+        blad: "Sprawdź długości: nagłówek do 200, treść do 1000, przycisk do 80, kod do 60, klauzula do 2000 znaków, adres polityki do 500 znaków i zaczyna się od https:// albo http://",
         wartosci,
       };
     }
