@@ -132,8 +132,9 @@ const ENCJE_PL: Record<string, string> = { oacute: "ó", Oacute: "Ó", lstrok: "
 function tekstWidoczny(html: string): string {
   // treść <style>, <script>, <head> i komentarzy nie trafia do oczu odbiorcy
   const bezNiewidocznych = html
-    .replace(/<!--[\s\S]*?-->/g, " ")
-    .replace(/<(style|script|head|title)\b[\s\S]*?<\/\1\s*>/gi, " ");
+    // niedomknięty komentarz albo <style> pochłania w przeglądarce resztę dokumentu: też niewidoczne
+    .replace(/<!--[\s\S]*?(?:-->|$)/g, " ")
+    .replace(/<(style|script|head|title)\b[\s\S]*?(?:<\/\1\s*>|$)/gi, " ");
   return odkodujEncje(bezNiewidocznych.replace(/<[^>]*>/g, " ").replace(/&(oacute|Oacute|lstrok|Lstrok);/g, (_c, n: string) => ENCJE_PL[n] ?? ""))
     .replace(/\s+/g, " ");
 }

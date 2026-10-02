@@ -989,7 +989,7 @@ export function Edytor({
   // ── pliki z dysku: upuszczenie na płótno = wgranie do biblioteki + blok obrazu ──
   const edycjaMozliwa = !zablokowane && tryb === "edycja";
   const wgrajPliki = useCallback(
-    async (pliki: File[], cel: { indeks: number; obraz: string | null; kotwica: string | null }) => {
+    async (pliki: File[], cel: { indeks: number; obraz: string | null; kotwica: string | null; poBloku: string | null }) => {
       const bledy: string[] = [];
       if (pliki.length > MAKS_PLIKOW_NARAZ) bledy.push(`Naraz wgrasz najwyżej ${MAKS_PLIKOW_NARAZ} plików — pominęliśmy ${pliki.length - MAKS_PLIKOW_NARAZ}.`);
       const dobre = pliki.slice(0, MAKS_PLIKOW_NARAZ).filter((p) => {
@@ -1022,8 +1022,10 @@ export function Edytor({
         ostatni = nowe.length ? nowe[nowe.length - 1].id : podmiana;
         aktualizuj((d) => {
           let wynik = d;
+          // przed blokiem-kotwicą, a przy dropie na koniec: za blokiem, który był ostatni
           const k = cel.kotwica ? d.bloki.findIndex((b) => b.id === cel.kotwica) : -1;
-          let indeks = k !== -1 ? k : Math.min(cel.indeks, d.bloki.length);
+          const po = cel.poBloku ? d.bloki.findIndex((b) => b.id === cel.poBloku) : -1;
+          let indeks = k !== -1 ? k : po !== -1 ? po + 1 : Math.min(cel.indeks, d.bloki.length);
           const i = podmiana ? d.bloki.findIndex((b) => b.id === podmiana) : -1;
           if (podmiana && i !== -1) {
             // plik upuszczony na blok obrazu podmienia jego zdjęcie, kolejne pliki lądują tuż pod nim
@@ -1075,7 +1077,7 @@ export function Edytor({
     if (!edycjaMozliwa) return;
     const obraz = obrazPod(e.target) ?? cel?.obraz ?? null;
     const indeks = cel?.indeks ?? indeksDlaY(e.clientY);
-    void wgrajPliki(Array.from(e.dataTransfer.files), { indeks, obraz, kotwica: dok.bloki[indeks]?.id ?? null });
+    void wgrajPliki(Array.from(e.dataTransfer.files), { indeks, obraz, kotwica: dok.bloki[indeks]?.id ?? null, poBloku: dok.bloki[indeks - 1]?.id ?? null });
   };
 
   // obraz z zakładki „Obrazy": do zaznaczonego bloku obrazu albo jako nowy blok pod zaznaczeniem
@@ -1123,12 +1125,12 @@ export function Edytor({
   const liczbaWymaganych = wszystkieBraki.filter((b) => b.wymagane).length;
   const liczbaZalecen = wszystkieBraki.length - liczbaWymaganych;
 
-  // Przy węższym ekranie zostaje sama ikona (pełny tekst w podpowiedzi), żeby pasek
-  // nie ucinał słowa do „Z" obok przycisków (design r1). Błąd zapisu zawsze z tekstem.
+  // Przy węższym ekranie spokojny stan „Zapisano" zostaje samą ikoną (tekst w podpowiedzi
+  // i dla czytnika), żeby pasek nie ucinał słowa. Zapisywanie, niezapisane i błąd: zawsze z tekstem.
   const tekstStanu = "max-[1599px]:sr-only";
   const stanZapisu = zapis.trwa ? (
     <span className="flex items-center gap-1.5 text-[var(--color-tekst-2)]" title="Zapisuję…">
-      <Loader2 size={14} className="animate-spin" aria-hidden="true" /> <span className={tekstStanu}>Zapisuję…</span>
+      <Loader2 size={14} className="animate-spin" aria-hidden="true" /> <span>Zapisuję…</span>
     </span>
   ) : zapis.blad ? (
     <span className="flex items-center gap-1.5 text-[var(--color-blad)]" role="alert">
@@ -1136,7 +1138,7 @@ export function Edytor({
     </span>
   ) : brudny ? (
     <span className="flex items-center gap-1.5 font-medium text-[var(--color-czeka)]" title={autozapis ? "Zapis ruszy sam za chwilę" : "Kliknij Zapisz"}>
-      <span className="h-2 w-2 rounded-full bg-[var(--color-czeka)]" aria-hidden="true" /> <span className={autozapis ? tekstStanu : ""}>{autozapis ? "Zapisuję za chwilę" : "Niezapisane"}</span>
+      <span className="h-2 w-2 rounded-full bg-[var(--color-czeka)]" aria-hidden="true" /> <span>{autozapis ? "Zapisuję…" : "Niezapisane"}</span>
     </span>
   ) : (
     <span className="flex items-center gap-1.5 text-[var(--color-tekst-2)]" title={zapis.kiedy ? `Zapisano o ${godzina(zapis.kiedy)}` : "Zapisano"}>
@@ -1514,12 +1516,17 @@ export function Edytor({
                   <StyleGlobalne styl={dok.style} zmien={zmienStyl} />
                   {wszystkieBraki.length ? (
                     <section className="border-t border-[var(--color-linia)] px-4 py-4">
-                      <h3 className="flex items-center gap-1.5 text-[13px] font-semibold text-[var(--color-czeka)]">
-                        <AlertTriangle size={14} /> Do poprawy przed wysyłką
+                      <h3 className={`flex items-center gap-1.5 text-[13px] font-semibold ${liczbaWymaganych ? "text-[var(--color-blad)]" : "text-[var(--color-czeka)]"}`}>
+                        <AlertTriangle size={14} aria-hidden="true" /> {liczbaWymaganych ? "Do poprawy przed wysyłką" : "Warto poprawić"}
                       </h3>
+                      <p className="mt-0.5 text-[12px] leading-[17px] text-[var(--color-tekst-2)]">
+                        {liczbaWymaganych ? "Czerwone zatrzymają wysyłkę kampanii. Pomarańczowe jej nie blokują." : "Nic nie blokuje wysyłki."}
+                      </p>
                       <ul className="mt-2 space-y-1.5 text-[12px] leading-[17px] text-[var(--color-tekst-2)]">
                         {wszystkieBraki.slice(0, 8).map((u, i) => (
-                          <li key={i}>
+                          <li key={i} className="flex gap-1.5">
+                            <AlertTriangle size={12} className={`mt-[2px] shrink-0 ${u.wymagane ? "text-[var(--color-blad)]" : "text-[var(--color-czeka)]"}`} aria-label={u.wymagane ? "blokuje wysyłkę" : "zalecenie"} />
+                            <span>
                             {u.tekst}
                             {u.link ? (
                               <>
@@ -1529,6 +1536,7 @@ export function Edytor({
                                 </a>
                               </>
                             ) : null}
+                            </span>
                           </li>
                         ))}
                       </ul>

@@ -139,5 +139,7 @@ describe("przykładowe dane w samym HTML-u (kampanie bez bloków, encje)", () =>
     expect(przykladyWHtml("<p>Sklep Ani sp. z o.o., ul. Długa 5, 31-001 Kraków</p>")).toEqual([]);
     // tekst niewidoczny dla odbiorcy (style, komentarze, head) nie blokuje wysyłki
     expect(przykladyWHtml("<head><title>ul. Przykładowa 1</title></head><style>/* 00-001 Warszawa */</style><!-- Twój sklep sp. z o.o. --><p>Cześć</p>")).toEqual([]);
+    expect(przykladyWHtml("<p>Cześć</p><style>.x{} /* ul. Przykładowa 1")).toEqual([]);
+    expect(przykladyWHtml("<p>Cześć</p><!-- 00-001 Warszawa")).toEqual([]);
   });
 });
