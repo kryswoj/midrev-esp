@@ -10,7 +10,8 @@ import { cel, porty, wezel, type Graf, type Wezel } from "./graf";
  * krawedz prowadzi do tej samej pozycji.
  */
 
-export const SZEROKOSC_KARTY = 288;
+// 280 px: wymiar karty z krytyki designu (Codex, audyt 02.10); wiecej miejsca na galezie obok siebie
+export const SZEROKOSC_KARTY = 280;
 export const SZEROKOSC_KONCA = 96;
 export const WYSOKOSC_KONCA = 32;
 export const ODSTEP_X = 56;

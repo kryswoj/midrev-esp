@@ -343,7 +343,7 @@ export function PanelWezla({
             </Link>
             {!emaile[wezel.emailId]?.maTresc ? <p className="text-[12px] leading-4 text-[var(--color-czeka)]">Wiadomość nie ma jeszcze treści. Bez niej automatyzacji nie da się włączyć.</p> : null}
           </Sekcja>
-          {stat.email ? (
+          {stat.email && stat.email.wyslane > 0 ? (
             <Sekcja tytul="Wyniki tego maila">
               <dl className="grid grid-cols-2 gap-2 text-[13px]">
                 <div className="rounded-md bg-[var(--color-powierzchnia-2)] px-3 py-2"><dt className="etykieta">Wysłane</dt><dd className="liczba text-[16px] font-semibold">{stat.email.wyslane}</dd></div>

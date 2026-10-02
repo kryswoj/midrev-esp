@@ -81,6 +81,49 @@ function Krok({ typ, opis, onDodaj, powodBlokady }: { typ: TypDoDodania; opis: s
   );
 }
 
+/**
+ * Zwinieta paleta (domyslny stan na kanwie, fala 1 UX): same ikony 40 px w pasku 56 px.
+ * Klik dodaje krok za zaznaczonym, przeciagniecie dziala jak z pelnej palety (inne id
+ * przeciagania, bo obie wersje nie moga miec tego samego id w jednym DndContext).
+ */
+function KrokIkona({ typ, onDodaj, powodBlokady }: { typ: TypDoDodania; onDodaj: () => void; powodBlokady?: string }) {
+  const drag = useDraggable({ id: `paleta-ikona:${typ}`, data: { zrodlo: "paleta", typ }, disabled: Boolean(powodBlokady) });
+  const Ikona = IKONY_WEZLOW[typ];
+  return (
+    <button
+      type="button"
+      ref={drag.setNodeRef}
+      {...drag.listeners}
+      {...drag.attributes}
+      onClick={onDodaj}
+      disabled={Boolean(powodBlokady)}
+      title={powodBlokady ?? `${NAZWY_WEZLOW[typ]}: kliknij, żeby dodać, albo przeciągnij na kanwę`}
+      aria-label={`Dodaj krok: ${NAZWY_WEZLOW[typ]}`}
+      className="grid h-10 w-10 cursor-grab place-items-center rounded-lg hover:bg-white hover:shadow-[var(--cien-karta)] active:cursor-grabbing disabled:cursor-not-allowed disabled:opacity-40"
+    >
+      <span className={`grid h-8 w-8 place-items-center rounded-md ${KAFELEK[typ]}`}><Ikona size={16} strokeWidth={1.9} /></span>
+    </button>
+  );
+}
+
+export function PasekKrokow({
+  onDodaj,
+  blokady,
+}: {
+  onDodaj: (typ: TypDoDodania) => void;
+  blokady: Partial<Record<TypDoDodania, string>>;
+}) {
+  return (
+    <div className="flex flex-col items-center gap-1 py-1">
+      {KATEGORIE.map((k, i) => (
+        <div key={k.tytul} className={`flex flex-col items-center gap-1 ${i ? "border-t border-[var(--color-linia-0)] pt-1" : ""}`} role="group" aria-label={k.tytul}>
+          {k.kroki.map((s) => <KrokIkona key={s.typ} typ={s.typ} onDodaj={() => onDodaj(s.typ)} powodBlokady={blokady[s.typ]} />)}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export function BibliotekaKrokow({
   onDodaj,
   blokady,
@@ -91,7 +134,7 @@ export function BibliotekaKrokow({
   return (
     <div className="p-3">
       <div className="px-2 pb-2 pt-1 text-[15px] font-semibold">Kroki</div>
-      <p className="px-2 pb-3 text-[12px] leading-4 text-[var(--color-tekst-3)]">Kliknij, żeby dodać za zaznaczonym krokiem, albo przeciągnij na „+”.</p>
+      <p className="px-2 pb-3 text-[12px] leading-4 text-[var(--color-tekst-3)]">Przeciągnij krok na kanwę albo kliknij, żeby dodać go za zaznaczonym.</p>
       {KATEGORIE.map((k) => (
         <section key={k.tytul} className="mb-3">
           <div className="etykieta px-2 pb-1">{k.tytul}</div>
