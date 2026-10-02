@@ -42,6 +42,8 @@ const WZORCE = [
   "^ODB (tenant|obcy)$",
   "^ONB tenant [AB]$",
   "^POP tenant [AB]$",
+  "^POPK tenant [AB]$",
+  "^PROFLISTA (A|B)$",
   "^PROFIL [AB]$",
   "^PRZ Sklep <&>$",
   "^REP tenant$",

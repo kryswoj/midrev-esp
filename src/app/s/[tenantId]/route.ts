@@ -19,7 +19,9 @@ import { aktywnyPopup } from "../../../usecases/popupy/zarzadzaj";
  * zeby nie dalo sie domknac tagu </script> trescia popupu.
  */
 
-export const WERSJA_SKRYPTU = "1.0.0";
+// 1.1.0 (0041): klauzula zgody przy niezaznaczonym polu wyboru, link do polityki prywatnosci,
+// odsylany numer wersji klauzuli. Bez zaznaczenia zgloszenie nie wychodzi (i serwer je odrzuca).
+export const WERSJA_SKRYPTU = "1.1.0";
 
 const schematId = z.string().uuid();
 
@@ -59,6 +61,10 @@ export async function GET(_zadanie: NextRequest, ctx: { params: Promise<{ tenant
     bodyText: popup.body_text,
     buttonText: popup.button_text,
     delaySeconds: popup.rules?.delay_seconds ?? 0,
+    // klauzula: DOKLADNIE ten tekst trafia do dowodu zgody (serwer bierze go z wersji z bazy)
+    consentText: popup.consent_wording,
+    consentVersion: popup.consent_version,
+    privacyUrl: popup.consent_privacy_url,
     endpoint: `${adresSledzenia()}/api/popup/${popup.id}`,
     klucz: `midrev_popup_zamkniety_${popup.id}`,
   };
@@ -137,7 +143,32 @@ export async function GET(_zadanie: NextRequest, ctx: { params: Promise<{ tenant
       "height:38px;border-radius:8px;border:0;background:#3d55a8;color:#fff;" +
       "font-size:14px;font-weight:500;cursor:pointer;");
     var blad = el("div", "display:none;font-size:12px;color:#e0655f;", "");
+    blad.setAttribute("role", "alert");
+
+    // Klauzula zgody: pole wyboru NIEZAZNACZONE, tekst przez textContent (to samo brzmienie,
+    // ktore serwer zapisze jako dowod), link do polityki tylko http(s).
+    var zgodaId = "midrev-zgoda-" + Math.random().toString(36).slice(2);
+    var zgodaWiersz = el("div", "display:flex;gap:8px;align-items:flex-start;");
+    var zgoda = el("input", "margin:2px 0 0;width:16px;height:16px;flex:none;accent-color:#3d55a8;cursor:pointer;");
+    zgoda.setAttribute("type", "checkbox");
+    zgoda.setAttribute("id", zgodaId);
+    zgoda.setAttribute("name", "zgoda");
+    zgoda.checked = false;
+    var zgodaTekst = el("label", "font-size:12px;line-height:17px;color:#a4a9ba;cursor:pointer;white-space:pre-line;", K.consentText);
+    zgodaTekst.setAttribute("for", zgodaId);
+    zgodaWiersz.appendChild(zgoda);
+    zgodaWiersz.appendChild(zgodaTekst);
+    var polityka = null;
+    if (K.privacyUrl && /^https?:\\/\\//i.test(K.privacyUrl)) {
+      polityka = el("a", "font-size:12px;color:#a4a9ba;text-decoration:underline;margin-left:24px;", "Polityka prywatno\\u015bci");
+      polityka.setAttribute("href", K.privacyUrl);
+      polityka.setAttribute("target", "_blank");
+      polityka.setAttribute("rel", "noopener noreferrer");
+    }
+
     form.appendChild(pole);
+    form.appendChild(zgodaWiersz);
+    if (polityka) form.appendChild(polityka);
     form.appendChild(przycisk);
     form.appendChild(blad);
     karta.appendChild(form);
@@ -154,17 +185,23 @@ export async function GET(_zadanie: NextRequest, ctx: { params: Promise<{ tenant
 
     form.addEventListener("submit", function (zd) {
       zd.preventDefault();
+      if (!zgoda.checked) {
+        blad.textContent = "Zaznacz zgod\\u0119, \\u017ceby si\\u0119 zapisa\\u0107.";
+        blad.style.display = "block";
+        zgoda.focus();
+        return;
+      }
       przycisk.disabled = true;
       przycisk.style.opacity = "0.6";
       blad.style.display = "none";
       fetch(K.endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ email: pole.value }),
+        body: JSON.stringify({ email: pole.value, zgoda: zgoda.checked === true, wersjaKlauzuli: K.consentVersion }),
       })
         .then(function (odp) { return odp.json().then(function (d) { return { s: odp.ok, d: d }; }); })
         .then(function (w) {
-          if (!w.s || !w.d.ok) throw new Error("odmowa");
+          if (!w.s || !w.d.ok) throw new Error(w.d && w.d.blad === "formularz_zmieniony" ? "zmieniony" : "odmowa");
           // podziekowanie w miejscu formularza; kod rabatowy tez przez textContent
           while (karta.childNodes.length > 1) karta.removeChild(karta.lastChild);
           karta.appendChild(el("div",
@@ -180,10 +217,12 @@ export async function GET(_zadanie: NextRequest, ctx: { params: Promise<{ tenant
           }
           zapamietajZamkniecie();
         })
-        .catch(function () {
+        .catch(function (e) {
           przycisk.disabled = false;
           przycisk.style.opacity = "1";
-          blad.textContent = "Nie uda\\u0142o si\\u0119 zapisa\\u0107. Spr\\u00f3buj ponownie.";
+          blad.textContent = e && e.message === "zmieniony"
+            ? "Tre\\u015b\\u0107 formularza si\\u0119 zmieni\\u0142a. Od\\u015bwie\\u017c stron\\u0119 i spr\\u00f3buj ponownie."
+            : "Nie uda\\u0142o si\\u0119 zapisa\\u0107. Spr\\u00f3buj ponownie.";
           blad.style.display = "block";
         });
     });

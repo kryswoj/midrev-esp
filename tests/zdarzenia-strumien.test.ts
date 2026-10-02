@@ -283,7 +283,7 @@ describe("Strumień zdarzeń metryk (E1)", () => {
     it("popup: „Submitted Form” w strumieniu + lustro popup.submitted w events z TYM SAMYM id", async () => {
       const popup = await utworzPopup(tenantA, { name: `ZDA popup ${znak}`, headline: "H", bodyText: "B", buttonText: "OK", discountCode: null, delaySeconds: 0 });
       await ustawAktywnosc(tenantA, popup, true);
-      const wynik = await przyjmijZgloszenie(popup, { email: `popup-${znak}@example.test` });
+      const wynik = await przyjmijZgloszenie(popup, { zgoda: true, wersjaKlauzuli: 1, email: `popup-${znak}@example.test` });
       const { rows } = await getPool().query(
         `select e.id, e.occurred_at, e.properties, e.source, e.backfill, e.unique_id, m.name, m.integration_key, m.builtin, m.can_trigger,
                 ev.event_type, ev.occurred_at as ev_occurred, ev.payload

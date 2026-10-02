@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
-import { przyjmijZgloszenie, schematZgloszenia } from "../../../../usecases/popupy/zglos-popup";
+import { KlauzulaNieaktualna, przyjmijZgloszenie, schematZgloszenia } from "../../../../usecases/popupy/zglos-popup";
 import { popupPubliczny } from "../../../../usecases/popupy/zarzadzaj";
 import { adresKlienta } from "../../../../adapters/ip-klienta";
 import { przeczytajOgraniczone } from "../../przeczytaj-ograniczone";
@@ -100,6 +100,10 @@ export async function GET(_zadanie: NextRequest, ctx: { params: Promise<{ popupI
         bodyText: popup.body_text,
         buttonText: popup.button_text,
         delaySeconds: popup.rules?.delay_seconds ?? 0,
+        // klauzula zgody (0041): tekst pokazywany przy polu wyboru i numer wersji do odeslania
+        consentText: popup.consent_wording,
+        consentVersion: popup.consent_version,
+        privacyUrl: popup.consent_privacy_url,
       },
     },
     { headers: CORS },
@@ -127,13 +131,24 @@ export async function POST(zadanie: NextRequest, ctx: { params: Promise<{ popupI
   }
   const dane = schematZgloszenia.safeParse(cialo);
   if (!dane.success) {
+    // brak zaznaczonej zgody (albo stary skrypt bez pola wyboru) to osobny, jawny powod
+    const bezZgody = dane.error.issues.some((i) => i.path[0] === "zgoda" || i.path[0] === "wersjaKlauzuli");
     return NextResponse.json(
-      { ok: false, blad: "niepoprawne_dane" },
+      { ok: false, blad: bezZgody ? "brak_zgody" : "niepoprawne_dane" },
       { status: 400, headers: CORS },
     );
   }
 
-  const wynik = await przyjmijZgloszenie(popupId, dane.data);
+  let wynik;
+  try {
+    wynik = await przyjmijZgloszenie(popupId, dane.data);
+  } catch (blad) {
+    // klauzula zmieniona dawno po wyswietleniu: osoba ma odswiezyc strone i zobaczyc nowy tekst
+    if (blad instanceof KlauzulaNieaktualna) {
+      return NextResponse.json({ ok: false, blad: "formularz_zmieniony" }, { status: 409, headers: CORS });
+    }
+    throw blad;
+  }
   if (!wynik) {
     return NextResponse.json({ ok: false, blad: "nie_znaleziono" }, { status: 404, headers: CORS });
   }
