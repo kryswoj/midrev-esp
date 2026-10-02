@@ -285,6 +285,73 @@
     font-variant-numeric: tabular-nums;
   }
   .nawigacja-pozycja[aria-current="page"] .nawigacja-licznik { background: transparent; color: var(--color-tekst-2); }
+  /* Rama panelu (src/app/t/[tenantId]/layout.tsx). Szerokości są tutaj, nie w utility,
+     bo tryb pełnego ekranu musi je nadpisać z tej samej warstwy. */
+  .uklad-panelu { --wysokosc-pelnego-ekranu: calc(100dvh - 108px); }
+  @media (min-width: 48rem) { .uklad-panelu { --wysokosc-pelnego-ekranu: 100dvh; } }
+  .uklad-pasek { width: 264px; }
+  .uklad-pasek-rozwin { display: none; }
+  .uklad-tresc { margin-inline: auto; width: 100%; max-width: 1240px; min-height: 100vh; padding-inline: 16px; }
+  @media (min-width: 48rem) { .uklad-tresc { padding-inline: 32px; } }
+
+  /* Tryb pełnego ekranu: strona renderuje <TrybPelnyEkran /> (src/app/ui/tryb-pelny-ekran.tsx).
+     Bez JS i bez migotania: znacznik przychodzi w HTML-u z serwera, :has robi resztę.
+     Rozwinięcie paska: aria-expanded przycisku (stan Reacta), też przez :has.
+     !important tylko tutaj: elementy ramy mają utility Tailwinda (px-4, grid, overflow-y-auto),
+     a utilities wygrywają z warstwą components; tryb jest celowym, wąskim nadpisaniem. */
+  .uklad-panelu:has(.uklad-tresc [data-esp-pelny-ekran]) .uklad-tresc {
+    display: flex;
+    flex-direction: column;
+    max-width: none;
+    min-height: var(--wysokosc-pelnego-ekranu);
+    padding-inline: 0;
+  }
+  .uklad-panelu:has(.uklad-tresc [data-esp-pelny-ekran]) .uklad-pasek { width: 64px !important; }
+  /* nad elementami kanwy z z-index (podpowiedź i rozwinięty pasek wychodzą nad obszar roboczy) */
+  .uklad-panelu:has(.uklad-tresc [data-esp-pelny-ekran]) .uklad-pasek-wnetrze { z-index: 50; }
+  .uklad-panelu:has(.uklad-tresc [data-esp-pelny-ekran]) .uklad-pasek-rozwin { display: flex !important; margin-top: 12px !important; }
+  .uklad-panelu:has(.uklad-tresc [data-esp-pelny-ekran]) .uklad-pasek:not(:has(.uklad-pasek-rozwin[aria-expanded="true"])) .uklad-pasek-wnetrze { padding-inline: 8px !important; }
+  .uklad-panelu:has(.uklad-tresc [data-esp-pelny-ekran]) .uklad-pasek:not(:has(.uklad-pasek-rozwin[aria-expanded="true"])) .uklad-marka { justify-content: center !important; padding-inline: 0 !important; }
+  .uklad-panelu:has(.uklad-tresc [data-esp-pelny-ekran]) .uklad-pasek:not(:has(.uklad-pasek-rozwin[aria-expanded="true"])) .uklad-pasek-ukryj-blok,
+  .uklad-panelu:has(.uklad-tresc [data-esp-pelny-ekran]) .uklad-pasek:not(:has(.uklad-pasek-rozwin[aria-expanded="true"])) .nawigacja-licznik { display: none !important; }
+  /* etykiety znikają wizualnie, ale zostają nazwą linku dla czytnika ekranu */
+  .uklad-panelu:has(.uklad-tresc [data-esp-pelny-ekran]) .uklad-pasek:not(:has(.uklad-pasek-rozwin[aria-expanded="true"])) :is(.uklad-pasek-ukryj, .nawigacja-etykieta) {
+    position: absolute !important; width: 1px !important; height: 1px !important; overflow: hidden !important; clip-path: inset(50%) !important; white-space: nowrap !important;
+  }
+  .uklad-panelu:has(.uklad-tresc [data-esp-pelny-ekran]) .uklad-pasek:not(:has(.uklad-pasek-rozwin[aria-expanded="true"])) .nawigacja-tytul {
+    height: 1px !important; margin: 0 8px 6px !important; overflow: hidden !important; background: var(--color-linia-0) !important; color: transparent !important;
+  }
+  .uklad-panelu:has(.uklad-tresc [data-esp-pelny-ekran]) .uklad-pasek:not(:has(.uklad-pasek-rozwin[aria-expanded="true"])) .nawigacja-pozycja { justify-content: center !important; padding-inline: 0 !important; }
+  .uklad-panelu:has(.uklad-tresc [data-esp-pelny-ekran]) .uklad-pasek:not(:has(.uklad-pasek-rozwin[aria-expanded="true"])) .uklad-uzytkownik { justify-content: center !important; padding-inline: 0 !important; }
+  /* podpowiedź obok ikony: jeden element position:fixed sterowany z rozwin-pasek.tsx,
+     bo przewijana lista ikon (overflow-y: auto) ucięłaby ::after */
+  .uklad-podpowiedz {
+    position: fixed;
+    z-index: 60;
+    transform: translateY(-50%);
+    padding: 5px 9px;
+    border-radius: 6px;
+    background: var(--color-tekst);
+    color: #fff;
+    font-size: var(--typ-meta);
+    line-height: 16px;
+    font-weight: 500;
+    white-space: nowrap;
+    pointer-events: none;
+    box-shadow: var(--cien-uniesiony);
+  }
+  /* rozwinięty: pełny pasek wysuwa się nad obszar roboczy, kanwa się nie przesuwa */
+  .uklad-panelu:has(.uklad-tresc [data-esp-pelny-ekran]) .uklad-pasek:has(.uklad-pasek-rozwin[aria-expanded="true"]) .uklad-pasek-wnetrze {
+    position: fixed !important;
+    height: auto !important;
+    inset-block: 0;
+    left: 0;
+    z-index: 50;
+    width: 264px;
+    border-right: 1px solid var(--color-linia);
+    box-shadow: var(--cien-uniesiony);
+  }
+
   .pasek-stanu {
     display: flex;
     align-items: flex-start;
