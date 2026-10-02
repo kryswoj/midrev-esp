@@ -17,6 +17,8 @@ import { getPool } from "../adapters/db/pool";
  */
 
 export const ROZMIAR_STRONY = 50;
+/** Powyzej tej liczby licznik mowi "ponad 100 000" zamiast liczyc dalej. */
+export const LIMIT_LICZNIKA = 100_000;
 export const STANY_ZGODY = ["granted", "withdrawn", "brak"] as const;
 export type StanZgodyFiltr = (typeof STANY_ZGODY)[number];
 
@@ -35,8 +37,10 @@ export interface WierszListyProfili {
 
 export interface StronaProfili {
   wiersze: WierszListyProfili[];
-  /** liczba WSZYSTKICH profili pasujacych do wyszukiwania i filtra (nie tylko strony) */
+  /** liczba WSZYSTKICH profili pasujacych do wyszukiwania i filtra (nie tylko strony), z sufitem */
   razem: number;
+  /** true: pasujacych jest wiecej niz LIMIT_LICZNIKA, `razem` to sufit */
+  ponadLimit: boolean;
   /** kursor nastepnej (starszej) strony albo null */
   dalej: string | null;
   /** kursor poprzedniej (nowszej) strony albo null; null tez na pierwszej stronie */
@@ -96,7 +100,7 @@ export function warunekWyszukiwania(qSurowe: string, n: number): { sql: string; 
   if (!q) return null;
   const p = (i: number) => `$${n + i}`;
   if (q.includes("@")) {
-    return { sql: `lower(p.email) like ${p(0)} escape '\\'`, parametry: [`${uciekajLike(q)}%`] };
+    return { sql: `p.email is not null and lower(p.email) like ${p(0)} escape '\\'`, parametry: [`${uciekajLike(q)}%`] };
   }
   if (/^[+\d\s().\-/]+$/.test(q)) {
     const cyfry = q.replace(/\D/g, "");
@@ -105,7 +109,7 @@ export function warunekWyszukiwania(qSurowe: string, n: number): { sql: string; 
         : cyfry.startsWith("00") ? [`+${cyfry.slice(2)}%`]
         : [`+${cyfry}%`, `+48${cyfry}%`];
       return {
-        sql: `(${wzorce.map((_, i) => `midrev_telefon_e164(p.phone) like ${p(i)}`).join(" or ")})`,
+        sql: `p.phone is not null and (${wzorce.map((_, i) => `midrev_telefon_e164(p.phone) like ${p(i)}`).join(" or ")})`,
         parametry: wzorce,
       };
     }
@@ -113,13 +117,15 @@ export function warunekWyszukiwania(qSurowe: string, n: number): { sql: string; 
   const slowa = q.split(" ").filter(Boolean).slice(0, 2).map((s) => `${uciekajLike(s)}%`);
   if (slowa.length === 1) {
     return {
-      sql: `(lower(p.email) like ${p(0)} escape '\\' or lower(p.first_name) like ${p(0)} escape '\\' or lower(p.last_name) like ${p(0)} escape '\\')`,
+      // "is not null" przy kazdej galezi: indeksy prefiksowe sa czesciowe (where ... is not null)
+      sql: `((p.email is not null and lower(p.email) like ${p(0)} escape '\\') or (p.first_name is not null and lower(p.first_name) like ${p(0)} escape '\\') or (p.last_name is not null and lower(p.last_name) like ${p(0)} escape '\\'))`,
       parametry: slowa,
     };
   }
   return {
-    sql: `((lower(p.first_name) like ${p(0)} escape '\\' and lower(p.last_name) like ${p(1)} escape '\\')
-        or (lower(p.first_name) like ${p(1)} escape '\\' and lower(p.last_name) like ${p(0)} escape '\\'))`,
+    sql: `p.first_name is not null and p.last_name is not null
+        and ((lower(p.first_name) like ${p(0)} escape '\\' and lower(p.last_name) like ${p(1)} escape '\\')
+          or (lower(p.first_name) like ${p(1)} escape '\\' and lower(p.last_name) like ${p(0)} escape '\\'))`,
     parametry: slowa,
   };
 }
@@ -186,7 +192,9 @@ export async function stronaProfili(tenantId: string, zapytanie: ZapytanieListy 
       parametry,
     ),
     pool.query<{ ile: string }>(
-      `select count(*)::text as ile from profiles p ${zgoda ? ZGODA_LATERAL : ""} where ${wspolneWhere}`,
+      // licznik z sufitem: przy filtrze zgody liczenie to sonda indeksu na profil, wiec liczymy
+      // najwyzej LIMIT_LICZNIKA + 1 wierszy (review Codeksa R1); UI pokazuje wtedy "ponad N"
+      `select count(*)::text as ile from (select 1 from profiles p ${zgoda ? ZGODA_LATERAL : ""} where ${wspolneWhere} limit ${LIMIT_LICZNIKA + 1}) x`,
       parametryLiczenia,
     ),
   ]);
@@ -200,7 +208,8 @@ export async function stronaProfili(tenantId: string, zapytanie: ZapytanieListy 
   const kursor = (w: { kursor_czas: string; id: string }) => zakodujKursor({ czas: w.kursor_czas, id: w.id });
   return {
     wiersze: widoczne.map(({ kursor_czas: _k, ...w }) => w),
-    razem: Number(licznik.rows[0].ile),
+    razem: Math.min(Number(licznik.rows[0].ile), LIMIT_LICZNIKA),
+    ponadLimit: Number(licznik.rows[0].ile) > LIMIT_LICZNIKA,
     // dalej (starsze): gdy szlismy w dol i byl nadmiar, albo gdy cofalismy sie (wtedy zawsze sa starsze)
     dalej: ostatni && (przed ? true : nadmiar) ? kursor(ostatni) : null,
     // wstecz (nowsze): gdy przyszlismy kursorem "po", albo cofajac sie byl nadmiar

@@ -70,7 +70,7 @@ export default async function Profile({
         opis="Tożsamość profilu to znormalizowany adres e-mail: bez wielkości liter i bez spacji na brzegach. Dzięki temu Anna@Sklep.pl i anna@sklep.pl to jedna osoba, a nie dwie kartoteki. Kliknięcie w wiersz otwiera kartotekę osoby: zgody z datą i źródłem, oś czasu, historia wysyłek oraz eksport i usunięcie danych."
         akcja={
           <span className="tekst-licznik !text-[var(--color-tekst-3)]">
-            {odmien(strona.razem, "osoba", "osoby", "osób").replace(/^(\d+)/, (n) => Number(n).toLocaleString("pl-PL"))}{filtrowane ? " pasuje" : ""}
+            {strona.ponadLimit ? "ponad " : ""}{odmien(strona.razem, "osoba", "osoby", "osób").replace(/^(\d+)/, (n) => Number(n).toLocaleString("pl-PL"))}{filtrowane ? " pasuje" : ""}
           </span>
         }
       />

@@ -156,6 +156,11 @@ describe("Popup: klauzula zgody i lista (0041)", () => {
     expect(rows[0]).toEqual({ tenant_id: tenantA, list_id: null });
   });
 
+  it("popupu z wersjami klauzuli nie da się usunąć (dowód zgody), tenant usuwa się w całości", async () => {
+    await expect(pool().query("delete from popups where tenant_id = $1 and id = $2", [tenantA, popupA])).rejects.toThrow(/popup_consent_versions/);
+    expect((await wersjeKlauzuli(tenantA, popupA)).length).toBeGreaterThan(0);
+  });
+
   it("popup bez klauzuli (np. utworzony przez stary kod po rollbacku) nie wyświetla się w sklepie", async () => {
     const { rows } = await pool().query(
       "insert into popups (tenant_id, name, headline, body_text, button_text, active, created_at) values ($1, 'POPK stary', 'H', 'B', 'OK', true, now() + interval '1 minute') returning id",

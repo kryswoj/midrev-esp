@@ -37,7 +37,11 @@ create table popup_consent_versions (
   superseded_at timestamptz,
   unique (tenant_id, id),
   unique (popup_id, version),
-  foreign key (tenant_id, popup_id) references popups (tenant_id, id) on delete cascade
+  -- Wersja jest dowodem zgody: samego popupu NIE da sie usunac, dopoki ma wersje (no action;
+  -- review Codeksa R1). Znika wylacznie razem z tenantem (kaskada z tenants ponizej; no action
+  -- sprawdza sie na koncu instrukcji, wiec usuniecie tenanta przechodzi).
+  foreign key (tenant_id, popup_id) references popups (tenant_id, id),
+  foreign key (tenant_id) references tenants (id) on delete cascade
 );
 
 -- Wersja jest dowodem: tresci, adresu i numeru nie wolno zmieniac po zapisie. Dozwolone jest
@@ -82,7 +86,7 @@ alter table consents
 -- Wersja 1 dla istniejacych popupow (patrz naglowek).
 insert into popup_consent_versions (tenant_id, popup_id, version, wording)
 select p.tenant_id, p.id, 1,
-       'Zapisuję się na newsletter ' || coalesce(nullif(btrim(t.sender_company_name), ''), t.name)
+       'Zapisuję się na newsletter ' || left(coalesce(nullif(btrim(t.sender_company_name), ''), t.name), 200)
        || ' i zgadzam się na otrzymywanie wiadomości e-mail z ofertami i nowościami. '
        || 'Zgodę mogę wycofać w każdej chwili, klikając link w stopce wiadomości.'
   from popups p
