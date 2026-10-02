@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
 import { AlertTriangle, Check, ChevronRight } from "lucide-react";
 import { formaOdmiany } from "../../../../../../domain/liczebniki";
-import type { BladGrafu } from "../../../../../../domain/automatyzacje/graf";
+import { BLAD_BEZ_AKCJI, type BladGrafu } from "../../../../../../domain/automatyzacje/graf";
 import type { Uklad } from "../../../../../../domain/automatyzacje/uklad";
 
 /**
@@ -24,7 +24,7 @@ export function ListaProblemow({
   /** pokazac "Gotowa do wlaczenia", gdy nie ma problemow (szkic) */
   gotowa: boolean;
   nazwaKroku: (wezelId: string) => string | null;
-  onWybierz: (wezelId: string | null) => void;
+  onWybierz: (wezelId: string | null, tresc?: string) => void;
 }) {
   const [otwarta, setOtwarta] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
@@ -55,7 +55,7 @@ export function ListaProblemow({
         {n} {formaOdmiany(n, "rzecz", "rzeczy", "rzeczy")} do uzupełnienia
       </button>
       {otwarta ? (
-        <div role="dialog" aria-label="Do uzupełnienia przed włączeniem" className="absolute right-0 top-10 z-40 w-[360px] max-w-[calc(100vw-32px)] rounded-[10px] border border-[var(--color-linia)] bg-white p-1.5 shadow-[var(--cien-uniesiony)]">
+        <div role="dialog" aria-label="Do uzupełnienia przed włączeniem" className="absolute left-0 top-10 z-40 w-[360px] max-w-[calc(100vw-32px)] rounded-[10px] border border-[var(--color-linia)] bg-white p-1.5 shadow-[var(--cien-uniesiony)]">
           <div className="etykieta px-2.5 pb-1 pt-1.5">Do uzupełnienia przed włączeniem</div>
           <ul>
             {bledy.map((b, i) => {
@@ -64,11 +64,11 @@ export function ListaProblemow({
                 <li key={`${b.wezelId}|${b.tresc}|${i}`}>
                   <button
                     type="button"
-                    onClick={() => { setOtwarta(false); onWybierz(b.wezelId); }}
+                    onClick={() => { setOtwarta(false); onWybierz(b.wezelId, b.tresc); }}
                     className="flex w-full items-start gap-2 rounded-md px-2.5 py-2 text-left hover:bg-[var(--color-akcent-tlo)]"
                   >
                     <span className="min-w-0 flex-1">
-                      <span className="block text-[12px] font-semibold leading-4 text-[var(--color-tekst)]">{krok ?? "Ustawienia automatyzacji"}</span>
+                      <span className="block text-[12px] font-semibold leading-4 text-[var(--color-tekst)]">{b.tresc === BLAD_BEZ_AKCJI ? "Brak kroku działania" : krok ?? "Ustawienia automatyzacji"}</span>
                       <span className="mt-0.5 block text-[13px] leading-[18px] text-[var(--color-tekst-2)]">{b.tresc}</span>
                     </span>
                     <ChevronRight size={14} className="mt-0.5 shrink-0 text-[var(--color-tekst-3)]" aria-hidden="true" />
@@ -85,8 +85,9 @@ export function ListaProblemow({
 
 // ── Minimapa ─────────────────────────────────────────────────────────────────
 
-const MINI_W = 160;
-const MINI_H = 100;
+// cala minimapa z ramka i odstepem ma 160 x 100 px
+const MINI_W = 148;
+const MINI_H = 88;
 
 export function Minimapa({
   uklad,
@@ -147,7 +148,7 @@ export function Minimapa({
   const vx = ogranicz(widok.x, 0, uklad.szerokosc), vy = ogranicz(widok.y, 0, uklad.wysokosc);
   const vw = ogranicz(widok.x + widok.w, 0, uklad.szerokosc) - vx, vh = ogranicz(widok.y + widok.h, 0, uklad.wysokosc) - vy;
   return (
-    <div className="rounded-lg border border-[var(--color-linia)] bg-white/95 p-1.5 shadow-[var(--cien-uniesiony)]" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
+    <div className="rounded-lg border border-[var(--color-linia)] bg-white/95 p-[5px] shadow-[var(--cien-uniesiony)]" onPointerDown={(e) => e.stopPropagation()} onClick={(e) => e.stopPropagation()}>
       <svg width={MINI_W} height={MINI_H} viewBox={`0 0 ${MINI_W} ${MINI_H}`} role="img" aria-label="Minimapa automatyzacji: kliknij, żeby przejść w to miejsce" className="block cursor-pointer" onClick={przejdz}>
         <g transform={`translate(${(MINI_W - w) / 2} ${(MINI_H - h) / 2})`}>
           {uklad.wezly.map((p) => (

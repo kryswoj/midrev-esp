@@ -50,6 +50,7 @@ import {
   kluczMetryki,
   niedokonczoneWarunki,
   szkicDoZapisu,
+  BLAD_BEZ_AKCJI,
   tytulWezla,
   type BladGrafu,
   type Graf,
@@ -620,8 +621,16 @@ export function Kanwa({
   }, [mobilny]);
 
   // przejscie do kroku (lista problemow, minimapa): zaznacz, przewin do karty, fokus na pierwszym bledzie
-  const przejdzDoKroku = useCallback((wezelId: string | null) => {
+  const przejdzDoKroku = useCallback((wezelId: string | null, tresc?: string) => {
     setMenuSlot(null);
+    // brak akcji: nie ma czego poprawiac w wyzwalaczu, otwieramy "+" pod nim (dodanie kroku)
+    if (tresc === BLAD_BEZ_AKCJI && wezelId) {
+      setZaznaczony(null);
+      setPanelUstawien(false);
+      setMenuSlot({ po: wezelId, port: "next" });
+      requestAnimationFrame(() => document.querySelector(`[data-slot="${CSS.escape(wezelId)}:next"] button`)?.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" }));
+      return;
+    }
     if (!wezelId) { setZaznaczony(null); setPanelUstawien(true); return; }
     setPanelUstawien(false);
     setZaznaczony(wezelId);
@@ -918,7 +927,7 @@ export function Kanwa({
                   grafV2Dostepny={start.grafV2Dostepny}
                   emaile={emaile}
                   // niedokonczone warunki maja komunikat przy samym polu; tu reszta problemow kroku
-                  bledy={bledyWezla(wezelZaznaczony.id).filter((t) => !niedokonczone.some((n) => n.wezelId === wezelZaznaczony.id && n.tresc === t))}
+                  bledy={bledyWezla(wezelZaznaczony.id).filter((t) => t !== BLAD_BEZ_AKCJI && !niedokonczone.some((n) => n.wezelId === wezelZaznaczony.id && n.tresc === t))}
                   ostrzezenia={ostrzezenia.filter((o) => o.wezelId === wezelZaznaczony.id).map((o) => o.tresc)}
                   tenantId={tenantId}
                   flowId={flowId}
