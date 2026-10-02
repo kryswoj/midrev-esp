@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
 import { useParams } from "next/navigation";
 import { ImagePlus, Images, Trash2, Upload, X } from "lucide-react";
 import { PoleUrl } from "./kontrolki";
+import { AKCEPTOWANE_OBRAZY, pobierzBiblioteke, rozmiarPliku, wyslijObraz, type ObrazBiblioteki } from "./obrazy-klient";
 
 /**
  * Pole obrazu bloku (Obraz, Produkt): adres URL jak dotąd ORAZ biblioteka obrazów sklepu
@@ -15,43 +16,9 @@ import { PoleUrl } from "./kontrolki";
  * Serwer i tak sprawdza tenant z sesją — adres to tylko deklaracja.
  */
 
-const MAKS_BAJTOW = 5 * 1024 * 1024;
-const AKCEPTOWANE = "image/png,image/jpeg,image/gif,image/webp";
-
-interface ObrazBiblioteki {
-  id: string;
-  url: string;
-  sciezka: string;
-  nazwa: string;
-  rozmiar: number;
-  szerokosc: number;
-  wysokosc: number;
-  wgranoO: string;
-  blokadaUsuniecia: string | null;
-  szkice: number;
-}
-
-function rozmiar(bajty: number): string {
-  if (bajty >= 1024 * 1024) return `${(bajty / 1024 / 1024).toFixed(1).replace(".", ",")} MB`;
-  return `${Math.max(1, Math.round(bajty / 1024))} KB`;
-}
-
-async function wyslijPlik(tenantId: string, plik: File): Promise<{ ok: true; obraz: ObrazBiblioteki } | { ok: false; blad: string }> {
-  if (plik.size > MAKS_BAJTOW) return { ok: false, blad: `„${plik.name}" ma ${rozmiar(plik.size)}. Limit to 5 MB.` };
-  if (plik.size === 0) return { ok: false, blad: "Plik jest pusty." };
-  try {
-    const odp = await fetch(`/api/obrazy/${tenantId}`, {
-      method: "POST",
-      headers: { "x-nazwa-pliku": encodeURIComponent(plik.name), "content-type": "application/octet-stream" },
-      body: plik,
-    });
-    const dane = await odp.json().catch(() => null);
-    if (!odp.ok || !dane?.ok) return { ok: false, blad: dane?.blad ?? `Serwer odrzucił plik (${odp.status}).` };
-    return { ok: true, obraz: dane.obraz };
-  } catch {
-    return { ok: false, blad: "Nie udało się wysłać pliku — sprawdź połączenie i spróbuj ponownie." };
-  }
-}
+const AKCEPTOWANE = AKCEPTOWANE_OBRAZY;
+const rozmiar = rozmiarPliku;
+const wyslijPlik = wyslijObraz;
 
 export function PoleObrazu({ etykieta, wartosc, onZmiana, podpowiedz }: { etykieta: string; wartosc: string; onZmiana: (w: string) => void; podpowiedz?: ReactNode }) {
   const params = useParams<{ tenantId?: string }>();
@@ -103,7 +70,7 @@ export function PoleObrazu({ etykieta, wartosc, onZmiana, podpowiedz }: { etykie
               {blad}
             </p>
           ) : (
-            <p className="text-[12px] leading-[17px] text-[var(--color-tekst-3)]">PNG, JPEG, GIF albo WebP, do 5 MB. Obraz trafia do biblioteki sklepu.</p>
+            <p className="text-[12px] leading-[17px] text-[var(--color-tekst-3)]">PNG, JPEG, GIF albo WebP, do 5 MB. Obraz trafia do biblioteki sklepu. Możesz też upuścić plik na płótno.</p>
           )}
           {biblioteka ? (
             <OknoBiblioteki
@@ -122,7 +89,7 @@ export function PoleObrazu({ etykieta, wartosc, onZmiana, podpowiedz }: { etykie
   );
 }
 
-function OknoBiblioteki({ tenantId, wybrany, onWybor, onZamknij }: { tenantId: string; wybrany: string; onWybor: (url: string) => void; onZamknij: () => void }) {
+export function OknoBiblioteki({ tenantId, wybrany, onWybor, onZamknij }: { tenantId: string; wybrany: string; onWybor: (url: string) => void; onZamknij: () => void }) {
   const [obrazy, setObrazy] = useState<ObrazBiblioteki[] | null>(null);
   const [blad, setBlad] = useState<string | null>(null);
   const [wgrywa, setWgrywa] = useState(false);
@@ -133,13 +100,11 @@ function OknoBiblioteki({ tenantId, wybrany, onWybor, onZamknij }: { tenantId: s
   const zamknijRef = useRef<HTMLButtonElement>(null);
 
   const wczytaj = useCallback(async () => {
-    try {
-      const odp = await fetch(`/api/obrazy/${tenantId}`, { cache: "no-store" });
-      const dane = await odp.json().catch(() => null);
-      if (!odp.ok || !dane?.ok) throw new Error(dane?.blad ?? String(odp.status));
-      setObrazy(dane.obrazy);
+    const w = await pobierzBiblioteke(tenantId);
+    if (w.ok) {
+      setObrazy(w.obrazy);
       setBlad(null);
-    } catch {
+    } else {
       setBlad("Nie udało się wczytać biblioteki. Zamknij okno i spróbuj ponownie.");
       setObrazy([]);
     }
@@ -207,7 +172,11 @@ function OknoBiblioteki({ tenantId, wybrany, onWybor, onZamknij }: { tenantId: s
         {komunikat && !blad ? <p role="status" className="border-b border-[var(--color-ok-ramka)] bg-[var(--color-ok-tlo)] px-5 py-2.5 text-[13px] text-[var(--color-ok)]">{komunikat}</p> : null}
         <div className="min-h-[200px] overflow-y-auto p-5">
           {obrazy === null ? (
-            <p className="text-[13px] text-[var(--color-tekst-2)]">Wczytuję bibliotekę…</p>
+            <ul className="grid grid-cols-2 gap-4 sm:grid-cols-3" aria-label="Wczytuję bibliotekę">
+              {[0, 1, 2].map((i) => (
+                <li key={i} className="aspect-[4/3] animate-pulse rounded-[10px] bg-[var(--color-powierzchnia-2)]" />
+              ))}
+            </ul>
           ) : obrazy.length === 0 ? (
             <div className="pusty-stan">
               <h3>Biblioteka jest pusta</h3>
