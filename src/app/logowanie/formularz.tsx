@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
-import { Alert, Button, Field, Input } from "../ui";
+import { Alert, Field, Input, PrzyciskFormularza } from "../ui";
 import { zalogujAkcja } from "./akcje";
 
 // Formularz logowania jako komponent klientowy z useActionState: po błędnym
@@ -58,7 +58,7 @@ export function FormularzLogowania({ dalej }: { dalej?: string }) {
       </div>
 
       <div className="mt-7 [&>span]:w-full [&_button]:w-full">
-        <Button type="submit" className="h-10 min-h-10 w-full hover:bg-[var(--color-akcent-mocny)] active:bg-[#5f2f99] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-akcent)]">Zaloguj się</Button>
+        <PrzyciskFormularza trwa="Loguję…" className="h-10 min-h-10 w-full hover:bg-[var(--color-akcent-mocny)] active:bg-[#5f2f99] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-akcent)]">Zaloguj się</PrzyciskFormularza>
       </div>
     </form>
   );

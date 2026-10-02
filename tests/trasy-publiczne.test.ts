@@ -43,7 +43,8 @@ const OCZEKIWANE_PUBLICZNE = new Set([
 
 /** Wzorce tras wymagające sesji panelu. */
 const OCZEKIWANE_CHRONIONE_PREFIKSY = ["/t/[tenantId]", "/api/import/[tenantId]", "/api/obrazy/[tenantId]"];
-const OCZEKIWANE_CHRONIONE_DOKLADNE = new Set(["/"]);
+// /api/wersja: strażnik wersji panelu, tylko dla zalogowanych (audyt UX 02.10)
+const OCZEKIWANE_CHRONIONE_DOKLADNE = new Set(["/", "/api/wersja"]);
 
 function trasyZDrzewa(katalog: string): string[] {
   const wynik: string[] = [];

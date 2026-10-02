@@ -367,8 +367,28 @@ log "kod: $(cat "$REL/REVISION")"
 
 log "npm ci (pełne: tsx dla workera i migracji jest w devDependencies)"
 jako_budowniczy "$REL" npm ci --no-audit --no-fund --loglevel=error
-log "next build"
-jako_budowniczy "$REL" npm run build
+log "next build (wersja panelu z REVISION: next.config.ts → deploymentId, /api/wersja)"
+# Stały klucz szyfrowania server actions (opcjonalny, production.env). Next używa go też
+# jako soli ID akcji, więc z tym samym kluczem niezmieniona akcja zachowuje ID między
+# wydaniami i karta otwarta przed deployem dalej może zapisać formularz. Bez klucza
+# każdy build losuje własny (jak dotąd). Klucz idzie do buildu przez stdin, nie przez
+# argv (runuser/env widać w `ps` przez cały build), i NIGDY nie trafia do logu.
+# Wartość jest i tak wkompilowana w .next (tak działa Next), a ten sam plik czyta potem
+# serwis midrev-esp-web jako EnvironmentFile.
+# xtrace (bash -x deploy.sh) wypisałby przypisanie z wartością: wyłączamy go na czas pracy z kluczem
+byl_xtrace=0; [[ $- == *x* ]] && byl_xtrace=1
+{ set +x; } 2>/dev/null
+klucz_akcji=$(czytaj_zmienna "$ESP_ENV_FILE" NEXT_SERVER_ACTIONS_ENCRYPTION_KEY)
+if [[ -n $klucz_akcji ]]; then
+	log "klucz akcji: stały (production.env)"
+	jako_budowniczy "$REL" bash -c 'IFS= read -r NEXT_SERVER_ACTIONS_ENCRYPTION_KEY && export NEXT_SERVER_ACTIONS_ENCRYPTION_KEY && exec npm run build' <<<"$klucz_akcji"
+else
+	log "klucz akcji: losowy per build (brak NEXT_SERVER_ACTIONS_ENCRYPTION_KEY w production.env)"
+	jako_budowniczy "$REL" npm run build
+fi
+unset klucz_akcji
+((byl_xtrace)) && set -x
+unset byl_xtrace
 [[ -f $REL/.next/BUILD_ID ]] || zgin "build nie zostawił .next/BUILD_ID"
 
 # --- symlinki i prawa ---

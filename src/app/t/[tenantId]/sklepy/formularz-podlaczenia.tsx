@@ -2,7 +2,7 @@
 
 import { useActionState } from "react";
 import { podlaczSklepAkcja } from "../../../akcje";
-import { Alert, Button, Field, Input } from "../../../ui";
+import { Alert, Field, Input, PrzyciskFormularza } from "../../../ui";
 
 // Formularz podłączenia sklepu przez useActionState (audyt B3/B4): błąd
 // weryfikacji kluczy pokazuje się TUTAJ, a wpisany adres i klucze wracają
@@ -66,9 +66,7 @@ export function FormularzPodlaczenia({ tenantId }: { tenantId: string }) {
             />
           </Field>
           <div className="flex flex-wrap items-center gap-3 pt-1">
-            <Button type="submit" disabled={trwa}>
-              {trwa ? "Sprawdzam klucze…" : "Sprawdź i podłącz"}
-            </Button>
+            <PrzyciskFormularza trwa="Sprawdzam klucze…" trwaZewnetrznie={trwa}>Sprawdź i podłącz</PrzyciskFormularza>
             {trwa ? (
               <span className="tekst-pomocniczy !text-[var(--color-tekst-3)]">
                 Pytamy sklep o każde uprawnienie osobno — to trwa kilka sekund.

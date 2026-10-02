@@ -1,30 +1,15 @@
 "use client";
 
-import Link from "next/link";
+import { EkranBledu } from "./ui/ekran-bledu";
 
 /**
- * Nieprzewidziany wyjątek bez tej strony to surowa pięćsetka poza systemem "Noc".
- * Szczegół błędu zostaje w logu serwera, nie na ekranie operatora.
+ * Nieprzewidziany wyjątek bez tej strony to surowa pięćsetka poza systemem „Dzień”.
+ * Błąd starej karty po wdrożeniu dostaje komunikat „odśwież stronę” (ui/blad-wersji.ts).
  */
-export default function Blad({ reset }: { error: Error & { digest?: string }; reset: () => void }) {
+export default function Blad({ error, reset }: { error: Error & { digest?: string }; reset: () => void }) {
   return (
     <main className="flex min-h-screen items-center justify-center bg-[var(--color-plotno)] px-6">
-      <div className="karta max-w-md p-6">
-        <p className="etykieta mb-2">Błąd</p>
-        <h1>Coś poszło nie tak</h1>
-        <p className="mt-2 text-[13px] text-[var(--color-tekst-2)]">
-          Panel nie zdołał wyrenderować tej strony. Spróbuj ponownie, a jeśli błąd wraca,
-          zgłoś go z adresem strony, na której wystąpił.
-        </p>
-        <div className="mt-4 flex gap-2">
-          <button className="przycisk" type="button" onClick={reset}>
-            Spróbuj ponownie
-          </button>
-          <Link href="/" className="przycisk przycisk-wtorny">
-            Wróć do listy sklepów
-          </Link>
-        </div>
-      </div>
+      <EkranBledu error={error} reset={reset} powrot={{ href: "/", etykieta: "Wróć do listy sklepów" }} />
     </main>
   );
 }
