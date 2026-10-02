@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { adresSledzenia } from "../../../config";
 import { aktywnyPopup } from "../../../usecases/popupy/zarzadzaj";
+import { WERSJA_SKRYPTU } from "../wersja-skryptu";
 
 /**
  * Skrypt on-site (Epik F, AD-19): sklep wkleja jeden tag
@@ -19,9 +20,6 @@ import { aktywnyPopup } from "../../../usecases/popupy/zarzadzaj";
  * zeby nie dalo sie domknac tagu </script> trescia popupu.
  */
 
-// 1.1.0 (0041): klauzula zgody przy niezaznaczonym polu wyboru, link do polityki prywatnosci,
-// odsylany numer wersji klauzuli. Bez zaznaczenia zgloszenie nie wychodzi (i serwer je odrzuca).
-export const WERSJA_SKRYPTU = "1.1.0";
 
 const schematId = z.string().uuid();
 

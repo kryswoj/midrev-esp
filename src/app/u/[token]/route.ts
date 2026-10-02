@@ -70,7 +70,7 @@ function strona(opcje: { tytul: string; tresc: string; status?: number }) {
   const html = `<!doctype html><html lang="pl"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex,nofollow">
 <title>${bezpieczny(opcje.tytul)}</title>
 <style>
-  :root{--plotno:#f6f7f9;--powierzchnia:#fff;--linia:#e3e6ea;--tekst:#16181d;--tekst-2:#5b616b;--tekst-3:#868d97;--akcent:#814ac8;--akcent-mocny:#6d38ad;--ok:#14795d;--ok-tlo:#eaf7f2;--blad:#b52a24;--blad-tlo:#fff0ef}
+  :root{--plotno:#f6f7f9;--powierzchnia:#fff;--linia:#e3e6ea;--tekst:#16181d;--tekst-2:#5b616b;--tekst-3:#697079;--akcent:#814ac8;--akcent-mocny:#6d38ad;--ok:#14795d;--ok-tlo:#eaf7f2;--blad:#b52a24;--blad-tlo:#fff0ef}
   *{box-sizing:border-box}
   body{margin:0;min-height:100vh;background:var(--plotno);color:var(--tekst);font:15px/1.6 Inter,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
   main{display:grid;place-items:center;min-height:100vh;padding:24px 16px}

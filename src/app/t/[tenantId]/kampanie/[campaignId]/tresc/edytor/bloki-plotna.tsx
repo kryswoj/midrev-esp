@@ -46,7 +46,7 @@ const FLEX: Record<string, string> = { left: "flex-start", center: "center", rig
 function ZastepczyObraz({ opis, wysokosc = 180, ikona: Ikona = ImageIcon }: { opis: string; wysokosc?: number; ikona?: typeof ImageIcon }) {
   return (
     <div
-      className="flex w-full flex-col items-center justify-center gap-2 rounded-md border-2 border-dashed border-[#cdd2d9] bg-[#f7f8fa] text-center text-[13px] text-[#868d97]"
+      className="flex w-full flex-col items-center justify-center gap-2 rounded-md border-2 border-dashed border-[#cdd2d9] bg-[#f7f8fa] text-center text-[13px] text-[#697079]"
       style={{ height: wysokosc }}
     >
       <Ikona size={26} strokeWidth={1.5} aria-hidden="true" />
@@ -506,7 +506,7 @@ export function WidokBloku({ blok, styl, mobile, tylkoDoOdczytu, onZmiana, edycj
     case "social":
       return (
         <div className="flex flex-wrap gap-2" style={{ justifyContent: FLEX[blok.wyrownanie], fontFamily: font }}>
-          {blok.linki.length === 0 ? <span className="text-[13px] text-[#868d97]">Dodaj profile w panelu po prawej</span> : null}
+          {blok.linki.length === 0 ? <span className="text-[13px] text-[#697079]">Dodaj profile w panelu po prawej</span> : null}
           {blok.linki.map((l, i) => {
             const siec = SIECI[l.siec];
             const [tlo, kolor, obrys] = blok.styl === "kolor" ? [siec.kolor, "#ffffff", siec.kolor] : blok.styl === "ciemny" ? ["#1f2328", "#ffffff", "#1f2328"] : ["#ffffff", "#1f2328", "#cdd2d9"];

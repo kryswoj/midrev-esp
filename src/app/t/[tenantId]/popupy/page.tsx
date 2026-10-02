@@ -3,7 +3,7 @@ import { wymaganyTenant } from "../../../autoryzacja";
 import { listyTenanta } from "../../../../adapters/db/repozytoria";
 import { formatujDate } from "../../../../domain/daty";
 import { domyslnaKlauzula, nazwaFirmyTenanta, popupyTenanta, wersjeKlauzuli } from "../../../../usecases/popupy/zarzadzaj";
-import { Badge, Button, Card, CardBody, CardHeader, EmptyState, Icon, MobileList, MobileListItem, Table, TBody, Td, Th, THead } from "../../../ui";
+import { Badge, Button, Card, CardBody, CardHeader, EmptyState, Icon, MobileList, MobileListItem, PrzyciskFormularza, Table, TBody, Td, Th, THead } from "../../../ui";
 import { Komunikat, Naglowek } from "../naglowek";
 import { przelaczPopupAkcja } from "./akcje";
 import { FormularzKlauzuli, FormularzPopupu } from "./formularz-popupu";
@@ -109,7 +109,7 @@ export default async function Popupy({
                         <input type="hidden" name="tenantId" value={tenantId} />
                         <input type="hidden" name="popupId" value={p.id} />
                         <input type="hidden" name="wlacz" value={p.active ? "0" : "1"} />
-                        <Button variant="secondary" size="sm" type="submit">{p.active ? "Wyłącz" : "Włącz"}</Button>
+                        <PrzyciskFormularza variant="secondary" size="sm" trwa={p.active ? "Wyłączam…" : "Włączam…"}>{p.active ? "Wyłącz" : "Włącz"}</PrzyciskFormularza>
                       </form>
                     </Td>
                   </tr>
@@ -139,7 +139,7 @@ export default async function Popupy({
                       <input type="hidden" name="tenantId" value={tenantId} />
                       <input type="hidden" name="popupId" value={p.id} />
                       <input type="hidden" name="wlacz" value={p.active ? "0" : "1"} />
-                      <Button variant="secondary" size="sm" type="submit">{p.active ? "Wyłącz" : "Włącz"}</Button>
+                      <PrzyciskFormularza variant="secondary" size="sm" trwa={p.active ? "Wyłączam…" : "Włączam…"}>{p.active ? "Wyłącz" : "Włącz"}</PrzyciskFormularza>
                     </form>
                   </div>
                 </MobileListItem>

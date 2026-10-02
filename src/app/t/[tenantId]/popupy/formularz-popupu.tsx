@@ -2,7 +2,7 @@
 
 import { useActionState, useState } from "react";
 import { utworzPopupAkcja, zmienKlauzuleAkcja } from "./akcje";
-import { Alert, Button, Field, Input, Select, Textarea } from "../../../ui";
+import { Alert, Field, Input, PrzyciskFormularza, Select, Textarea } from "../../../ui";
 
 export interface ListaDoWyboru {
   id: string;
@@ -113,7 +113,7 @@ export function FormularzPopupu({ tenantId, listy, domyslnaKlauzula }: { tenantI
           <Field label="Pokaż po (sekundy)" htmlFor="delaySeconds" className="max-w-[220px]">
             <Input id="delaySeconds" name="delaySeconds" type="number" min={0} max={600} defaultValue={stan?.wartosci?.delaySeconds ?? "5"} />
           </Field>
-          <Button type="submit" disabled={trwa} powodBlokady={trwa ? "Trwa zapisywanie formularza." : undefined}>{trwa ? "Zapisuję…" : "Zapisz formularz"}</Button>
+          <PrzyciskFormularza trwa="Zapisuję…" trwaZewnetrznie={trwa}>Zapisz formularz</PrzyciskFormularza>
         </div>
       </section>
     </form>
@@ -146,7 +146,7 @@ export function FormularzKlauzuli({
           listId: stan?.wartosci?.listId ?? biezace.listId,
         }}
       />
-      <Button type="submit" disabled={trwa} powodBlokady={trwa ? "Trwa zapisywanie." : undefined}>{trwa ? "Zapisuję…" : "Zapisz zgodę i listę"}</Button>
+      <PrzyciskFormularza trwa="Zapisuję…" trwaZewnetrznie={trwa}>Zapisz zgodę i listę</PrzyciskFormularza>
     </form>
   );
 }
