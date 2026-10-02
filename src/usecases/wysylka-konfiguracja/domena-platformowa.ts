@@ -7,6 +7,7 @@ import {
   decyzjaDmarc,
   porownajCel,
   rekordyPlatformowe,
+  nazwaWzgledna,
   rozbierzWpis,
   zaproponujUklad,
   type DecyzjaDmarc,
@@ -15,6 +16,18 @@ import {
   type UkladDomeny,
 } from "../../domain/email/domena-platformowa";
 import { dostawcaPoKluczu, rozpoznajDostawce, type DostawcaDns } from "../../domain/email/dostawcy-dns";
+import type { ResolverAutorytatywny } from "../../adapters/email/dns-autorytatywny";
+import type { OcenaDelegacji, PortRoute53 } from "../../domain/email/route53";
+import {
+  powodBrakuDelegacji,
+  przelaczNaRecznyGdyRekordy,
+  przypnijStrefe,
+  route53Z,
+  sprawdzDelegacje,
+  synchronizujStrefe,
+  zapewnijStrefe,
+  type PowodBrakuDelegacji,
+} from "./delegacja-dns";
 import { BladAws, celKompletny, nazwaConfigurationSetu, nazwaTenantaSes, type PortSes, type StatusSes, type TozsamoscSes } from "../../domain/email/ses";
 
 /**
@@ -39,6 +52,14 @@ export interface OpcjeDomeny {
   teraz?: Date;
   /** alert operatora (kody AWS); domyślnie jobs/alerty */
   alert?: (tresc: string) => Promise<void>;
+  /** Route 53 (delegacja „jeden wpis"); undefined = z fabryki, null = wyłączone */
+  route53?: PortRoute53 | null;
+  /** zapytania wprost do serwerów dostawcy klienta (testy: atrapa) */
+  autorytatywny?: ResolverAutorytatywny;
+}
+
+function opcjeDelegacji(o: OpcjeDomeny) {
+  return { route53: o.route53, autorytatywny: o.autorytatywny, teraz: o.teraz, alert: (t: string) => alertOperatora(o, t) };
 }
 
 async function alertOperatora(o: OpcjeDomeny, tresc: string) {
@@ -98,6 +119,8 @@ export interface Propozycja {
   dmarc: DecyzjaDmarc;
   prefiks: string;
   lokalna: string;
+  /** własny rekord DMARC subdomeny w strefie klienta (po delegacji przenosimy go do naszej strefy) */
+  dmarcWlasny: string | null;
 }
 
 /** Propozycja układu z wpisu klienta. Zawsze liczona po stronie serwera, nigdy z formularza. */
@@ -114,12 +137,14 @@ export async function przygotujPropozycje(
   const uklad = zaproponujUklad({ wpis, strefa: strefa.strefa, prefiks: o.prefiks, lokalna: o.lokalna });
   if (!uklad) return { ok: false, blad: "Ta nazwa nie nadaje się na adres. Użyj małych liter, cyfr i myślnika, np. news albo newsletter." };
   let dmarc: DecyzjaDmarc;
+  let dmarcWlasny: string | null = null;
   try {
+    dmarcWlasny = uklad.domenaWysylkowa === strefa.strefa ? null : await rekordDmarc(uklad.domenaWysylkowa, resolver);
     dmarc = decyzjaDmarc({
       domenaWysylkowa: uklad.domenaWysylkowa,
       strefa: strefa.strefa,
       rekordStrefy: await rekordDmarc(strefa.strefa, resolver),
-      rekordWlasny: uklad.domenaWysylkowa === strefa.strefa ? null : await rekordDmarc(uklad.domenaWysylkowa, resolver),
+      rekordWlasny: dmarcWlasny,
     });
   } catch {
     return { ok: false, blad: "Nie udało się sprawdzić domeny (serwer nazw nie odpowiedział). Spróbuj za minutę." };
@@ -134,6 +159,7 @@ export async function przygotujPropozycje(
       dmarc,
       prefiks: uklad.domenaGlowna ? "" : uklad.domenaWysylkowa === wpis.domena ? "" : uklad.domenaWysylkowa.slice(0, -(strefa.strefa.length + 1)),
       lokalna: uklad.adresNadawcy.split("@")[0],
+      dmarcWlasny,
     },
   };
 }
@@ -283,6 +309,11 @@ export async function podlaczDomene(tenantId: string, dane: DanePodlaczenia, o: 
     await alertOperatora(o, `podłączanie domeny ${domena}: SES nie zwrócił kompletu tokenów DKIM (${tozsamosc.dkimTokeny.length}).`);
   }
   await zapiszStanSes(tenantId, domainId, tozsamosc, o.teraz ?? new Date());
+
+  // 5. „Jeden wpis u dostawcy": strefa Route 53 dla subdomeny. Każdy błąd = alert
+  //    operatora i zwykła ścieżka z rekordami; klient nie widzi z tego nic technicznego.
+  await przygotujDelegacje(tenantId, domainId, { domena, strefa, dostawca, dmarcWlasny: p.propozycja.dmarcWlasny }, o);
+
   await pool.query("update sending_domains set next_check_at = $3 where tenant_id = $1 and id = $2", [
     tenantId,
     domainId,
@@ -296,6 +327,40 @@ export async function podlaczDomene(tenantId: string, dane: DanePodlaczenia, o: 
     return { ok: false, blad: "Zapis domeny nie zgadza się z odczytem z bazy. Spróbuj ponownie." };
   }
   return { ok: true, domainId };
+}
+
+/**
+ * Strefa Route 53 i rekordy w niej, gdy delegacja ma sens (subdomena, wolna nazwa, panel
+ * pozwala na NS). Bez Route 53 albo przy błędzie domena zostaje w trybie ręcznym.
+ */
+async function przygotujDelegacje(
+  tenantId: string,
+  domainId: string,
+  p: { domena: string; strefa: string; dostawca: DostawcaDns; dmarcWlasny: string | null },
+  o: OpcjeDomeny,
+) {
+  const od = opcjeDelegacji(o);
+  const r53 = route53Z(od);
+  let powod: PowodBrakuDelegacji | null = r53 ? await powodBrakuDelegacji(p, o.resolver ?? resolverSystemowy()) : "route53";
+  if (powod || !r53) {
+    await przypnijStrefe(tenantId, domainId, null, powod);
+    return;
+  }
+  const strefa = await zapewnijStrefe(tenantId, p.domena, r53, od);
+  if (!strefa) powod = "route53";
+  await przypnijStrefe(tenantId, domainId, strefa, powod);
+  if (!strefa) return;
+  // Własny DMARC subdomeny ze strefy klienta po delegacji przestanie być widoczny:
+  // przenosimy go do naszej strefy bez zmian.
+  if (p.dmarcWlasny) {
+    await getPool().query("update sending_domains set dmarc_proposal = $3 where tenant_id = $1 and id = $2 and dmarc_proposal is null", [
+      tenantId,
+      domainId,
+      /^v=DMARC1;/.test(p.dmarcWlasny) && p.dmarcWlasny.length <= 500 ? p.dmarcWlasny : null,
+    ]);
+  }
+  const d = await domenaPlatformowaPoId(tenantId, domainId);
+  if (d?.rekordy.length) await synchronizujStrefe(tenantId, domainId, d.rekordy, r53, od);
 }
 
 /**
@@ -387,11 +452,25 @@ export interface DomenaPlatformowa {
   nadawca: { nazwa: string; adres: string; odpowiedzDo: string | null } | null;
   mailFrom: string;
   dmarcPropozycja: string | null;
+  /** która ścieżka jest główna w kreatorze */
+  tryb: "reczny" | "delegacja";
+  /** „jeden wpis": serwery naszej strefy i ostatnia ocena; null = opcji nie ma */
+  delegacja: {
+    nazwa: string;
+    serwery: string[];
+    ocena: OcenaDelegacji | null;
+    sprawdzonoAt: Date | null;
+    rekordyZsynchronizowane: boolean;
+  } | null;
+  /** dlaczego nie proponujemy „jednego wpisu" (apex, zajęta nazwa, panel, brak Route 53) */
+  delegacjaNiedostepna: PowodBrakuDelegacji | null;
 }
 
 const KOLUMNY = `d.id, d.domain, d.zone_apex, d.dns_provider, d.status, d.check_details, d.ses_status, d.ses_dkim_status,
   d.ses_mail_from_status, d.ses_verified_for_sending, d.ses_dkim_tokens, d.ses_signing_zone, d.ses_mail_from_domain,
   d.dmarc_proposal, d.verified_at, d.last_checked_at, d.created_at,
+  d.dns_mode, d.delegation_state, d.delegation_details, d.delegation_checked_at, d.delegation_unavailable, d.r53_synced_at,
+  z.zone_id, z.name_servers,
   s.from_name, s.from_email, s.reply_to`;
 
 function zWiersza(w: Record<string, any>, region: string): DomenaPlatformowa {
@@ -424,6 +503,18 @@ function zWiersza(w: Record<string, any>, region: string): DomenaPlatformowa {
     nadawca: w.from_email ? { nazwa: w.from_name, adres: w.from_email, odpowiedzDo: w.reply_to } : null,
     mailFrom: w.ses_mail_from_domain ?? `bounce.${w.domain}`,
     dmarcPropozycja: w.dmarc_proposal,
+    tryb: w.dns_mode === "delegacja" ? "delegacja" : "reczny",
+    delegacja:
+      w.zone_id && Array.isArray(w.name_servers) && w.name_servers.length >= 2
+        ? {
+            nazwa: nazwaWzgledna(w.domain, w.zone_apex),
+            serwery: w.name_servers,
+            ocena: w.delegation_details && typeof w.delegation_details.stan === "string" ? (w.delegation_details as OcenaDelegacji) : null,
+            sprawdzonoAt: w.delegation_checked_at,
+            rekordyZsynchronizowane: w.r53_synced_at !== null,
+          }
+        : null,
+    delegacjaNiedostepna: w.delegation_unavailable,
   };
 }
 
@@ -432,6 +523,7 @@ export async function domenaPlatformowa(tenantId: string): Promise<DomenaPlatfor
     `select ${KOLUMNY}
        from sending_domains d
        left join tenant_platform_senders s on s.tenant_id = d.tenant_id and s.sending_domain_id = d.id
+       left join dns_hosted_zones z on z.tenant_id = d.tenant_id and z.id = d.hosted_zone_id
       where d.tenant_id = $1 and d.managed_by = 'platforma'
       order by d.created_at limit 1`,
     [tenantId],
@@ -445,6 +537,7 @@ export async function domenaPlatformowaPoId(tenantId: string, domainId: string):
     `select ${KOLUMNY}
        from sending_domains d
        left join tenant_platform_senders s on s.tenant_id = d.tenant_id and s.sending_domain_id = d.id
+       left join dns_hosted_zones z on z.tenant_id = d.tenant_id and z.id = d.hosted_zone_id
       where d.tenant_id = $1 and d.id = $2 and d.managed_by = 'platforma'`,
     [tenantId, domainId],
   );
@@ -670,8 +763,24 @@ export async function sprawdzDomenePlatformowa(tenantId: string, domainId: strin
   if (dmarcTeraz !== d.dmarcPropozycja) {
     await pool.query("update sending_domains set dmarc_proposal = $3 where tenant_id = $1 and id = $2", [tenantId, domainId, dmarcTeraz]);
   }
+  // 3. „Jeden wpis": rekordy w naszej strefie (doprowadzenie do stanu) i ocena wpisu NS
+  //    u dostawcy. Bez Route 53 (wyłączony, brak uprawnień) pomijamy: zostaje stan z bazy.
+  let ocenaDelegacji: OcenaDelegacji | null = null;
+  const poDmarc = (await domenaPlatformowaPoId(tenantId, domainId)) ?? d;
+  if (poDmarc.delegacja) {
+    const od = opcjeDelegacji(o);
+    const r53 = route53Z(od);
+    if (r53 && poDmarc.rekordy.length) await synchronizujStrefe(tenantId, domainId, poDmarc.rekordy, r53, od);
+    ocenaDelegacji = await sprawdzDelegacje(tenantId, domainId, { domena: d.domena, strefa: d.strefa, nazwaWzgledna: poDmarc.delegacja.nazwa }, resolver, od);
+  }
+
   const odswiezona = (await domenaPlatformowaPoId(tenantId, domainId)) ?? d;
   const dns = await ocenRekordyWDns(odswiezona, resolver);
+  if (ocenaDelegacji?.pilne) dns.ostrzezenia.unshift(`PILNE: ${ocenaDelegacji.pilne}`);
+  // NS nie ma, a rekordy z tabeli są wpisane: klient wybrał drogę ręczną
+  if (odswiezona.tryb === "delegacja" && ocenaDelegacji?.stan === "brak" && Object.values(dns.rekordy).some((r) => r?.stan === "ok" || r?.stan === "zle")) {
+    await przelaczNaRecznyGdyRekordy(tenantId, domainId);
+  }
   // Stan SES z bazy: świeży, gdy odczyt się udał, poprzedni, gdy nie (błąd SES nie zeruje).
   const { rows: zapisSes } = await pool.query(
     "select ses_dkim_status, ses_mail_from_status, ses_verified_for_sending from sending_domains where tenant_id = $1 and id = $2",

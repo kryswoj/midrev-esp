@@ -1,4 +1,5 @@
 import { odczytajInstrukcje } from "../../../usecases/wysylka-konfiguracja/instrukcja-dns";
+import { JedenWpis } from "../../_dns/jeden-wpis";
 import { TabelaRekordow } from "../../_dns/tabela-rekordow";
 import { WskazowkaDostawcy } from "../../_dns/wskazowka-dostawcy";
 import { Alert } from "../../ui";
@@ -53,16 +54,32 @@ export default async function InstrukcjaDns({ params }: { params: Promise<{ toke
               <Alert tone="ok" title="Wszystko gotowe">Rekordy są na miejscu i potwierdzone. Nic więcej nie trzeba robić.</Alert>
             ) : (
               <p className="tekst-pomocniczy">
-                Gotowe: {i.rekordy.length - zostalo} z {i.rekordy.length}. Nazwy podajemy względem strefy {i.strefa} (bez niej na końcu). Stan rekordów odświeża się sam co kilka minut — odśwież stronę, żeby go zobaczyć.
+                {i.delegacja && i.tryb === "delegacja" ? "Wystarczy jeden wpis NS poniżej. " : `Gotowe: ${i.rekordy.length - zostalo} z ${i.rekordy.length}. `}Nazwy podajemy względem strefy {i.strefa} (bez niej na końcu). Stan rekordów odświeża się sam co kilka minut — odśwież stronę, żeby go zobaczyć.
               </p>
             )}
             {(i.raport?.ostrzezenia ?? []).map((o) => (
               <Alert key={o} tone={o.startsWith("PILNE") ? "blad" : "uwaga"}>{o.replace(/^PILNE:\s*/, "")}</Alert>
             ))}
-            {!i.gotowa ? <WskazowkaDostawcy dostawca={i.dostawca} strefa={i.strefa} /> : null}
-            <div className="overflow-hidden rounded-[10px] border border-[var(--color-linia)]">
-              <TabelaRekordow rekordy={i.rekordy} oceny={oceny} />
-            </div>
+            {!i.gotowa ? <WskazowkaDostawcy dostawca={i.dostawca} strefa={i.strefa} jedenWpis={Boolean(i.delegacja && i.tryb === "delegacja")} /> : null}
+            {i.delegacja && i.tryb === "delegacja" ? (
+              <>
+                <p className="text-[15px] font-semibold leading-[22px]">Najprościej: jeden wpis NS</p>
+                <JedenWpis nazwa={i.delegacja.nazwa} serwery={i.delegacja.serwery} dostawca={i.dostawca} ocena={i.delegacja.ocena} />
+                <details className="rounded-[10px] border border-[var(--color-linia)]">
+                  <summary className="cursor-pointer px-4 py-3 text-[13px] font-medium text-[var(--color-tekst-2)]">Wolisz wpisać rekordy samodzielnie?</summary>
+                  <div className="space-y-3 border-t border-[var(--color-linia)] p-4 max-md:p-3">
+                    <p className="text-[13px] leading-[19px] text-[var(--color-tekst-2)]">Zamiast wpisu NS możesz dodać te rekordy. Wybierz jedną drogę, nie obie.</p>
+                    <div className="overflow-hidden rounded-[10px] border border-[var(--color-linia)]">
+                      <TabelaRekordow rekordy={i.rekordy} oceny={oceny} />
+                    </div>
+                  </div>
+                </details>
+              </>
+            ) : (
+              <div className="overflow-hidden rounded-[10px] border border-[var(--color-linia)]">
+                <TabelaRekordow rekordy={i.rekordy} oceny={oceny} />
+              </div>
+            )}
             <p className="tekst-meta">Link ważny do {new Date(i.wygasa).toLocaleDateString("pl-PL")}.</p>
           </div>
         </section>

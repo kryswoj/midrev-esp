@@ -7,6 +7,7 @@ import {
   type DomenaPlatformowa,
 } from "../../../../../usecases/wysylka-konfiguracja/domena-platformowa";
 import { odczytajSerwer } from "../../../../../usecases/wysylka-konfiguracja/serwer";
+import { JedenWpis } from "../../../../_dns/jeden-wpis";
 import { TabelaRekordow } from "../../../../_dns/tabela-rekordow";
 import { WskazowkaDostawcy } from "../../../../_dns/wskazowka-dostawcy";
 import { wymaganyTenant } from "../../../../autoryzacja";
@@ -145,8 +146,25 @@ function WidokDomeny({ tenantId, d }: { tenantId: string; d: DomenaPlatformowa }
   ].filter(Boolean).join(" · ");
   const pilne = (d.raport?.ostrzezenia ?? []).filter((o) => o.startsWith("PILNE"));
   const inne = (d.raport?.ostrzezenia ?? []).filter((o) => !o.startsWith("PILNE"));
+  // „jeden wpis" jako główna droga albo jako alternatywa pod tabelą ręczną
+  const jedenWpis = d.delegacja && d.tryb === "delegacja" ? d.delegacja : null;
+  const alternatywaNs = d.delegacja && d.tryb === "reczny" ? d.delegacja : null;
+  const stanNs = d.delegacja?.ocena?.stan ?? null;
   // krok 3 („Gotowe" = czekamy na potwierdzenie) dopiero, gdy klient wpisał WSZYSTKO
-  const wszystkieWpisane = d.rekordy.length > 0 && d.rekordy.every((r) => ["ok", "czeka"].includes(oceny[r.klucz]?.stan ?? ""));
+  const wszystkieWpisane = jedenWpis
+    ? stanNs === "czeka" || stanNs === "dziala"
+    : d.rekordy.length > 0 && d.rekordy.every((r) => ["ok", "czeka"].includes(oceny[r.klucz]?.stan ?? ""));
+  const powodRecznych =
+    d.delegacjaNiedostepna === "dostawca"
+      ? `Panel ${d.dostawca.nazwa} nie pozwala dodać jednego wpisu dla subdomeny, dlatego potrzebne są rekordy poniżej.`
+      : d.delegacjaNiedostepna === "zajeta_nazwa"
+        ? `Pod adresem ${d.domena} coś już działa, więc nie przejmujemy go jednym wpisem. Dodaj rekordy poniżej.`
+        : null;
+  const tabelaReczna = (
+    <div className="overflow-hidden rounded-[10px] border border-[var(--color-linia)]">
+      <TabelaRekordow rekordy={d.rekordy} oceny={oceny} />
+    </div>
+  );
   const aktywny: 2 | 3 = wszystkieWpisane ? 3 : 2;
   return (
     <section className="karta overflow-hidden">
@@ -166,7 +184,7 @@ function WidokDomeny({ tenantId, d }: { tenantId: string; d: DomenaPlatformowa }
         <KrokiKreatora aktywny={aktywny} gotowe={d.gotowa} />
 
         {pilne.map((o) => (
-          <Alert key={o} tone="blad" title="Twoja zwykła poczta może nie działać">{o.replace(/^PILNE:\s*/, "")}</Alert>
+          <Alert key={o} tone="blad" title={o.includes("MX") ? "Twoja zwykła poczta może nie działać" : "Wpis jest w złym miejscu"}>{o.replace(/^PILNE:\s*/, "")}</Alert>
         ))}
 
         {d.gotowa ? (
@@ -177,6 +195,17 @@ function WidokDomeny({ tenantId, d }: { tenantId: string; d: DomenaPlatformowa }
               <a href={`/t/${tenantId}/kampanie`} className="przycisk przycisk-wtorny przycisk-maly">Przygotuj kampanię</a>
             </span>
           </Alert>
+        ) : jedenWpis ? (
+          <div className="space-y-1">
+            <p className="text-[15px] font-semibold leading-[22px]">
+              {stanNs === "dziala" ? "Wpis działa. Resztę ustawiliśmy sami" : "Najprościej: jeden wpis u dostawcy domeny"}
+            </p>
+            <p className="tekst-pomocniczy">
+              {stanNs === "dziala"
+                ? "Czekamy na ostatnie potwierdzenie, zwykle kilka minut. Damy znać mailem, gdy wszystko będzie gotowe."
+                : `Dodaj jeden rekord w panelu, w którym zarządzasz domeną ${d.strefa}. Pozostałe ustawimy i będziemy pilnować sami. Sprawdzamy co kilka minut, możesz zamknąć tę stronę.`}
+            </p>
+          </div>
         ) : (
           <div className="space-y-1">
             <p className="text-[15px] font-semibold leading-[22px]">
@@ -185,6 +214,7 @@ function WidokDomeny({ tenantId, d }: { tenantId: string; d: DomenaPlatformowa }
                 : `Gotowe: ${d.rekordy.length - doZrobienia} z ${d.rekordy.length} rekordów`}
             </p>
             {podsumowanie ? <p className="text-[13px] leading-[19px] text-[var(--color-tekst-2)]">{podsumowanie}</p> : null}
+            {powodRecznych ? <p className="text-[13px] leading-[19px] text-[var(--color-tekst-2)]">{powodRecznych}</p> : null}
             <p className="tekst-pomocniczy">
               Skopiuj każdy wiersz z tabeli do panelu, w którym zarządzasz domeną {d.strefa}. Sprawdzamy sami co kilka minut — możesz zamknąć tę stronę, damy znać mailem, gdy wszystko będzie gotowe.
             </p>
@@ -197,7 +227,7 @@ function WidokDomeny({ tenantId, d }: { tenantId: string; d: DomenaPlatformowa }
 
         {!d.gotowa ? (
           <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_280px]">
-            <WskazowkaDostawcy dostawca={d.dostawca} strefa={d.strefa} />
+            <WskazowkaDostawcy dostawca={d.dostawca} strefa={d.strefa} jedenWpis={Boolean(jedenWpis)} />
             <div className="karta-plaska space-y-2 p-4">
               <p className="text-[13px] font-semibold leading-[19px]">Domeną zajmuje się ktoś inny?</p>
               <p className="text-[13px] leading-[19px] text-[var(--color-tekst-2)]">Wyślij mu link z rekordami. Nie dostanie dostępu do konta.</p>
@@ -210,13 +240,41 @@ function WidokDomeny({ tenantId, d }: { tenantId: string; d: DomenaPlatformowa }
           <details className="rounded-[10px] border border-[var(--color-linia)]">
             <summary className="cursor-pointer px-4 py-3 text-[13px] font-medium text-[var(--color-tekst-2)]">Pokaż rekordy DNS</summary>
             <div className="border-t border-[var(--color-linia)]">
-              <TabelaRekordow rekordy={d.rekordy} oceny={oceny} />
+              {jedenWpis ? (
+                <div className="space-y-2 p-4">
+                  <JedenWpis nazwa={jedenWpis.nazwa} serwery={jedenWpis.serwery} dostawca={d.dostawca} ocena={jedenWpis.ocena} />
+                  <p className="tekst-meta">Rekordy pod {d.domena} ustawiamy i aktualizujemy sami.</p>
+                </div>
+              ) : (
+                <TabelaRekordow rekordy={d.rekordy} oceny={oceny} />
+              )}
             </div>
           </details>
+        ) : jedenWpis ? (
+          <>
+            <JedenWpis nazwa={jedenWpis.nazwa} serwery={jedenWpis.serwery} dostawca={d.dostawca} ocena={jedenWpis.ocena} />
+            <details className="rounded-[10px] border border-[var(--color-linia)]">
+              <summary className="cursor-pointer px-4 py-3 text-[13px] font-medium text-[var(--color-tekst-2)]">Wolisz wpisać rekordy samodzielnie?</summary>
+              <div className="space-y-3 border-t border-[var(--color-linia)] p-4 max-md:p-3">
+                <p className="text-[13px] leading-[19px] text-[var(--color-tekst-2)]">
+                  Zamiast jednego wpisu możesz dodać {d.rekordy.length} rekordów. Wybierz jedną drogę, nie obie.
+                </p>
+                {tabelaReczna}
+              </div>
+            </details>
+          </>
         ) : (
-          <div className="overflow-hidden rounded-[10px] border border-[var(--color-linia)]">
-            <TabelaRekordow rekordy={d.rekordy} oceny={oceny} />
-          </div>
+          <>
+            {tabelaReczna}
+            {alternatywaNs ? (
+              <details className="rounded-[10px] border border-[var(--color-linia)]">
+                <summary className="cursor-pointer px-4 py-3 text-[13px] font-medium text-[var(--color-tekst-2)]">Wolisz jeden wpis zamiast {d.rekordy.length}?</summary>
+                <div className="border-t border-[var(--color-linia)] p-4 max-md:p-3">
+                  <JedenWpis nazwa={alternatywaNs.nazwa} serwery={alternatywaNs.serwery} dostawca={d.dostawca} ocena={alternatywaNs.ocena} />
+                </div>
+              </details>
+            ) : null}
+          </>
         )}
 
         <div className="flex flex-wrap items-center gap-3">

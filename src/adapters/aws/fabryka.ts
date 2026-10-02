@@ -1,7 +1,10 @@
 import { config } from "../../config";
 import type { PortSes, PortSns } from "../../domain/email/ses";
 import { Sekret } from "../crypto";
+import type { PortRoute53 } from "../../domain/email/route53";
+import { AtrapaRoute53 } from "./atrapa-route53";
 import { AtrapaSes, AtrapaSns } from "./atrapa-ses";
+import { KlientRoute53 } from "./route53";
 import { KlientSes } from "./ses";
 import { KlientSns } from "./sns";
 
@@ -11,12 +14,13 @@ import { KlientSns } from "./sns";
  * natychmiast; żadna funkcja stąd nie zwraca ani nie loguje ich wartości.
  */
 
-let wstrzykniete: { ses?: PortSes | null; sns?: PortSns | null } | null = null;
+let wstrzykniete: { ses?: PortSes | null; sns?: PortSns | null; route53?: PortRoute53 | null } | null = null;
 let atrapaSes: AtrapaSes | null = null;
 let atrapaSns: AtrapaSns | null = null;
+let atrapaRoute53: AtrapaRoute53 | null = null;
 
 /** Tylko testy: podmiana portów (null = brak konfiguracji). Wywołanie bez argumentu przywraca konfigurację. */
-export function ustawPortyAws(porty?: { ses?: PortSes | null; sns?: PortSns | null }) {
+export function ustawPortyAws(porty?: { ses?: PortSes | null; sns?: PortSns | null; route53?: PortRoute53 | null }) {
   wstrzykniete = porty ?? null;
 }
 
@@ -41,6 +45,21 @@ export function portSns(): PortSns | null {
   if (k.SES_ATRAPA && k.MIDREV_SANDBOX) return (atrapaSns ??= new AtrapaSns(k.AWS_REGION, k.AWS_ACCOUNT_ID ?? "000000000000"));
   const kl = klucze();
   return kl ? new KlientSns({ region: k.AWS_REGION, klucze: kl }) : null;
+}
+
+/**
+ * Klient Route 53 albo null, gdy delegacja jest wyłączona (flaga ROUTE53_DELEGACJA) albo
+ * brak kluczy. null = kreator nie pokazuje opcji „jeden wpis" i działa jak dotąd.
+ * Testy bez wstrzyknięcia dostają null (nie ma ścieżki do prawdziwego AWS).
+ */
+export function portRoute53(): PortRoute53 | null {
+  if (wstrzykniete && "route53" in wstrzykniete) return wstrzykniete.route53 ?? null;
+  if (wstrzykniete) return null;
+  const k = config();
+  if (!k.ROUTE53_DELEGACJA) return null;
+  if (k.SES_ATRAPA && k.MIDREV_SANDBOX) return (atrapaRoute53 ??= new AtrapaRoute53());
+  const kl = klucze();
+  return kl ? new KlientRoute53({ klucze: kl }) : null;
 }
 
 export interface SmtpPlatformy {
