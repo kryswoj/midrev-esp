@@ -120,9 +120,15 @@ describe("Graf v2: upgrader v1 i zapis wstecznie zgodny", () => {
 
   it("błąd v1 ma czytelną ścieżkę (bez „invalid union”)", () => {
     const zly = { ...DEFINICJE_V1[0], wezly: [{ id: "wyzwalacz", typ: "wyzwalacz", zdarzenie: "nieznane", links: { next: "k" } }] };
+    // sciezka zostaje czytelna w bledzie schematu (logi, testy)...
+    const p = schematGrafu.safeParse(zly);
+    expect(p.success).toBe(false);
+    expect(p.error!.issues[0].path.join(".")).toBe("wezly.0.zdarzenie");
+    // ...ale operator dostaje komunikat po polsku przy kroku, bez sciezki obiektu (fala 1 UX)
     const r = zwalidujGraf(zly);
     expect(r.graf).toBeNull();
-    expect(r.bledy[0].tresc).toMatch(/wezly\.0\.zdarzenie/);
+    expect(r.bledy[0]).toMatchObject({ wezelId: "wyzwalacz" });
+    expect(r.bledy[0].tresc).not.toMatch(/wezly\.|invalid/i);
   });
 });
 

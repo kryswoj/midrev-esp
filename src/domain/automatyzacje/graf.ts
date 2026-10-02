@@ -493,6 +493,112 @@ export interface BladGrafu {
   tresc: string;
 }
 
+// ── Szkic roboczy: niedokonczone warunki filtra (fala 1 UX, pkt 3) ─────────────
+//
+// Pusty albo niedokonczony warunek filtra wyzwalacza (dopiero dodany, bez nazwy pola albo
+// wartosci) to STAN ROBOCZY edytora, nie blad grafu. Nie moze blokowac autozapisu reszty
+// szkicu ani wyswietlac uzytkownikowi sciezki z Zoda. Zasada:
+//  - w karcie zyje graf z warunkiem roboczym (operator go dokancza);
+//  - na serwer idzie `szkicDoZapisu(g)`: graf BEZ niedokonczonych warunkow, wiec szkic w bazie
+//    jest zawsze poprawnym grafem (te same schematy co dotad, zero zmian dla silnika);
+//  - `niedokonczoneWarunki(g)` blokuje "Wlacz" w karcie, dopoki warunek nie jest dokonczony
+//    albo usuniety: filtr szerszy niz zamierzony nie wejdzie na produkcje po cichu.
+
+export interface NiedokonczonyWarunek {
+  wezelId: string;
+  grupa: number;
+  warunek: number;
+  tresc: string;
+}
+
+function trescNiedokonczonego(w: unknown): string | null {
+  const r = schematFiltraZdarzenia.safeParse({ grupy: [{ warunki: [w] }] });
+  if (r.success) return null;
+  const pole = (w as { pole?: unknown })?.pole;
+  if (typeof pole !== "string" || !pole.trim()) return "Wpisz nazwę właściwości zdarzenia albo usuń pusty warunek.";
+  const i = r.error.issues.find((x) => x.path[x.path.length - 1] === "wartosc");
+  return i ? `Uzupełnij wartość warunku „${pole.trim()}”: ${i.message.replace(/\.$/, "")}.` : `Warunek „${pole.trim()}” jest niedokończony. Uzupełnij go albo usuń.`;
+}
+
+/** Niedokonczone warunki filtra wyzwalacza (tylko w karcie; serwer ich nie dostaje). */
+export function niedokonczoneWarunki(g: Graf): NiedokonczonyWarunek[] {
+  const wynik: NiedokonczonyWarunek[] = [];
+  for (const w of g.wezly) {
+    if (w.typ !== "wyzwalacz" || w.zrodlo.rodzaj !== "metryka" || !w.zrodlo.filtr) continue;
+    w.zrodlo.filtr.grupy.forEach((gr, gi) =>
+      gr.warunki.forEach((war, wi) => {
+        const tresc = trescNiedokonczonego(war);
+        if (tresc) wynik.push({ wezelId: w.id, grupa: gi, warunek: wi, tresc });
+      }),
+    );
+  }
+  return wynik;
+}
+
+/**
+ * Graf do autozapisu: bez niedokonczonych warunkow (grupa bez warunkow znika, filtr bez grup
+ * znika). Czysta funkcja; gdy nic nie jest niedokonczone, zwraca TEN SAM obiekt (bez zmian
+ * w JSON-ie, wiec porownanie "brudny" dziala jak dotad).
+ */
+export function szkicDoZapisu(g: Graf): Graf {
+  if (!niedokonczoneWarunki(g).length) return g;
+  return {
+    ...g,
+    wezly: g.wezly.map((w): Wezel => {
+      if (w.typ !== "wyzwalacz" || w.zrodlo.rodzaj !== "metryka" || !w.zrodlo.filtr) return w;
+      const grupy = w.zrodlo.filtr.grupy
+        .map((gr) => ({ warunki: gr.warunki.filter((war) => trescNiedokonczonego(war) === null) }))
+        .filter((gr) => gr.warunki.length);
+      const { filtr: _pominiety, ...bezFiltra } = w.zrodlo;
+      return { ...w, zrodlo: grupy.length ? { ...bezFiltra, filtr: { grupy } } : bezFiltra };
+    }),
+  };
+}
+
+/**
+ * Blad schematu (Zod) jako komunikat dla ludzi: przy kroku, ktorego dotyczy, po polsku, bez
+ * sciezki obiektu i angielskiego tekstu biblioteki. Uzywane, gdy graf w ogole nie przechodzi
+ * schematu (np. stara karta wyslala niedokonczony warunek).
+ */
+export function bledySchematuGrafu(surowy: unknown, issues: readonly { path: PropertyKey[]; message: string }[]): BladGrafu[] {
+  const wezly = (surowy as { wezly?: unknown[] } | null)?.wezly;
+  const wynik: BladGrafu[] = [];
+  const widziane = new Set<string>();
+  for (const i of issues) {
+    const sciezka = i.path.map(String);
+    let wezelId: string | null = null;
+    let typ: string | null = null;
+    if (sciezka[0] === "wezly" && Array.isArray(wezly)) {
+      const w = wezly[Number(sciezka[1])] as { id?: unknown; typ?: unknown } | undefined;
+      wezelId = typeof w?.id === "string" ? w.id : null;
+      typ = typeof w?.typ === "string" ? w.typ : null;
+    }
+    const ostatni = sciezka[sciezka.length - 1];
+    const nazwaKroku = typ && typ in NAZWY_WEZLOW ? `Krok „${NAZWY_WEZLOW[typ as TypWezla]}”` : "Ten krok";
+    let tresc: string;
+    if (sciezka.includes("filtr")) tresc = "Filtr wyzwalacza ma niedokończony warunek. Uzupełnij nazwę właściwości i wartość albo usuń warunek.";
+    else if (ostatni === "ilosc") tresc = `${nazwaKroku}: podaj liczbę od 1 do 100 000.`;
+    else if (ostatni === "godzina") tresc = `${nazwaKroku}: podaj godzinę w formacie GG:MM.`;
+    else if (sciezka.includes("dni")) tresc = `${nazwaKroku}: wybierz co najmniej jeden dzień tygodnia.`;
+    else if (ostatni === "procentA") tresc = `${nazwaKroku}: podział musi wynosić od 1 do 99%.`;
+    else if (ostatni === "emailId") tresc = `${nazwaKroku}: brakuje wiadomości. Usuń krok i dodaj go ponownie.`;
+    else if (ostatni === "listId") tresc = `${nazwaKroku}: wybierz listę.`;
+    else if (ostatni === "segmentId") tresc = `${nazwaKroku}: wybierz segment.`;
+    else if (ostatni === "etykieta") tresc = `${nazwaKroku}: nazwa może mieć najwyżej 80 znaków.`;
+    else if (wezelId) tresc = `${nazwaKroku} ma niepoprawne ustawienia. Otwórz go i sprawdź pola.`;
+    else tresc = "Definicji automatyzacji nie da się odczytać. Odśwież stronę; jeśli to nie pomoże, napisz do nas.";
+    const klucz = `${wezelId}|${tresc}`;
+    if (widziane.has(klucz)) continue;
+    widziane.add(klucz);
+    wynik.push({ wezelId, tresc });
+  }
+  return wynik.length ? wynik : [{ wezelId: null, tresc: "Definicji automatyzacji nie da się odczytać. Odśwież stronę." }];
+}
+
+/** Typy krokow, ktore cos ROBIA (bramka "co najmniej jedna akcja"). */
+export const TYPY_AKCJI: ReadonlySet<TypWezla> = new Set<TypWezla>(["email", "profil"]);
+export const BLAD_BEZ_AKCJI = "Dodaj co najmniej jeden krok, który coś robi: e-mail albo aktualizację profilu. Sam wyzwalacz i koniec nikomu nic nie wyślą.";
+
 export interface KontekstWalidacji {
   /** wiadomosci e-mail znane serwerowi: temat i czy jest tresc */
   emaile?: Record<string, { temat: string; maTresc: boolean }>;
@@ -507,6 +613,12 @@ export interface KontekstWalidacji {
   ponowneWejscieDostepne?: boolean;
   /** Czy wolno zapisywac funkcje wymagajace grafu v2 (filtr wyzwalacza, metryka spoza wbudowanych). Brak = nie. */
   grafV2Dostepny?: boolean;
+  /**
+   * Bramka wlaczenia: graf musi miec co najmniej jedna akcje (e-mail albo aktualizacje profilu)
+   * osiagalna z wyzwalacza. Wyzwalacz -> koniec nie jest "Gotowy do wlaczenia". Wlaczone przez
+   * serwer (kontekst publikacji) i kanwe; brak = nie sprawdzamy (testy jednostkowe innych regul).
+   */
+  wymagajAkcji?: boolean;
 }
 
 /**
@@ -528,10 +640,7 @@ export function funkcjeWymagajaceV2(g: Graf): string[] {
 
 export function zwalidujGraf(surowy: unknown, ctx: KontekstWalidacji = {}): { graf: Graf | null; bledy: BladGrafu[] } {
   const parsed = schematGrafu.safeParse(surowy);
-  if (!parsed.success) {
-    const p = parsed.error.issues[0];
-    return { graf: null, bledy: [{ wezelId: null, tresc: `Definicja nie przeszła walidacji (${p?.path.join(".") || "graf"}: ${p?.message ?? "błąd"}).` }] };
-  }
+  if (!parsed.success) return { graf: null, bledy: bledySchematuGrafu(surowy, parsed.error.issues) };
   const g = parsed.data;
   const bledy: BladGrafu[] = [];
   const ids = new Set<string>();
@@ -621,6 +730,9 @@ export function zwalidujGraf(surowy: unknown, ctx: KontekstWalidacji = {}): { gr
       return false;
     };
     if (cykl(g.start)) bledy.push({ wezelId: null, tresc: "Ścieżka zawraca do wcześniejszego kroku (pętla). Osoba krążyłaby bez końca." });
+    if (ctx.wymagajAkcji && !g.wezly.some((w) => TYPY_AKCJI.has(w.typ) && zywe.has(w.id))) {
+      bledy.push({ wezelId: g.start, tresc: BLAD_BEZ_AKCJI });
+    }
   }
   return { graf: g, bledy };
 }

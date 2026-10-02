@@ -107,7 +107,8 @@ describe("Graf automatyzacji: walidacja (bramka włączenia)", () => {
     g.wezly.push({ id: "ab", typ: "ab_split", procentA: 150, links: { a: "k1", b: "k2" } });
     const { graf, bledy } = zwalidujGraf(g, ctx);
     expect(graf).toBeNull();
-    expect(bledy[0].tresc).toMatch(/nie przeszła walidacji/);
+    // komunikat po polsku, przy kroku, bez sciezki obiektu (fala 1 UX)
+    expect(bledy[0]).toEqual({ wezelId: "ab", tresc: "Krok „Test A/B”: podział musi wynosić od 1 do 99%." });
   });
 
   it("wyzwalacz „dołączenie do listy” wymaga istniejącej listy, a warunek segmentu istniejącego segmentu", () => {

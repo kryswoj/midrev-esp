@@ -15,6 +15,7 @@ import {
   zdarzenieV1,
   zrodloZV1,
   zwalidujGraf,
+  bledySchematuGrafu,
   ZDARZENIA_WYZWALACZA,
   type BladGrafu,
   type Graf,
@@ -479,6 +480,8 @@ async function kontekstWalidacji(klient: Klient, tenantId: string, flowId: strin
     metryki: new Map(metryki.map((m) => [kluczMetryki(m), { canTrigger: m.canTrigger }])),
     ponowneWejscieDostepne: ponowne,
     grafV2Dostepny: config().MIDREV_GRAF_V2,
+    // bramka wlaczenia: flow bez zadnej akcji (wyzwalacz -> koniec) nie jest gotowy
+    wymagajAkcji: true,
   };
   return { mapaEmaili, listy: listy.rows, segmenty: segmenty.rows, metryki, ponowneWejscieDostepne: ponowne, grafV2Dostepny: config().MIDREV_GRAF_V2, ctx };
 }
@@ -552,8 +555,8 @@ export async function zapiszSzkic(
   }
   const parsed = schematGrafu.safeParse(dane);
   if (!parsed.success) {
-    const p = parsed.error.issues[0];
-    return { ok: false, blad: `Definicja nie przeszła walidacji (${p?.path.join(".") || "graf"}: ${p?.message ?? "błąd"}).` };
+    // komunikat dla ludzi (przy kroku, po polsku), nigdy sciezka i tekst Zoda
+    return { ok: false, blad: `Nie zapisano: ${bledySchematuGrafu(dane, parsed.error.issues)[0].tresc}` };
   }
   const graf: Graf = parsed.data;
   // Szkic w v2 przed wlaczeniem MIDREV_GRAF_V2 (albo z ponownym wejsciem przed 0036) =
