@@ -137,5 +137,7 @@ describe("przykładowe dane w samym HTML-u (kampanie bez bloków, encje)", () =>
   it("wykrywa adres i firmę także zapisane encjami", () => {
     expect(przykladyWHtml("<p>Tw&oacute;j sklep sp. z o.o.<br>ul. Przyk&#322;adowa 1, 00-001&nbsp;Warszawa</p>")).toHaveLength(3);
     expect(przykladyWHtml("<p>Sklep Ani sp. z o.o., ul. Długa 5, 31-001 Kraków</p>")).toEqual([]);
+    // tekst niewidoczny dla odbiorcy (style, komentarze, head) nie blokuje wysyłki
+    expect(przykladyWHtml("<head><title>ul. Przykładowa 1</title></head><style>/* 00-001 Warszawa */</style><!-- Twój sklep sp. z o.o. --><p>Cześć</p>")).toEqual([]);
   });
 });

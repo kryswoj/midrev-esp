@@ -130,7 +130,11 @@ const ENCJE_PL: Record<string, string> = { oacute: "ó", Oacute: "Ó", lstrok: "
 
 /** Tekst widoczny dla odbiorcy: bez znaczników, z odkodowanymi encjami, spacje zwinięte. */
 function tekstWidoczny(html: string): string {
-  return odkodujEncje(html.replace(/<[^>]*>/g, " ").replace(/&(oacute|Oacute|lstrok|Lstrok);/g, (_c, n: string) => ENCJE_PL[n] ?? ""))
+  // treść <style>, <script>, <head> i komentarzy nie trafia do oczu odbiorcy
+  const bezNiewidocznych = html
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<(style|script|head|title)\b[\s\S]*?<\/\1\s*>/gi, " ");
+  return odkodujEncje(bezNiewidocznych.replace(/<[^>]*>/g, " ").replace(/&(oacute|Oacute|lstrok|Lstrok);/g, (_c, n: string) => ENCJE_PL[n] ?? ""))
     .replace(/\s+/g, " ");
 }
 

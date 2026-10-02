@@ -260,7 +260,11 @@ export async function listaKontrolnaKampanii(
     uwagiTresci,
     adresPocztowy: kampania.sender_postal_address ?? null,
     // kampania z samym HTML-em (bez bloków) też bywa ze starego szablonu: sprawdzamy tekst
-    przyklady: zrodlo === "bloki" ? przykladoweDane(dokument) : przykladyWHtml(html),
+    // Wzorzec, który pasuje do PRAWDZIWYCH danych nadawcy z ustawień (firma z siedzibą
+    // przy ul. Przykładowej 1 istnieje), nie jest atrapą: nie blokujemy nim wysyłki.
+    przyklady: (zrodlo === "bloki" ? przykladoweDane(dokument) : przykladyWHtml(html)).filter(
+      (p) => !przykladyWHtml(`${kampania.sender_company_name ?? ""} ${kampania.sender_postal_address ?? ""}`).includes(p),
+    ),
   });
   // Obraz z biblioteki usunięty po wstawieniu do szkicu (usuwanie ze szkiców jest dozwolone)
   // dałby w mailu ikonę zepsutego obrazka. Twarda bramka, jak reszta punktów „blad".

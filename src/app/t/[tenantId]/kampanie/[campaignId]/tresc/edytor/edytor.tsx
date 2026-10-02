@@ -52,6 +52,7 @@ import {
   przesunBlok,
   przykladoweDane,
   przykladyWBloku,
+  przykladyWHtml,
   SILNIK_SZEROKOSC_KARTY,
   SILNIK_TLO,
   SILNIK_WCIECIE,
@@ -565,6 +566,9 @@ export function Edytor({
 }) {
   const [historia, setHistoria] = useState<Historia>(() => nowaHistoria(dokumentStartowy));
   const dok = historia.biezacy;
+  // bieżący dokument dla kodu po await (upload plików): domknięcie widzi stan sprzed wysyłki
+  const dokRef = useRef(dok);
+  dokRef.current = dok;
   const [zapisanyJson, setZapisanyJson] = useState(() => JSON.stringify(dokumentStartowy));
   const dokJson = useMemo(() => JSON.stringify(dok), [dok]);
   // ostatnio WYSŁANA do zapisu wersja: „brudny" także wtedy, gdy ekran wrócił do zapisanej A,
@@ -985,7 +989,7 @@ export function Edytor({
   // ── pliki z dysku: upuszczenie na płótno = wgranie do biblioteki + blok obrazu ──
   const edycjaMozliwa = !zablokowane && tryb === "edycja";
   const wgrajPliki = useCallback(
-    async (pliki: File[], cel: { indeks: number; obraz: string | null }) => {
+    async (pliki: File[], cel: { indeks: number; obraz: string | null; kotwica: string | null }) => {
       const bledy: string[] = [];
       if (pliki.length > MAKS_PLIKOW_NARAZ) bledy.push(`Naraz wgrasz najwyżej ${MAKS_PLIKOW_NARAZ} plików — pominęliśmy ${pliki.length - MAKS_PLIKOW_NARAZ}.`);
       const dobre = pliki.slice(0, MAKS_PLIKOW_NARAZ).filter((p) => {
@@ -1010,20 +1014,23 @@ export function Edytor({
       let ostatni: string | null = null;
       if (wstawione) {
         const bloki = adresy.map((src) => ({ ...nowyBlok("obraz"), src }) as Blok);
-        const podmiana = cel.obraz;
+        // Stan PO wysyłce: w trakcie uploadu ktoś mógł dodać, przenieść albo usunąć bloki.
+        // Miejsce dropu trzymamy jako blok-kotwicę (wstawiamy przed nim), nie jako numer.
+        const teraz = dokRef.current.bloki;
+        const podmiana = cel.obraz && teraz.some((b) => b.id === cel.obraz) ? cel.obraz : null;
         const nowe = podmiana ? bloki.slice(1) : bloki;
         ostatni = nowe.length ? nowe[nowe.length - 1].id : podmiana;
         aktualizuj((d) => {
           let wynik = d;
-          let indeks = Math.min(cel.indeks, d.bloki.length);
-          // blok, na który upuszczono plik, mógł zniknąć w trakcie wysyłki: wtedy wszystko jako nowe bloki
+          const k = cel.kotwica ? d.bloki.findIndex((b) => b.id === cel.kotwica) : -1;
+          let indeks = k !== -1 ? k : Math.min(cel.indeks, d.bloki.length);
           const i = podmiana ? d.bloki.findIndex((b) => b.id === podmiana) : -1;
           if (podmiana && i !== -1) {
             // plik upuszczony na blok obrazu podmienia jego zdjęcie, kolejne pliki lądują tuż pod nim
             wynik = zmienBlok(wynik, podmiana, { src: adresy[0] } as Partial<Blok>);
             indeks = i + 1;
           }
-          for (const blok of podmiana && i === -1 ? bloki : nowe) {
+          for (const blok of nowe) {
             wynik = wstawBlok(wynik, blok, indeks);
             indeks += 1;
           }
@@ -1067,7 +1074,8 @@ export function Edytor({
     setPlikNad(null);
     if (!edycjaMozliwa) return;
     const obraz = obrazPod(e.target) ?? cel?.obraz ?? null;
-    void wgrajPliki(Array.from(e.dataTransfer.files), { indeks: cel?.indeks ?? indeksDlaY(e.clientY), obraz });
+    const indeks = cel?.indeks ?? indeksDlaY(e.clientY);
+    void wgrajPliki(Array.from(e.dataTransfer.files), { indeks, obraz, kotwica: dok.bloki[indeks]?.id ?? null });
   };
 
   // obraz z zakładki „Obrazy": do zaznaczonego bloku obrazu albo jako nowy blok pod zaznaczeniem
@@ -1103,7 +1111,9 @@ export function Edytor({
     } else if (!konto.firma?.trim()) {
       braki.push({ tekst: "W stopce brakuje nazwy firmy. Odbiorca zobaczy sam adres.", link: { href: adresDanychFirmy, etykieta: "Uzupełnij dane firmy" } });
     }
-    const przyklady = przykladoweDane(dok);
+    // jak na liście kontrolnej: wzorzec zgodny z prawdziwymi danymi nadawcy nie jest atrapą
+    const daneNadawcy = przykladyWHtml(`${konto.firma ?? ""} ${konto.adres ?? ""}`);
+    const przyklady = przykladoweDane(dok).filter((p) => !daneNadawcy.includes(p));
     if (przyklady.length) braki.push({ tekst: `W mailu zostały dane z szablonu: ${przyklady.join(", ")}. Zastąp je swoimi.`, wymagane: true });
     const render = renderujDokument(dok);
     if (dok.bloki.length && !linkiSledzone(render.html).length) braki.push({ tekst: "W mailu nie ma żadnego linku do strony sklepu.", wymagane: true });
