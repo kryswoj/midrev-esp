@@ -5,8 +5,6 @@ import {
   KROJE,
   ROZMIARY_PRZYCISKU,
   SIECI,
-  SILNIK_SZEROKOSC_KARTY,
-  SILNIK_TLO,
   WARIANTY_TEKSTU,
   type Blok,
   type BlokTypu,
@@ -37,7 +35,7 @@ function Oprawa({ blok, zmien, styl }: { blok: Blok; zmien: Zmiana; styl: StyleM
 function PolaKolumny({ nazwa, kol, zmien }: { nazwa: string; kol: Kolumna; zmien: (k: Partial<Kolumna>, klucz: string) => void }) {
   return (
     <Sekcja tytul={`Kolumna ${nazwa}`} opis="Tekst edytujesz na płótnie. Obraz i przycisk są opcjonalne.">
-      <PoleUrl etykieta="Adres obrazu" wartosc={kol.obrazUrl} onZmiana={(obrazUrl) => zmien({ obrazUrl }, `${nazwa}-img`)} />
+      <PoleObrazu etykieta="Obraz" wartosc={kol.obrazUrl} onZmiana={(obrazUrl) => zmien({ obrazUrl }, `${nazwa}-img`)} />
       <PoleTekstu etykieta="Tekst alternatywny obrazu" wartosc={kol.obrazAlt} onZmiana={(obrazAlt) => zmien({ obrazAlt }, `${nazwa}-alt`)} maks={300} />
       <PoleTekstu etykieta="Napis na przycisku" wartosc={kol.przyciskTekst} onZmiana={(przyciskTekst) => zmien({ przyciskTekst }, `${nazwa}-btn`)} placeholder="puste = bez przycisku" maks={300} />
       <PoleUrl etykieta="Link przycisku i obrazu" wartosc={kol.przyciskLink} onZmiana={(przyciskLink) => zmien({ przyciskLink }, `${nazwa}-link`)} />
@@ -50,8 +48,8 @@ export function WlasciwosciBloku({ blok, zmien, uwagi, styl }: { blok: Blok; zmi
     switch (blok.typ) {
       case "naglowek":
         return (
-          <Sekcja tytul="Logo" opis="Bez adresu logo w nagłówku stoi nazwa sklepu (edytujesz ją na płótnie).">
-            <PoleUrl etykieta="Adres obrazu logo" wartosc={blok.logoUrl} onZmiana={(logoUrl) => zmien({ logoUrl }, "logoUrl")} podpowiedz="PNG albo JPG pod adresem https://. SVG nie działa w Gmailu i Outlooku." />
+          <Sekcja tytul="Logo" opis="Bez logo w nagłówku stoi nazwa sklepu (edytujesz ją na płótnie, dwukrotnym kliknięciem).">
+            <PoleObrazu etykieta="Logo" wartosc={blok.logoUrl} onZmiana={(logoUrl) => zmien({ logoUrl }, "logoUrl")} podpowiedz="PNG albo JPG. SVG nie działa w Gmailu i Outlooku." />
             <PoleTekstu etykieta="Tekst alternatywny" wartosc={blok.logoAlt} onZmiana={(logoAlt) => zmien({ logoAlt }, "logoAlt")} placeholder={blok.nazwa} maks={300} />
             <Suwak etykieta="Szerokość logo" wartosc={blok.logoSzerokosc} min={40} maks={400} onZmiana={(logoSzerokosc) => zmien({ logoSzerokosc }, "logoSzerokosc")} />
             <PoleUrl etykieta="Link (strona sklepu)" wartosc={blok.link} onZmiana={(link) => zmien({ link }, "link")} />
@@ -60,14 +58,14 @@ export function WlasciwosciBloku({ blok, zmien, uwagi, styl }: { blok: Blok; zmi
         );
       case "tekst":
         return (
-          <Sekcja tytul="Tekst" opis="Pisz wprost na płótnie. Pasek formatowania u góry edytora: pogrubienie, link (Ctrl+K), styl i wyrównanie bloku.">
+          <Sekcja tytul="Tekst" opis="Kliknij tekst na płótnie drugi raz (albo Enter), żeby pisać. Pasek u góry: pogrubienie, link (Ctrl+K), styl i wyrównanie. Esc kończy pisanie.">
             <PoleKoloru etykieta="Kolor tekstu" wartosc={blok.kolor} pusty="Ze stylów maila" zastepczy={styl.kolorTekstu} onZmiana={(kolor) => zmien({ kolor }, "kolor")} />
           </Sekcja>
         );
       case "obraz":
         return (
           <Sekcja tytul="Obraz">
-            <PoleObrazu etykieta="Adres obrazu" wartosc={blok.src} onZmiana={(src) => zmien({ src }, "src")} podpowiedz="Wklej adres obrazu ze sklepu albo CDN — albo wgraj plik do biblioteki poniżej." />
+            <PoleObrazu etykieta="Adres obrazu" wartosc={blok.src} onZmiana={(src) => zmien({ src }, "src")} podpowiedz="Wklej adres obrazu ze sklepu albo wgraj plik do biblioteki poniżej." />
             <PoleTekstu etykieta="Tekst alternatywny (alt)" wartosc={blok.alt} onZmiana={(alt) => zmien({ alt }, "alt")} placeholder="co jest na obrazie" podpowiedz="Wyświetla się, gdy skrzynka blokuje obrazy, i czyta go czytnik ekranu." maks={300} />
             <PoleUrl etykieta="Link po kliknięciu" wartosc={blok.link} onZmiana={(link) => zmien({ link }, "link")} />
             <Suwak etykieta="Szerokość" wartosc={blok.szerokosc} min={10} maks={100} jednostka="%" onZmiana={(szerokosc) => zmien({ szerokosc }, "szerokosc")} />
@@ -77,7 +75,7 @@ export function WlasciwosciBloku({ blok, zmien, uwagi, styl }: { blok: Blok; zmi
         );
       case "przycisk":
         return (
-          <Sekcja tytul="Przycisk" opis="Napis edytujesz na płótnie. W Outlooku przycisk rysuje się przez VML, więc wygląda tak samo.">
+          <Sekcja tytul="Przycisk" opis="Napis zmieniasz na płótnie (kliknij dwa razy). Przycisk wygląda tak samo także w Outlooku.">
             <PoleUrl etykieta="Link" wartosc={blok.link} onZmiana={(link) => zmien({ link }, "link")} mail />
             <PoleKoloru etykieta="Kolor tła" wartosc={blok.kolorTla} pusty="Kolor marki" zastepczy={styl.kolorMarki} onZmiana={(kolorTla) => zmien({ kolorTla }, "kolorTla")} />
             <PoleKoloru etykieta="Kolor napisu" wartosc={blok.kolorTekstu} onZmiana={(kolorTekstu) => zmien({ kolorTekstu }, "kolorTekstu")} />
@@ -172,14 +170,14 @@ export function WlasciwosciBloku({ blok, zmien, uwagi, styl }: { blok: Blok; zmi
         );
       case "stopka":
         return (
-          <Sekcja tytul="Stopka" opis="Dane firmy i kontakt. Link wypisu dokleja silnik wysyłki pod każdym mailem — nie dodawaj go tutaj.">
+          <Sekcja tytul="Stopka" opis="Nazwę, adres i NIP firmy oraz link do wypisania się dodajemy pod każdym mailem sami, z ustawień konta. Tu wpisz to, co chcesz dodać od siebie, np. kontakt.">
             <PoleKoloru etykieta="Kolor tekstu" wartosc={blok.kolor} pusty="Szary domyślny" zastepczy="#868d97" onZmiana={(kolor) => zmien({ kolor }, "kolor")} />
             <Wyrownanie wartosc={blok.wyrownanie} onZmiana={(wyrownanie) => zmien({ wyrownanie })} />
           </Sekcja>
         );
       case "html":
         return (
-          <Sekcja tytul="Własny HTML" opis="Wstawiany do maila bez zmian. Linki http(s) zostaną przepisane na śledzone, stopkę z wypisem dokleja silnik.">
+          <Sekcja tytul="Własny HTML" opis="Wstawiany do maila bez zmian. Kliknięcia w linki do stron policzymy, stopkę z wypisem dodajemy sami.">
             <PoleTekstu etykieta="Kod HTML" wartosc={blok.html} onZmiana={(html) => zmien({ html }, "html")} wielolinijkowe={14} mono placeholder={'<p>Treść…</p>\n<p><a href="https://sklep.pl">Link</a></p>'} maks={200000} />
           </Sekcja>
         );
@@ -208,7 +206,6 @@ export function WlasciwosciBloku({ blok, zmien, uwagi, styl }: { blok: Blok; zmi
 }
 
 export function StyleGlobalne({ styl, zmien }: { styl: StyleMaila; zmien: (z: Partial<StyleMaila>, klucz?: string) => void }) {
-  const powodSilnika = `Silnik wysyłki opakowuje dziś treść własną kartą ${SILNIK_SZEROKOSC_KARTY} px na tle ${SILNIK_TLO} — to ustawienie nie byłoby widoczne u odbiorcy.`;
   return (
     <>
       <div className="flex h-12 items-center gap-2 border-b border-[var(--color-linia)] px-4">
@@ -226,21 +223,7 @@ export function StyleGlobalne({ styl, zmien }: { styl: StyleMaila; zmien: (z: Pa
           Tylko kroje bezpieczne dla poczty — każdy klient pocztowy ma je u siebie, więc mail wygląda wszędzie tak samo.
         </p>
       </Sekcja>
-      <Sekcja tytul="Oprawa maila" opis="Ustala silnik wysyłki — edytor tylko ją odwzorowuje.">
-        <PoleKoloru etykieta="Tło wokół treści" wartosc={styl.tlo} onZmiana={(tlo) => zmien({ tlo }, "tlo")} zablokowane powod={powodSilnika} />
-        <Pole2 etykieta="Szerokość treści" wartosc={`${SILNIK_SZEROKOSC_KARTY} px (karta silnika)`} powod={powodSilnika} />
-      </Sekcja>
     </>
-  );
-}
-
-function Pole2({ etykieta, wartosc, powod }: { etykieta: string; wartosc: string; powod: string }) {
-  return (
-    <div>
-      <span className="etykieta mb-1.5 block">{etykieta}</span>
-      <input value={wartosc} disabled readOnly className="pole disabled:opacity-60" aria-label={etykieta} />
-      <p className="mt-1 text-[12px] leading-[17px] text-[var(--color-tekst-3)]">{powod}</p>
-    </div>
   );
 }
 

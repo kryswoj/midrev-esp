@@ -4,6 +4,7 @@ import {
   domknijSurowyHtml,
   escapuj,
   KROJE,
+  przykladoweDane,
   sanityzujTekst,
   SIECI,
   STYLE_DOMYSLNE,
@@ -75,7 +76,14 @@ function przycisk(
   // przycisk może prowadzić też do mailto: (panel to dopuszcza, render musi tak samo);
   // silnik przepisuje na śledzone tylko http(s), mailto zostaje jak jest
   const href = bezpiecznyUrl(o.link, "www-lub-mail");
-  if (!href) k.uwagi.push(`Przycisk „${o.tekst.trim() || "Przycisk"}" nie ma poprawnego linku (https:// albo mailto:) — w mailu nie będzie klikalny.`);
+  if (!href) {
+    const napis = o.tekst.trim() || "Przycisk";
+    k.uwagi.push(
+      o.link.trim()
+        ? `Przycisk „${napis}" ma niepoprawny link. Wpisz pełny adres strony (https://…) albo adres e-mail (mailto:…).`
+        : `Przycisk „${napis}" nie ma linku, więc w mailu nie da się go kliknąć.`,
+    );
+  }
   // szerokość VML szacowana z długości napisu: Outlook nie umie „dopasuj do treści"
   const szer = o.pelna
     ? o.szerMax
@@ -100,16 +108,16 @@ function przycisk(
 function obraz(k: Kontekst, o: { src: string; alt: string; link: string; szerPx: number; promien: number; wyrownanie: string; opis: string }): string {
   const src = bezpiecznyUrl(o.src);
   if (!src) {
-    if (o.src.trim()) k.uwagi.push(`${o.opis}: adres obrazu musi zaczynać się od http:// albo https:// — obraz pominięty.`);
-    else k.uwagi.push(`${o.opis}: brak adresu obrazu — obraz pominięty w mailu.`);
+    if (o.src.trim()) k.uwagi.push(`${o.opis}: adres obrazu musi zaczynać się od https:// (wgraj plik albo wybierz z biblioteki), inaczej w mailu go nie będzie.`);
+    else k.uwagi.push(`${o.opis}: nie wybrano obrazu, więc w mailu go nie będzie.`);
     return "";
   }
-  if (!o.alt.trim()) k.uwagi.push(`${o.opis}: brak tekstu alternatywnego (alt) — część skrzynek domyślnie nie pokazuje obrazów.`);
+  if (!o.alt.trim()) k.uwagi.push(`${o.opis}: brak opisu obrazu. Część skrzynek nie pokazuje obrazków od razu i wtedy widać właśnie opis.`);
   const img =
     `<img src="${src}" alt="${escapuj(o.alt)}" width="${o.szerPx}" style="display:block;width:100%;max-width:${o.szerPx}px;height:auto;border:0;outline:none;text-decoration:none;` +
     `${o.promien ? `border-radius:${o.promien}px;` : ""}${o.wyrownanie === "center" ? "margin:0 auto;" : o.wyrownanie === "right" ? "margin-left:auto;" : ""}" class="mr-img">`;
   const href = bezpiecznyUrl(o.link);
-  if (o.link.trim() && !href) k.uwagi.push(`${o.opis}: link obrazu musi zaczynać się od http:// albo https://.`);
+  if (o.link.trim() && !href) k.uwagi.push(`${o.opis}: link po kliknięciu w obraz musi być pełnym adresem strony (https://…).`);
   return href ? `<a href="${href}" target="_blank" style="text-decoration:none">${img}</a>` : img;
 }
 
@@ -146,7 +154,13 @@ function trescBloku(k: Kontekst, blok: Blok, tloBloku: string): string {
         ? obraz(k, { src: blok.logoUrl, alt: blok.logoAlt || blok.nazwa, link: blok.link, szerPx: Math.min(blok.logoSzerokosc, szer), promien: 0, wyrownanie: blok.wyrownanie, opis: "Nagłówek (logo)" })
         : "";
       if (logo) return logo;
-      const nazwa = escapuj(blok.nazwa.trim() || "Twój sklep");
+      // Bez logo i bez nazwy nagłówek znika z maila. Kiedyś wstawiał „Twój sklep": odbiorca
+      // dostawał wtedy maila od sklepu bez nazwy, podpisanego cudzą atrapą (audyt UX P0-2).
+      if (!blok.nazwa.trim()) {
+        k.uwagi.push("Nagłówek nie ma logo ani nazwy sklepu, więc w mailu go nie będzie.");
+        return "";
+      }
+      const nazwa = escapuj(blok.nazwa.trim());
       const href = bezpiecznyUrl(blok.link);
       const napis = `<div style="margin:0;font-family:${k.font};font-size:22px;line-height:28px;font-weight:700;letter-spacing:-0.01em;color:${kolorNaTle};text-align:${wyrownanieTabeli(blok.wyrownanie)}">${href ? `<a href="${href}" target="_blank" style="color:${kolorNaTle};text-decoration:none">${nazwa}</a>` : nazwa}</div>`;
       return napis;
@@ -227,7 +241,7 @@ function trescBloku(k: Kontekst, blok: Blok, tloBloku: string): string {
       const linki = blok.linki
         .map((l) => ({ ...l, href: bezpiecznyUrl(l.url) }))
         .filter((l) => {
-          if (!l.href) k.uwagi.push(`Social: link do ${SIECI[l.siec].etykieta} jest pusty albo niepoprawny — pominięty.`);
+          if (!l.href) k.uwagi.push(`Social: profil ${SIECI[l.siec].etykieta} nie ma linku, więc w mailu go nie będzie.`);
           return Boolean(l.href);
         });
       if (!linki.length) return "";
@@ -302,6 +316,7 @@ export function renderujDokument(dokument: DokumentMaila, opcje: { preheader?: s
     // szerokości treści w karcie silnika, a nie od deklarowanej szerokości maila
     szerTresci: Math.min(s.szerokosc, SZEROKOSC_TRESCI), uwagi: [] };
   const wiersze = dokument.bloki.map((b) => wiersz(k, b)).join("");
+  for (const p of przykladoweDane(dokument)) k.uwagi.push(`W treści zostały przykładowe dane: ${p}. Zastąp je swoimi albo usuń.`);
   const preheader = (opcje.preheader ?? "").trim();
 
   const html =

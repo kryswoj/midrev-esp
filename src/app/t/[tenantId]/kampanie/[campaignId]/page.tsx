@@ -2,7 +2,7 @@ import Link from "next/link";
 import { wymaganyTenant } from "../../../../autoryzacja";
 import { getPool } from "../../../../../adapters/db/pool";
 import { zGroszy } from "../../../../../domain/kwoty";
-import { odmien } from "../../../../../domain/liczebniki";
+import { formaOdmiany, odmien } from "../../../../../domain/liczebniki";
 import { raportKampanii } from "../../../../../usecases/przelicz-atrybucje";
 import { policzOdbiorcow } from "../../../../../usecases/policz-odbiorcow";
 import { config } from "../../../../../config";
@@ -161,6 +161,11 @@ export default async function Kampania({
     ustawienia: `${baza}/ustawienia`,
     przeglad: baza,
   };
+  // dane firmy i domena żyją w ustawieniach KONTA, nie w kroku „Temat i nadawca"
+  const celPoprawki = (p: PunktListy) =>
+    p.klucz === "domena" ? `/t/${tenantId}/ustawienia/wysylka` : p.klucz === "adres" ? `/t/${tenantId}/ustawienia/wysylka#dane-firmy` : sciezkaKroku[p.krok];
+  const doPoprawy = lista.punkty.filter((p) => p.stan !== "ok");
+  const zaliczone = lista.punkty.filter((p) => p.stan === "ok");
 
   return (
     <>
@@ -208,9 +213,9 @@ export default async function Kampania({
       {poWysylce ? (
         <div className="space-y-5 px-5 pt-5">
           <div className="karta siatka-wloskiem grid sm:grid-cols-2 xl:grid-cols-4">
-            <Stat label="Przychód" value={zGroszy(Number(raport.przychod_minor))} description={`${odmien(Number(raport.zamowien), "zamówienie", "zamówienia", "zamówień")}, ostatni przebieg atrybucji`} />
+            <Stat label="Przychód" value={zGroszy(Number(raport.przychod_minor))} description={`${odmien(Number(raport.zamowien), "zamówienie", "zamówienia", "zamówień")}, stan z ostatniego przeliczenia`} />
             <Stat label="Kliknięcia" value={String(raport.klikniecia)} description="odbiorcy, którzy kliknęli" />
-            <Stat label="Wysłane" value={String(raport.wyslane)} description={raport.zatrzymane ? `${raport.zatrzymane} zatrzymanych bramką` : "wiadomości u odbiorców"} />
+            <Stat label="Wysłane" value={String(raport.wyslane)} description={raport.zatrzymane ? `${raport.zatrzymane} zatrzymanych przed wysyłką` : "wiadomości u odbiorców"} />
             <Stat label="Do wysyłki" value={String(odbiorcy.docelowo)} description={`z ${odbiorcy.kandydaci} kandydatów, stan na teraz`} />
           </div>
           <div className="flex justify-end">
@@ -234,33 +239,29 @@ export default async function Kampania({
           {!poWysylce ? (
           <section className="karta overflow-hidden">
             <div className="karta-naglowek">
-              <h2>Lista kontrolna przed wysyłką</h2>
-              <span className={`plakietka ml-auto ${lista.gotowa ? "plakietka-ok" : "plakietka-blad"}`}>
-                {lista.gotowa
-                  ? "treść i ustawienia kompletne"
-                  : `${niespelnione.length} ${niespelnione.length === 1 ? "rzecz do poprawy" : "rzeczy do poprawy"}`}
-              </span>
+              <div className="min-w-0">
+                <h2>
+                  {lista.gotowa
+                    ? "Treść i ustawienia gotowe do wysyłki"
+                    : `Do wysyłki ${niespelnione.length === 1 ? "brakuje jednej rzeczy" : `brakuje ${niespelnione.length} rzeczy`}`}
+                </h2>
+                <p className="karta-opis">Sprawdzamy to przy każdym wejściu. Wysyłka ruszy dopiero, gdy wszystko będzie gotowe.</p>
+              </div>
+              {lista.gotowa ? <span className="plakietka plakietka-ok ml-auto shrink-0">gotowe</span> : null}
             </div>
             <ul>
-              {lista.punkty.map((p) => (
-                <li key={p.klucz} className="grid grid-cols-[96px_minmax(0,1fr)_auto] items-start gap-3 border-b border-[var(--color-linia-0)] px-4 py-3.5 last:border-b-0">
-                  <span
-                    className={`plakietka mt-px justify-center ${
-                      p.stan === "ok" ? "plakietka-ok" : p.stan === "blad" ? "plakietka-blad" : "plakietka-uwaga"
-                    }`}
-                  >
-                    {p.stan === "ok" ? "gotowe" : p.stan === "blad" ? "brakuje" : "uwaga"}
-                  </span>
+              {doPoprawy.map((p) => (
+                <li key={p.klucz} className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-3 border-b border-[var(--color-linia-0)] px-4 py-3.5 last:border-b-0">
                   <div className="min-w-0">
-                    <div className="text-[14px] font-semibold">{p.etykieta}</div>
-                    <div className="mt-0.5 break-words text-[13px] leading-[19px] text-[var(--color-tekst-2)]">{p.opis}</div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className={`plakietka ${p.stan === "blad" ? "plakietka-blad" : "plakietka-uwaga"}`}>{p.stan === "blad" ? "brakuje" : "uwaga"}</span>
+                      <span className="text-[14px] font-semibold">{p.etykieta}</span>
+                    </div>
+                    <div className="mt-1 break-words text-[13px] leading-[19px] text-[var(--color-tekst-2)]">{p.opis}</div>
                   </div>
-                  {p.stan !== "ok" && !poWysylce && p.krok !== "przeglad" ? (
-                    <Link
-                      href={p.klucz === "domena" ? `/t/${tenantId}/ustawienia/wysylka` : sciezkaKroku[p.krok]}
-                      className="przycisk przycisk-wtorny przycisk-maly"
-                    >
-                      Popraw
+                  {p.krok !== "przeglad" ? (
+                    <Link href={celPoprawki(p)} className={`przycisk przycisk-maly ${p.stan === "blad" ? "" : "przycisk-wtorny"}`}>
+                      {p.akcja ?? "Popraw"}
                     </Link>
                   ) : (
                     <span />
@@ -268,6 +269,27 @@ export default async function Kampania({
                 </li>
               ))}
             </ul>
+            {zaliczone.length ? (
+              <details className={`group ${doPoprawy.length ? "border-t border-[var(--color-linia)]" : ""}`} open={doPoprawy.length === 0}>
+                <summary className="flex cursor-pointer list-none items-center gap-2 px-4 py-3 text-[13px] font-medium text-[var(--color-tekst-2)] hover:text-[var(--color-tekst)]">
+                  <span className="plakietka plakietka-ok">{zaliczone.length} gotowe</span>
+                  <span className="truncate">{zaliczone.map((p) => p.etykieta).join(" · ")}</span>
+                  <span className="ml-auto shrink-0 text-[var(--color-akcent)] group-open:hidden">Pokaż</span>
+                  <span className="ml-auto hidden shrink-0 text-[var(--color-akcent)] group-open:inline">Zwiń</span>
+                </summary>
+                <ul className="border-t border-[var(--color-linia-0)]">
+                  {zaliczone.map((p) => (
+                    <li key={p.klucz} className="flex items-start gap-3 border-b border-[var(--color-linia-0)] px-4 py-2.5 last:border-b-0">
+                      <span className="mt-[3px] text-[var(--color-ok)]" aria-hidden="true">✓</span>
+                      <div className="min-w-0">
+                        <div className="text-[13px] font-semibold">{p.etykieta}</div>
+                        <div className="break-words text-[12px] leading-[17px] text-[var(--color-tekst-2)]">{p.opis}</div>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
           </section>
           ) : null}
 
@@ -385,8 +407,8 @@ export default async function Kampania({
                           {niespelnione.map((p) => (
                             <li key={p.klucz}>
                               • {p.etykieta.toLowerCase()}:{" "}
-                              <Link href={p.klucz === "domena" ? `/t/${tenantId}/ustawienia/wysylka` : sciezkaKroku[p.krok]} className="font-medium text-[var(--color-akcent)] hover:underline">
-                                popraw →
+                              <Link href={celPoprawki(p)} className="font-medium text-[var(--color-akcent)] hover:underline">
+                                {(p.akcja ?? "popraw").toLowerCase()} →
                               </Link>
                             </li>
                           ))}
@@ -449,15 +471,15 @@ export default async function Kampania({
                 <p className="text-[13px] text-[var(--color-tekst-2)]">Kampania wysłana — treść i ścieżka są zamknięte.</p>
               ) : null}
 
-              {/* Liczby przy nieodwracalnej decyzji: ile już poszło, ile stoi w kolejce, ile w locie. */}
+              {/* Liczby przy nieodwracalnej decyzji: ile już poszło, ile stoi w kolejce, ile właśnie wychodzi. */}
               {(wstrzymana || wWysylce || kampania.status === "sent" || kampania.status === "cancelled") && stanWysylki ? (
                 <div className="border-t border-[var(--color-linia-0)] pt-4 text-[13px] text-[var(--color-tekst-2)]">
                   <h3 className="text-[13px] font-semibold text-[var(--color-tekst)]">Stan wysyłki</h3>
                   <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5">
                     {[
-                      ["przekazane dostawcy", stanWysylki.przekazane],
-                      ["w kolejce", stanWysylki.wKolejce],
-                      ["w locie", stanWysylki.wLocie],
+                      ["wysłane", stanWysylki.przekazane],
+                      ["czekają w kolejce", stanWysylki.wKolejce],
+                      ["właśnie wychodzą", stanWysylki.wLocie],
                       ["zatrzymane", stanWysylki.zatrzymane],
                     ].map(([e, w]) => (
                       <div key={String(e)} className="flex justify-between">
@@ -468,7 +490,7 @@ export default async function Kampania({
                   </dl>
                   {wstrzymana ? (
                     <p className="mt-3">
-                      Wstrzymana {kampania.paused_at ? formatujDateICzas(kampania.paused_at) : ""}. Wiadomości przekazanych dostawcy nie da się cofnąć. Wiadomości w locie (najwyżej jedna partia) dojdą do końca.
+                      Wstrzymana {kampania.paused_at ? formatujDateICzas(kampania.paused_at) : ""}. Wysłanych maili nie da się cofnąć. Te, które właśnie wychodzą (najwyżej jedna partia), dojdą do odbiorców.
                     </p>
                   ) : null}
                   {kampania.status === "cancelled" ? (
@@ -508,7 +530,7 @@ export default async function Kampania({
           <section className="karta p-4">
             <h2 className="text-[14px]">Wysyłka testowa</h2>
             <p className="mt-0.5 text-[12px] leading-[17px] text-[var(--color-tekst-3)]">
-              Ta sama ścieżka co wysyłka właściwa: nadawca, stopka z wypisem, kolejka. Linki w teście prowadzą prosto do sklepu, bez śledzenia. Tu trafia do Mailpita.
+              Dostaniesz go od tego samego nadawcy i z tą samą stopką co klienci. Linki w teście prowadzą prosto do sklepu, bez liczenia kliknięć.
             </p>
             <form action={wyslijTestAkcja} className="mt-3 flex gap-2">
               <input type="hidden" name="tenantId" value={tenantId} />
@@ -519,12 +541,21 @@ export default async function Kampania({
               </button>
             </form>
             {!html.trim() || !kampania.subject ? <p className="mt-2 text-[12px] text-[var(--color-tekst-2)]">Najpierw temat i treść.</p> : null}
+            {niespelnione.length ? (
+              <p className="mt-2 text-[12px] leading-[17px] text-[var(--color-czeka)]">
+                Test wyjdzie, ale przed wysyłką do klientów {niespelnione.length === 1 ? "jedna rzecz wymaga" : `${niespelnione.length} ${formaOdmiany(niespelnione.length, "rzecz wymaga", "rzeczy wymagają", "rzeczy wymaga")}`} poprawy (lista po lewej).
+              </p>
+            ) : null}
           </section>
 
           {/* Odwołanie: nieodwracalne, więc osobno, za potwierdzeniem i zawsze przy liczbach. */}
           {przedWysylka || wstrzymana ? (
-            <section className="karta border-[#f5c6c2] p-4">
-              <h2 className="text-[14px]">{wstrzymana ? "Odwołanie reszty wysyłki" : "Anulowanie kampanii"}</h2>
+            <details className="karta group p-4" open={wstrzymana ? true : undefined}>
+              <summary className="cursor-pointer list-none text-[13px] font-medium text-[var(--color-tekst-2)] hover:text-[var(--color-blad)]">
+                {wstrzymana ? "Odwołanie reszty wysyłki" : "Anuluj kampanię…"}
+              </summary>
+              <section className="mt-3">
+              <h2 className="sr-only">{wstrzymana ? "Odwołanie reszty wysyłki" : "Anulowanie kampanii"}</h2>
               <p className="mt-0.5 text-[12px] leading-[17px] text-[var(--color-tekst-3)]">
                 {wstrzymana
                   ? "Zatrzymuje wiadomości, które jeszcze czekają w kolejce. Nieodwracalne."
@@ -545,7 +576,8 @@ export default async function Kampania({
                   {wstrzymana ? "Odwołaj resztę wysyłki" : "Anuluj kampanię"}
                 </button>
               </form>
-            </section>
+              </section>
+            </details>
           ) : null}
         </div>
       </div>
