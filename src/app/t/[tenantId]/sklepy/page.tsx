@@ -5,7 +5,7 @@ import { sklepyZeStanemWebhookow } from "../../../../adapters/store/stan-webhook
 import type { StanWebhookow, WpisWebhooka } from "../../../../adapters/store/webhooki";
 import { ocenSklep, PROG_CISZY_GODZIN, type OcenaSklepu } from "../../../../usecases/cisza-sklepow";
 import { importujAkcja } from "../../../akcje";
-import { Alert, Badge, Button, Card, CardBody, CardHeader, EmptyState, Icon, MobileList, MobileListItem, Table, TBody, Td, Th, THead } from "../../../ui";
+import { Alert, Badge, Button, Card, PrzyciskFormularza, CardBody, CardHeader, EmptyState, Icon, MobileList, MobileListItem, Table, TBody, Td, Th, THead } from "../../../ui";
 import { Komunikat, Naglowek } from "../naglowek";
 import { odswiezWebhokiAkcja } from "./akcje";
 import { FormularzPodlaczenia } from "./formularz-podlaczenia";
@@ -121,7 +121,7 @@ export default async function Sklepy({
                           <form action={odswiezWebhokiAkcja}>
                             <input type="hidden" name="tenantId" value={tenantId} />
                             <input type="hidden" name="storeId" value={s.id} />
-                            <Button variant="secondary" size="sm" type="submit">Sprawdź webhooki</Button>
+                            <PrzyciskFormularza variant="secondary" size="sm" trwa="Sprawdzam…">Sprawdź webhooki</PrzyciskFormularza>
                           </form>
                         }
                       />
@@ -135,7 +135,7 @@ export default async function Sklepy({
                       <form action={importujAkcja}>
                         <input type="hidden" name="tenantId" value={tenantId} />
                         <input type="hidden" name="storeId" value={s.id} />
-                        <Button variant="secondary" type="submit">Importuj historię</Button>
+                        <PrzyciskFormularza variant="secondary" trwa="Uruchamiam import…">Importuj historię</PrzyciskFormularza>
                       </form>
                     </section>
                   </Card>

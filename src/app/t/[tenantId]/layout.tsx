@@ -4,6 +4,7 @@ import { licznikiNawigacji, listaTenantow } from "../../../adapters/db/repozytor
 import { wylogujAkcja } from "../../logowanie/akcje";
 import { wymaganyTenant } from "../../autoryzacja";
 import { Icon } from "../../ui/ikona";
+import { StraznikWersji } from "../../ui/straznik-wersji";
 import { PrzelacznikTenanta } from "./przelacznik";
 import { Nawigacja, NawigacjaMobilna } from "./nawigacja";
 import { RozwinPasek } from "./rozwin-pasek";
@@ -65,6 +66,7 @@ export default async function Uklad({ children, params }: { children: React.Reac
   // szerokość paska i kontenera treści są w CSS, nie w utility, żeby tryb mógł je nadpisać.
   return (
     <div className="uklad-panelu min-h-screen bg-[var(--color-plotno)] md:flex">
+      <a href="#tresc" className="link-pomin">Przejdź do treści</a>
       <aside className="uklad-pasek hidden shrink-0 border-r border-[var(--color-linia)] bg-white md:block">
         <div className="uklad-pasek-wnetrze sticky top-0 flex h-screen flex-col bg-white px-4 pb-4 pt-5">
           <Marka href={`/t/${tenantId}`} />
@@ -75,7 +77,7 @@ export default async function Uklad({ children, params }: { children: React.Reac
           </div>
 
           <div className="border-t border-[var(--color-linia)] pt-3">
-            <Nawigacja tenantId={tenantId} sekcje={[{ tytul: "Ustawienia", pozycje: USTAWIENIA }]} liczniki={{}} />
+            <Nawigacja tenantId={tenantId} sekcje={[{ tytul: "Ustawienia", pozycje: USTAWIENIA }]} liczniki={{}} etykieta="Ustawienia" />
           </div>
           <div className="uklad-uzytkownik mt-4 flex items-center gap-3 border-t border-[var(--color-linia)] px-2 pb-1 pt-4">
             <span className="uklad-pasek-ukryj-blok grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[var(--color-akcent-tlo)] text-[12px] font-semibold text-[var(--color-akcent)]">
@@ -92,13 +94,14 @@ export default async function Uklad({ children, params }: { children: React.Reac
       </aside>
 
       <div className="min-w-0 flex-1">
-        <div className="flex h-[52px] items-center gap-3 border-b border-[var(--color-linia-0)] bg-white px-4 md:hidden">
+        <header className="flex h-[52px] items-center gap-3 border-b border-[var(--color-linia-0)] bg-white px-4 md:hidden">
           <Marka href={`/t/${tenantId}`} />
           <PrzelacznikTenanta tenanci={wszyscy} biezacyId={tenantId} compact />
-        </div>
-        <NawigacjaMobilna tenantId={tenantId} pozycje={wszystkiePozycje} />
+        </header>
+        <NawigacjaMobilna tenantId={tenantId} pozycje={wszystkiePozycje} email={sesja.email} />
         {/* Jedyny poziomy padding treści daje layout; nagłówek i sekcje stron nie dodają własnego. */}
-        <main className="uklad-tresc">{children}</main>
+        <main id="tresc" tabIndex={-1} className="uklad-tresc outline-none">{children}</main>
+        <StraznikWersji />
       </div>
     </div>
   );

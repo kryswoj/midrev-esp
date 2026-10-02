@@ -1,8 +1,12 @@
 "use client";
 
-import { useFormStatus } from "react-dom";
+import { PrzyciskFormularza } from "../../../../ui/przycisk-formularza";
 
-/** Przycisk formularza z opisem trwającej akcji — DNS i SMTP potrafią myśleć kilka sekund. */
+/**
+ * Przycisk formularza z opisem trwającej akcji — DNS i SMTP potrafią myśleć kilka sekund.
+ * Stara sygnatura zostaje dla istniejących wywołań; stan „trwa” daje wspólny
+ * PrzyciskFormularza (src/app/ui/przycisk-formularza.tsx).
+ */
 export function PrzyciskAkcji({
   children,
   trwa,
@@ -14,10 +18,10 @@ export function PrzyciskAkcji({
   wariant?: "przycisk-wtorny" | "" | "przycisk-niebezpieczny";
   maly?: boolean;
 }) {
-  const { pending } = useFormStatus();
+  const variant = wariant === "przycisk-wtorny" ? "secondary" : wariant === "przycisk-niebezpieczny" ? "danger" : "primary";
   return (
-    <button type="submit" disabled={pending} className={`przycisk ${wariant} ${maly ? "przycisk-maly" : ""}`}>
-      {pending ? trwa : children}
-    </button>
+    <PrzyciskFormularza trwa={trwa} variant={variant} size={maly ? "sm" : "md"}>
+      {children}
+    </PrzyciskFormularza>
   );
 }

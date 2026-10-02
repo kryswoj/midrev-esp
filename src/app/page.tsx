@@ -5,8 +5,9 @@ import { utworzTenantaAkcja } from "./akcje";
 import { wymaganaSesja } from "./autoryzacja";
 import { zGroszy } from "../domain/kwoty";
 import { odmien } from "../domain/liczebniki";
-import { Alert, Button, Card, CardBody, CardHeader, EmptyState, Field, Icon, Input } from "./ui";
+import { Alert, Button, Card, CardBody, CardHeader, EmptyState, Field, Icon, Input, PrzyciskFormularza } from "./ui";
 import { wylogujAkcja } from "./logowanie/akcje";
+import { StraznikWersji } from "./ui/straznik-wersji";
 
 export const dynamic = "force-dynamic";
 
@@ -35,7 +36,7 @@ export default async function Strona({
           <div className="flex min-w-0 items-center gap-3">
             <span className="tekst-pomocniczy hidden max-w-[240px] truncate sm:block">{sesja.email}</span>
             <form action={wylogujAkcja}>
-              <Button variant="ghost" size="sm" type="submit"><Icon name="wyloguj" size={15} />Wyloguj</Button>
+              <PrzyciskFormularza variant="ghost" size="sm" trwa="Wylogowuję…"><Icon name="wyloguj" size={15} />Wyloguj</PrzyciskFormularza>
             </form>
           </div>
         </div>
@@ -121,13 +122,14 @@ export default async function Strona({
                   <Field label="Nazwa sklepu" htmlFor="nazwa" className="min-w-0">
                     <Input id="nazwa" name="nazwa" required placeholder="np. Sklep Zielony Dom" />
                   </Field>
-                  <Button type="submit"><Icon name="dodaj" size={16} />Dodaj klienta</Button>
+                  <PrzyciskFormularza trwa="Dodaję…"><Icon name="dodaj" size={16} />Dodaj klienta</PrzyciskFormularza>
                 </form>
               </CardBody>
             </Card>
           )}
         </div>
       </div>
+      <StraznikWersji />
     </main>
   );
 }

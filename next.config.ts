@@ -1,4 +1,24 @@
+import { readFileSync } from "node:fs";
 import type { NextConfig } from "next";
+import { wersjaZRevision } from "./src/wersja-wydania";
+
+// Wersja wydania (audyt UX 02.10, „stara karta po wdrożeniu”). deploy/deploy.sh zapisuje
+// REVISION w katalogu wydania PRZED `next build`: „<sha> <ref>” albo
+// „archiwum <plik> sha256:<hash>”. Z niej bierzemy krótki identyfikator, który:
+// - idzie do `deploymentId`: Next dokleja go do zasobów i przy niezgodności wersji karty
+//   z serwerem robi pełne przeładowanie zamiast miękkiej nawigacji,
+// - jest wkompilowany jako process.env.ESP_WERSJA (serwer i klient): /api/wersja
+//   i strażnik wersji w panelu porównują go, żeby pokazać pasek „Jest nowa wersja”.
+// Bez pliku REVISION (dev, testy, ręczny build) wersji nie ma i obie rzeczy są wyłączone.
+// Zależy WYŁĄCZNIE od pliku, nie od NODE_ENV.
+function wersjaWydania(): string {
+  try {
+    return wersjaZRevision(readFileSync("REVISION", "utf8"));
+  } catch {
+    return "";
+  }
+}
+const wersja = wersjaWydania();
 
 const produkcja = process.env.NODE_ENV === "production";
 // HSTS tylko wtedy, gdy panel naprawdę stoi na https: przeglądarka i tak ignoruje HSTS
@@ -28,6 +48,8 @@ const nextConfig: NextConfig = {
   // Panel jest narzędziem pracy operatora, nie stroną publiczną: bez indeksowania,
   // bez optymalizacji obrazów pod CDN, za to z jawnymi błędami w konsoli.
   reactStrictMode: true,
+  ...(wersja ? { deploymentId: wersja } : {}),
+  env: { ESP_WERSJA: wersja },
   serverExternalPackages: ["pg"],
   // bez „X-Powered-By: Next.js": nie podpowiadamy skanerom wersji frameworka
   poweredByHeader: false,

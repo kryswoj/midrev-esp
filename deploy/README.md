@@ -150,6 +150,13 @@ W `DATABASE_URL` to samo hasło co w `db.env`. `ALERT_WEBHOOK_URL`: webhook kana
 technicznego na Discordzie (https). `MIDREV_SANDBOX` i `SMTP_HOSTY_DEWELOPERSKIE` na
 produkcji **nie istnieją** (unity je usuwają, `deploy.sh` odmawia, aplikacja odmawia startu).
 
+`NEXT_SERVER_ACTIONS_ENCRYPTION_KEY` (`openssl rand -base64 32`) jest **opcjonalny**, ale
+zalecany: z nim akcje formularzy, których kod się nie zmienił, mają to samo ID po
+wdrożeniu, więc karta otwarta przed deployem dalej zapisuje (bez niego każdy build losuje
+klucz i po deployu stara karta dostaje „Server action not found”). `deploy.sh` podaje go
+do `next build` przez stdin i nie wypisuje. Wpisanie albo zmiana wartości: **za zgodą
+Krystiana** (zmiana zmiennej produkcyjnej).
+
 ### 3.3 Klucze poza serwerem (MUSI być zrobione przed pierwszym mailem)
 
 Do menedżera haseł (np. 1Password/Bitwarden, sejf „midrev-esp prod”), **osobno od backupu**:
@@ -296,7 +303,11 @@ Przebieg `deploy.sh`:
 3. nowy katalog `releases/<UTC>`, kod, `npm ci` **pełne** (z devDependencies: worker i
    migracje chodzą przez `tsx`, build potrzebuje TypeScriptu i Tailwinda) i `next build`
    jako `midrev-esp`, **bez** zmiennych z `production.env` (sekrety nie mogą trafić do
-   artefaktów buildu),
+   artefaktów buildu); jedyny wyjątek to opcjonalny `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY`
+   (sekcja 3.2), który Next z założenia wkompilowuje. Plik `REVISION` (SHA albo sha256
+   archiwum) powstaje przed buildem: `next.config.ts` robi z niego `deploymentId` (pełne
+   przeładowanie zamiast miękkiej nawigacji, gdy karta ma inną wersję niż serwer) i wersję
+   dla `/api/wersja`, na której strażnik w panelu pokazuje pasek „Jest nowa wersja panelu”,
 4. symlinki `var` i `.next/cache`, kod na własność root (aplikacja nie zmieni własnego kodu),
 5. zrzut bazy przed migracjami do `/var/backups/midrev-esp/przed-wdrozeniem/` (3 ostatnie),
 6. łagodny stop workera (SIGTERM, do 45 s), migracje z **nowego** wydania

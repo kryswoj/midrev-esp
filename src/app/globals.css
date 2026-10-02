@@ -15,7 +15,9 @@
   --color-tekst: #16181d;
   --color-tekst-tabela: #2b2f37;
   --color-tekst-2: #5b616b;
-  --color-tekst-3: #868d97;
+  /* WCAG AA (≥4,5:1): 5,0 na białym, 4,7 na płótnie, 4,6 na powierzchni-2 i aktywnej pozycji
+     nawigacji. Poprzednie #868d97 miało 3,3:1 (audyt UX 02.10, P0-3). */
+  --color-tekst-3: #697079;
   --color-akcent: #814ac8;
   --color-akcent-mocny: #6d38ad;
   --color-akcent-tlo: #f4eefb;
@@ -60,7 +62,17 @@
 /* Wszystkie klasy kontraktowe są celowo w warstwie components. Dzięki temu klasy
    narzędziowe Tailwinda nadal mogą je lokalnie nadpisywać. */
 @layer components {
-  :root { color-scheme: light; }
+  /* accent-color: natywne checkboxy, radio i suwaki w kolorze marki zamiast systemowego niebieskiego */
+  :root { color-scheme: light; accent-color: var(--color-akcent); }
+  /* „Przejdź do treści”: niewidoczny, dopóki nie dostanie fokusu z klawiatury */
+  .link-pomin {
+    position: fixed; top: 8px; left: 8px; z-index: 90;
+    padding: 8px 14px; border-radius: 8px;
+    background: var(--color-tekst); color: #fff; font-size: var(--typ-pomocniczy); font-weight: 600;
+    transform: translateY(-160%);
+  }
+  .link-pomin:focus-visible { transform: none; outline: 2px solid var(--color-akcent); outline-offset: 2px; }
+
   html, body { min-height: 100%; background: var(--color-plotno); color: var(--color-tekst); }
   body {
     margin: 0;
@@ -161,6 +173,18 @@
   .przycisk-niebezpieczny { background: var(--color-blad); color: #fff; }
   .przycisk-niebezpieczny:hover { background: #98211c; }
   .przycisk-maly { min-height: 32px; padding: 0 11px; font-size: var(--typ-pomocniczy); }
+  /* wskaźnik „trwa” w PrzyciskFormularza (src/app/ui/przycisk-formularza.tsx) */
+  /* w trakcie wysyłki przycisk zostaje w swoim kolorze (to „trwa”, nie „niedostępne”) */
+  .przycisk[aria-busy="true"][disabled] { opacity: 0.85; cursor: progress; background: var(--color-akcent); border-color: var(--color-akcent); color: #fff; }
+  .przycisk-wtorny:not(.bg-transparent)[aria-busy="true"][disabled] { background: #fff; border-color: var(--color-linia-mocna); color: var(--color-tekst); }
+  .przycisk-niebezpieczny[aria-busy="true"][disabled] { background: var(--color-blad); border-color: var(--color-blad); color: #fff; }
+  .przycisk-wskaznik {
+    width: 14px; height: 14px; flex: none;
+    border: 2px solid currentColor; border-right-color: transparent; border-radius: 999px;
+    animation: przycisk-obrot 0.7s linear infinite;
+  }
+  @keyframes przycisk-obrot { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .przycisk-wskaznik { animation-duration: 2.4s; } }
 
   .pole {
     width: 100%;
@@ -349,6 +373,27 @@
     z-index: 50;
     width: 264px;
     border-right: 1px solid var(--color-linia);
+    box-shadow: var(--cien-uniesiony);
+  }
+
+  /* pasek strażnika wersji (src/app/ui/straznik-wersji.tsx): nad treścią, bez przesuwania układu */
+  .straznik-wersji {
+    position: fixed;
+    bottom: 16px;
+    left: 50%;
+    z-index: 80;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: min(640px, calc(100vw - 32px));
+    padding: 10px 12px 10px 16px;
+    transform: translateX(-50%);
+    border: 1px solid var(--color-info-ramka);
+    border-radius: 10px;
+    background: var(--color-info-tlo);
+    color: var(--color-tekst);
+    font-size: var(--typ-pomocniczy);
+    line-height: 19px;
     box-shadow: var(--cien-uniesiony);
   }
 

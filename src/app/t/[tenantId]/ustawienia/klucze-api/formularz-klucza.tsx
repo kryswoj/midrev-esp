@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState } from "react";
+import { PrzyciskFormularza } from "../../../../ui/przycisk-formularza";
 import { Kopiuj } from "../wysylka/kopiuj";
 import { utworzKluczAkcja, type StanNowegoKlucza } from "./akcje";
 
@@ -50,9 +51,7 @@ export function FormularzKlucza({
             ))}
           </div>
         </fieldset>
-        <button type="submit" disabled={trwa} className="przycisk">
-          {trwa ? "Tworzę…" : "Utwórz klucz"}
-        </button>
+        <PrzyciskFormularza trwa="Tworzę…" trwaZewnetrznie={trwa}>Utwórz klucz</PrzyciskFormularza>
       </form>
     </div>
   );

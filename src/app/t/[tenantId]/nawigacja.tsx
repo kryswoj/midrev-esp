@@ -4,6 +4,8 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Icon, type NazwaIkony } from "../../ui/ikona";
+import { PrzyciskFormularza } from "../../ui/przycisk-formularza";
+import { wylogujAkcja } from "../../logowanie/akcje";
 
 const IKONY: Record<string, NazwaIkony> = {
   przeglad: "przeglad",
@@ -30,7 +32,7 @@ function aktywnyLink(sciezka: string, baza: string, href: string) {
   return href === "" ? sciezka === baza : sciezka.startsWith(cel);
 }
 
-export function NawigacjaMobilna({ tenantId, pozycje }: { tenantId: string; pozycje: Pozycja[] }) {
+export function NawigacjaMobilna({ tenantId, pozycje, email }: { tenantId: string; pozycje: Pozycja[]; email: string }) {
   const sciezka = usePathname();
   const baza = `/t/${tenantId}`;
   const glowneSciezki = new Set(["", "/kampanie", "/profile"]);
@@ -77,18 +79,27 @@ export function NawigacjaMobilna({ tenantId, pozycje }: { tenantId: string; pozy
               </Link>
             );
           })}
+          {/* telefon nie ma bloku użytkownika z paska bocznego: wylogowanie jest tutaj */}
+          <div className="mt-1.5 border-t border-[var(--color-linia-0)] px-3 pb-1.5 pt-2.5">
+            <p className="tekst-meta truncate" title={email}>{email}</p>
+            <form action={wylogujAkcja} className="mt-2">
+              <PrzyciskFormularza variant="secondary" size="sm" trwa="Wylogowuję…" className="w-full justify-center">
+                <Icon name="wyloguj" size={15} />Wyloguj
+              </PrzyciskFormularza>
+            </form>
+          </div>
         </div>
       </details>
     </nav>
   );
 }
 
-export function Nawigacja({ tenantId, sekcje, liczniki }: { tenantId: string; sekcje: Sekcja[]; liczniki: Record<string, number> }) {
+export function Nawigacja({ tenantId, sekcje, liczniki, etykieta = "Główna nawigacja" }: { tenantId: string; sekcje: Sekcja[]; liczniki: Record<string, number>; etykieta?: string }) {
   const sciezka = usePathname();
   const baza = `/t/${tenantId}`;
 
   return (
-    <nav aria-label="Główna nawigacja" className="mt-5 space-y-4">
+    <nav aria-label={etykieta} className="mt-5 space-y-4">
       {sekcje.map((sekcja, indeks) => (
         <div key={`${sekcja.tytul}-${indeks}`}>
           {sekcja.tytul ? <div className="nawigacja-tytul mb-1.5 px-3 text-[12px] leading-4 font-semibold text-[var(--color-tekst-3)]">{sekcja.tytul}</div> : null}
