@@ -3,9 +3,8 @@ import { closePool, getPool } from "../src/adapters/db/pool";
 import {
   przyjmijZgloszenie,
   schematZgloszenia,
-  STANDARDOWA_ZGODA,
 } from "../src/usecases/popupy/zglos-popup";
-import { aktywnyPopup, popupyTenanta, ustawAktywnosc, utworzPopup } from "../src/usecases/popupy/zarzadzaj";
+import { aktywnyPopup, domyslnaKlauzula, popupyTenanta, ustawAktywnosc, utworzPopup } from "../src/usecases/popupy/zarzadzaj";
 
 // Wykonywalna specyfikacja Epiku F: zgloszenie z popupu to profil + zgoda + event,
 // bez wlasnej tabeli zgloszen. Baza jest prawdziwa (AD-20), a kazdy scenariusz
@@ -54,7 +53,7 @@ describe("Popupy (Epik F)", () => {
   it("zgłoszenie tworzy profil, zgodę ze źródłem popup i event popup.submitted", async () => {
     const pool = getPool();
     const wynik = await przyjmijZgloszenie(popupA, {
-      email: "pop-lead@example.test",
+      zgoda: true, wersjaKlauzuli: 1, email: "pop-lead@example.test",
       imie: "Ala",
     });
     expect(wynik).not.toBeNull();
@@ -75,7 +74,8 @@ describe("Popupy (Epik F)", () => {
     expect(zgody).toHaveLength(1);
     expect(zgody[0].state).toBe("granted");
     expect(zgody[0].source).toBe("popup:POP powitalny");
-    expect(zgody[0].wording).toBe(STANDARDOWA_ZGODA);
+    // dowod = tekst klauzuli, ktora popup pokazuje (0041), z polskimi znakami
+    expect(zgody[0].wording).toBe(domyslnaKlauzula("POP tenant A"));
     // occurred_at = teraz, bo to zdarzenie na zywo, nie import historii (AD-10)
     expect(Date.now() - new Date(zgody[0].occurred_at).getTime()).toBeLessThan(60_000);
 
@@ -92,7 +92,7 @@ describe("Popupy (Epik F)", () => {
   it("drugi zapis tego samego adresu nie duplikuje profilu, ale dopisuje event", async () => {
     const pool = getPool();
     // ten sam adres w innym zapisie: wielkosc liter i spacje nie tworza drugiej osoby
-    const wynik = await przyjmijZgloszenie(popupA, { email: "  POP-Lead@Example.test " });
+    const wynik = await przyjmijZgloszenie(popupA, { zgoda: true, wersjaKlauzuli: 1, email: "  POP-Lead@Example.test " });
     expect(wynik).not.toBeNull();
 
     const { rows: profile } = await pool.query(
@@ -128,13 +128,15 @@ describe("Popupy (Epik F)", () => {
     expect(schematZgloszenia.safeParse({ email: "a@b.test", imie: "x".repeat(500) }).success).toBe(
       false,
     );
-    expect(schematZgloszenia.safeParse({ email: "ok@example.test" }).success).toBe(true);
+    expect(schematZgloszenia.safeParse({ email: "ok@example.test" }).success).toBe(false);
+    expect(schematZgloszenia.safeParse({ email: "ok@example.test", zgoda: false, wersjaKlauzuli: 1 }).success).toBe(false);
+    expect(schematZgloszenia.safeParse({ email: "ok@example.test", zgoda: true, wersjaKlauzuli: 1 }).success).toBe(true);
   });
 
   it("zgłoszenie do popupu innego tenanta nie miesza danych między tenantami", async () => {
     const pool = getPool();
     // ten sam adres co u tenanta A, ale popup nalezy do tenanta B
-    const wynik = await przyjmijZgloszenie(popupB, { email: "pop-lead@example.test" });
+    const wynik = await przyjmijZgloszenie(popupB, { zgoda: true, wersjaKlauzuli: 1, email: "pop-lead@example.test" });
     expect(wynik).not.toBeNull();
     expect(wynik!.discountCode).toBeNull();
 
@@ -165,7 +167,7 @@ describe("Popupy (Epik F)", () => {
 
   it("nieistniejący popup daje null zamiast zapisu w ciemno", async () => {
     const wynik = await przyjmijZgloszenie("00000000-0000-7000-8000-000000000000", {
-      email: "pop-nikt@example.test",
+      zgoda: true, wersjaKlauzuli: 1, email: "pop-nikt@example.test",
     });
     expect(wynik).toBeNull();
   });
@@ -178,7 +180,7 @@ describe("Popupy (Epik F)", () => {
        values ($1, 'pop-wypisany@example.test', 'suppressed', 'test wypisania')`,
       [tenantA],
     );
-    const wynik = await przyjmijZgloszenie(popupA, { email: "pop-wypisany@example.test" });
+    const wynik = await przyjmijZgloszenie(popupA, { zgoda: true, wersjaKlauzuli: 1, email: "pop-wypisany@example.test" });
     // ok jak przy kazdym zgloszeniu: odpowiedz nie moze byc wyrocznia "czy ten adres jest wypisany"
     expect(wynik).not.toBeNull();
 
@@ -207,7 +209,7 @@ describe("Popupy (Epik F)", () => {
        on conflict do nothing`,
     );
     try {
-      const wynikG = await przyjmijZgloszenie(popupA, { email: "pop-spalony@example.test" });
+      const wynikG = await przyjmijZgloszenie(popupA, { zgoda: true, wersjaKlauzuli: 1, email: "pop-spalony@example.test" });
       expect(wynikG).not.toBeNull();
       const { rows: zgodyG } = await pool.query(
         `select count(*)::int as ile from consents c
@@ -225,7 +227,7 @@ describe("Popupy (Epik F)", () => {
   it("popup wyłączony przestaje przyjmować zgłoszenia", async () => {
     const pool = getPool();
     await ustawAktywnosc(tenantB, popupB, false);
-    const wynik = await przyjmijZgloszenie(popupB, { email: "pop-spozniony@example.test" });
+    const wynik = await przyjmijZgloszenie(popupB, { zgoda: true, wersjaKlauzuli: 1, email: "pop-spozniony@example.test" });
     expect(wynik).toBeNull();
     const { rows } = await pool.query(
       "select count(*)::int as ile from profiles where tenant_id = $1 and email = 'pop-spozniony@example.test'",

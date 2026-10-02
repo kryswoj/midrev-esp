@@ -215,6 +215,10 @@ export function PanelWezla({
   onUsun: (() => void) | null;
 }) {
   const Ikona = IKONY_WEZLOW[wezel.typ];
+  // brak tematu i brak tresci pokazujemy przy polach maila, nie w banerze nad panelem
+  const BEZ_TEMATU = "Wiadomość nie ma tematu.";
+  const bezTematu = wezel.typ === "email" && (bledy.includes(BEZ_TEMATU) || !(emaile[wezel.emailId]?.temat ?? "").trim());
+  const bledyBanera = wezel.typ === "email" ? bledy.filter((b) => b !== BEZ_TEMATU && b !== "Wiadomość nie ma treści.") : bledy;
   return (
     <div>
       <div className="flex items-center gap-2.5 border-b border-[var(--color-linia)] px-4 py-3.5">
@@ -224,9 +228,9 @@ export function PanelWezla({
           <div className="text-[12px] leading-4 text-[var(--color-tekst-3)]">{odmien(stat.wToku, "osoba", "osoby", "osób")} w tym kroku</div>
         </div>
       </div>
-      {bledy.length ? (
+      {bledyBanera.length ? (
         <div className="border-b border-[var(--color-linia-0)] bg-[var(--color-blad-tlo)] px-4 py-3 text-[12px] leading-4 text-[var(--color-blad)]" role="alert">
-          {bledy.map((b) => <p key={b} className="flex items-start gap-1.5"><AlertTriangle size={13} className="mt-0.5 shrink-0" />{b}</p>)}
+          {bledyBanera.map((b) => <p key={b} className="flex items-start gap-1.5"><AlertTriangle size={13} className="mt-0.5 shrink-0" />{b}</p>)}
         </div>
       ) : null}
 
@@ -335,15 +339,16 @@ export function PanelWezla({
             <Pole etykieta="Nazwa robocza">
               <input className="pole" maxLength={200} value={emaile[wezel.emailId]?.nazwa ?? ""} onChange={(e) => onZmianaEmaila(wezel.emailId, { nazwa: e.target.value })} />
             </Pole>
-            <Pole etykieta="Temat" podpowiedz="To zobaczy odbiorca.">
-              <input className="pole" maxLength={250} placeholder="np. Witaj! Dobrze, że jesteś" value={emaile[wezel.emailId]?.temat ?? ""} onChange={(e) => onZmianaEmaila(wezel.emailId, { temat: e.target.value })} />
+            <Pole etykieta="Temat" podpowiedz={bezTematu ? undefined : "To zobaczy odbiorca."}>
+              <input className={`pole ${bezTematu ? "!border-[var(--color-blad-ramka)]" : ""}`} aria-invalid={bezTematu || undefined} data-niepoprawne={bezTematu || undefined} maxLength={250} placeholder="np. Witaj! Dobrze, że jesteś" value={emaile[wezel.emailId]?.temat ?? ""} onChange={(e) => onZmianaEmaila(wezel.emailId, { temat: e.target.value })} />
+              {bezTematu ? <span className="mt-1 block text-[12px] leading-4 text-[var(--color-blad)]">Wpisz temat. Bez niego automatyzacji nie da się włączyć.</span> : null}
             </Pole>
             <Link href={`/t/${tenantId}/automatyzacje/${flowId}/edytor/wiadomosc/${wezel.emailId}`} className="przycisk w-full">
               {emaile[wezel.emailId]?.maTresc ? "Edytuj treść" : "Ułóż treść"} <ExternalLink size={14} />
             </Link>
-            {!emaile[wezel.emailId]?.maTresc ? <p className="text-[12px] leading-4 text-[var(--color-czeka)]">Wiadomość nie ma jeszcze treści. Bez niej automatyzacji nie da się włączyć.</p> : null}
+            {!emaile[wezel.emailId]?.maTresc ? <p className="text-[12px] leading-4 text-[var(--color-blad)]">Wiadomość nie ma jeszcze treści. Bez niej automatyzacji nie da się włączyć.</p> : null}
           </Sekcja>
-          {stat.email ? (
+          {stat.email && stat.email.wyslane > 0 ? (
             <Sekcja tytul="Wyniki tego maila">
               <dl className="grid grid-cols-2 gap-2 text-[13px]">
                 <div className="rounded-md bg-[var(--color-powierzchnia-2)] px-3 py-2"><dt className="etykieta">Wysłane</dt><dd className="liczba text-[16px] font-semibold">{stat.email.wyslane}</dd></div>

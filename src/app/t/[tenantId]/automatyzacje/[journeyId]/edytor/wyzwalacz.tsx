@@ -97,12 +97,14 @@ export function EdytorFiltraWyzwalacza({ filtr, onZmiana }: { filtr: Filtr | und
           <div className="space-y-2 rounded-md border border-[var(--color-linia)] p-2">
             {g.warunki.map((w0, wi) => {
               const w = w0 as WarunekZdarzenia;
-              const blad = w.pole.trim() ? bladWartosci(w.typPola, w.operator, w.wartosc) : "Podaj nazwę pola zdarzenia.";
+              const bezPola = !w.pole.trim();
+              const blad = bezPola ? "Wpisz nazwę właściwości zdarzenia albo usuń pusty warunek." : bladWartosci(w.typPola, w.operator, w.wartosc);
+              const idBledu = `blad-warunku-${gi}-${wi}`;
               return (
                 <div key={wi}>
                   {wi > 0 ? <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-tekst-3)]">lub</div> : null}
                   <div className="grid grid-cols-[1fr_auto] gap-1.5">
-                    <input className="pole" aria-label="pole zdarzenia" placeholder="pole, np. ProductID" maxLength={255} value={w.pole} onChange={(e) => zmienWarunek(gi, wi, { pole: e.target.value })} />
+                    <input className={`pole ${bezPola ? "!border-[var(--color-blad-ramka)]" : ""}`} aria-label="nazwa właściwości zdarzenia" aria-invalid={bezPola || undefined} data-niepoprawne={bezPola || undefined} aria-describedby={blad ? idBledu : undefined} placeholder="właściwość, np. ProductID" maxLength={255} value={w.pole} onChange={(e) => zmienWarunek(gi, wi, { pole: e.target.value })} />
                     <button type="button" aria-label="Usuń warunek" title="Usuń warunek" onClick={() => usunWarunek(gi, wi)} className="grid h-9 w-9 place-items-center rounded-md text-[var(--color-tekst-3)] hover:bg-[var(--color-blad-tlo)] hover:text-[var(--color-blad)]"><Trash2 size={14} /></button>
                   </div>
                   <div className="mt-1.5 grid grid-cols-2 gap-1.5">
@@ -117,8 +119,8 @@ export function EdytorFiltraWyzwalacza({ filtr, onZmiana }: { filtr: Filtr | und
                       {OPERATORY[w.typPola].map((o) => <option key={o} value={o}>{ETYKIETY_OPERATOROW[o]}</option>)}
                     </select>
                   </div>
-                  <div className="mt-1.5"><PoleWartosci w={w} onZmiana={(wartosc) => zmienWarunek(gi, wi, { wartosc })} /></div>
-                  {blad ? <p className="mt-1 text-[12px] leading-4 text-[var(--color-blad)]">{blad}</p> : null}
+                  <div className="mt-1.5" data-niepoprawne={(!bezPola && Boolean(blad)) || undefined}><PoleWartosci w={w} onZmiana={(wartosc) => zmienWarunek(gi, wi, { wartosc })} /></div>
+                  {blad ? <p id={idBledu} className="mt-1 text-[12px] leading-4 text-[var(--color-blad)]">{blad}{" "}<span className="text-[var(--color-tekst-3)]">Do tego czasu warunek nie jest zapisywany, a automatyzacji nie da się włączyć.</span></p> : null}
                 </div>
               );
             })}

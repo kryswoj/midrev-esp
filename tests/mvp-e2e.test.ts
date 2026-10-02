@@ -285,7 +285,7 @@ describe("MVP end-to-end: n8n → /api/events → flow z filtrem → mail ze zmi
 
     const popup = await utworzPopup(tenantId, { name: "Newsletter -10%", headline: "-10%", bodyText: "Zapisz się", buttonText: "Zapisz", discountCode: null, delaySeconds: 0 });
     await ustawAktywnosc(tenantId, popup, true);
-    const w = await przyjmijZgloszenie(popup, { email: `e2e-cela-${znak}@example.test`, imie: "Cela" });
+    const w = await przyjmijZgloszenie(popup, { zgoda: true, wersjaKlauzuli: 1, email: `e2e-cela-${znak}@example.test`, imie: "Cela" });
     expect(w).not.toBeNull();
     profil.cela = (await getPool().query("select id from profiles where tenant_id = $1 and email = $2", [tenantId, `e2e-cela-${znak}@example.test`])).rows[0].id;
     await tik();

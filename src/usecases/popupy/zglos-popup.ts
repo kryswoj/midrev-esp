@@ -17,22 +17,32 @@ import { zapiszZdarzenie } from "../zdarzenia/zapisz-zdarzenie";
  * Kontrakt publicznego zgloszenia. Limity dlugosci sa twarde, bo endpoint nie ma
  * auth i kazdy bajt trafia do bazy: bez limitu jeden bot zapelnia dysk formularzem.
  *
- * CELOWO nie ma tu pola z trescia zgody: consents.wording to material dowodowy,
+ * CELOWO nie ma tu pola z TRESCIA zgody: consents.wording to material dowodowy,
  * a tresc przyslana z publicznego internetu moglby podstawic kazdy i zatruc
- * historie zgod (znalezisko review). Brzmienie zgody jest stala serwera.
+ * historie zgod (znalezisko review). Przegladarka odsyla wylacznie NUMER wersji
+ * klauzuli, ktora wyswietlila (0041), a tekst do dowodu bierzemy z bazy.
+ *
+ * `zgoda: true` jest obowiazkowe: pole wyboru w popupie jest domyslnie niezaznaczone,
+ * a zgloszenie bez jawnego zaznaczenia odrzucamy takze tu, nie tylko w skrypcie
+ * (stary skrypt z cache albo zapytanie spoza przegladarki nie omina wymogu).
  */
 export const schematZgloszenia = z.object({
   email: z.string().trim().min(3).max(320).email(),
   imie: z.string().trim().max(120).optional(),
+  zgoda: z.literal(true),
+  wersjaKlauzuli: z.number().int().min(1).max(1_000_000),
 });
 
 export type Zgloszenie = z.infer<typeof schematZgloszenia>;
 
-/** Brzmienie zgody zapisywane przy kazdym zgloszeniu; skrypt pokazuje formularz zapisu. */
-export const STANDARDOWA_ZGODA =
-  "Zapisuje sie na newsletter i zgadzam sie na otrzymywanie wiadomosci e-mail od tego sklepu.";
+/**
+ * Jak dlugo po zmianie klauzuli przyjmujemy zgloszenie z POPRZEDNIA wersja. Osoba mogla miec
+ * otwarta strone ze starym tekstem (skrypt w cache 60 s, karta otwarta dluzej). Zgode zapisujemy
+ * wtedy z tekstem, ktory naprawde widziala. Starsza wersja = odmowa (skrypt prosi o odswiezenie).
+ */
+export const OKNO_STAREJ_WERSJI_H = 24;
 
-export interface WynikZgloszenia {
+export class KlauzulaNieaktualna extends Error {}export interface WynikZgloszenia {
   ok: true;
   profileId: string;
   /** kod rabatowy do pokazania osobie po zapisie; null gdy popup go nie ma */
@@ -55,12 +65,25 @@ export async function przyjmijZgloszenie(
   dane: Zgloszenie,
 ): Promise<WynikZgloszenia | null> {
   const pool = getPool();
+  // walidacja takze tutaj (nie tylko w trasie): use-case jest kontraktem, nie trasa
+  const wejscie = schematZgloszenia.safeParse(dane);
+  if (!wejscie.success) throw new Error("przyjmijZgloszenie: zgloszenie bez zgody albo bez wersji klauzuli");
   const { rows: popupy } = await pool.query(
-    "select id, tenant_id, name, discount_code from popups where id = $1 and active",
+    "select id, tenant_id, name, discount_code, list_id, consent_version from popups where id = $1 and active",
     [popupId],
   );
   const popup = popupy[0];
   if (!popup) return null;
+  // Wersja klauzuli, ktora wyswietlil skrypt: biezaca albo zastapiona w ostatnich 24 h.
+  // Tekst do dowodu idzie z TEJ wersji (z bazy), nigdy z zapytania.
+  const { rows: wersje } = await pool.query(
+    `select id, version, wording, privacy_url from popup_consent_versions
+      where tenant_id = $1 and popup_id = $2 and version = $3
+        and (version = $4 or superseded_at > now() - make_interval(hours => $5))`,
+    [popup.tenant_id, popup.id, dane.wersjaKlauzuli, popup.consent_version, OKNO_STAREJ_WERSJI_H],
+  );
+  const klauzula = wersje[0];
+  if (!klauzula) throw new KlauzulaNieaktualna("klauzula nieaktualna albo nieznana");
 
   const klient = await pool.connect();
   try {
@@ -108,11 +131,26 @@ export async function przyjmijZgloszenie(
       // kazde zdarzenie zgody, a stan liczy sie z ostatniego wpisu.
       // occurred_at = now(), bo to zdarzenie dzieje sie TERAZ - to nie import
       // historii, wiec data zdarzenia i data zapisu sa ta sama chwila.
+      // wording = PELNY tekst wersji, ktora osoba widziala przy polu wyboru; wskazanie na
+      // wersje (0041) i szczegol metody: ktory formularz, ktora wersja, jaki link do polityki.
+      const szczegol = `formularz ${popup.id}, wersja klauzuli ${klauzula.version}${klauzula.privacy_url ? `, polityka prywatności: ${klauzula.privacy_url}` : ""}`;
       await klient.query(
-        `insert into consents (tenant_id, profile_id, channel, state, source, wording, occurred_at)
-         values ($1, $2, 'email', 'granted', $3, $4, now())`,
-        [popup.tenant_id, profileId, `popup:${popup.name}`, STANDARDOWA_ZGODA],
+        `insert into consents (tenant_id, profile_id, channel, state, source, wording, method_detail, popup_consent_version_id, occurred_at)
+         values ($1, $2, 'email', 'granted', $3, $4, $5, $6, now())`,
+        [popup.tenant_id, profileId, `popup:${popup.name}`, klauzula.wording, szczegol, klauzula.id],
       );
+      // Lista docelowa popupu: zrodlo 'formularz:<popupId>' to dodanie POJEDYNCZE
+      // (ZRODLA_POJEDYNCZE), wiec odpala wyzwalacz "dolaczenie do listy". Osoba juz na liscie
+      // zostaje (do nothing): ponowny zapis nie uruchamia powitania drugi raz. Wykluczonych
+      // nie dopisujemy, tak jak nie dopisujemy im zgody.
+      if (popup.list_id) {
+        await klient.query(
+          `insert into list_members (tenant_id, list_id, profile_id, source, added_at)
+           values ($1, $2, $3, $4, now())
+           on conflict (list_id, profile_id) do nothing`,
+          [popup.tenant_id, popup.list_id, profileId, `formularz:${popup.id}`],
+        );
+      }
     }
 
     // Zdarzenie idzie przez JEDYNY punkt zapisu strumienia (AD-36): metryka „Submitted

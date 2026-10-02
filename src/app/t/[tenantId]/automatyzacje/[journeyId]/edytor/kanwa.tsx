@@ -20,12 +20,16 @@ import {
   Loader2,
   Maximize,
   Minus,
+  MonitorSmartphone,
+  ChevronsLeft,
+  ChevronsRight,
   Pause,
   PenLine,
   Play,
   Plus,
   Power,
   Redo2,
+  Settings2,
   Undo2,
   X,
 } from "lucide-react";
@@ -44,6 +48,10 @@ import {
   zmienWezel,
   zwalidujGraf,
   kluczMetryki,
+  niedokonczoneWarunki,
+  szkicDoZapisu,
+  BLAD_BEZ_AKCJI,
+  tytulWezla,
   type BladGrafu,
   type Graf,
   type HistoriaGrafu,
@@ -54,7 +62,8 @@ import { sciezkaSvg, ulozGraf } from "../../../../../../domain/automatyzacje/ukl
 import { STATUSY, type StatusAutomatyzacji } from "../../../../../../domain/automatyzacje/statusy";
 import type { StatystykiAutomatyzacji } from "../../../../../../usecases/automatyzacje/journeye";
 import { opublikujAkcja, statystykiAkcja, utworzWiadomoscAkcja, zapiszNaglowekWiadomosciAkcja, zapiszSzkicAkcja, zmienNazweAkcja, zmienStatusAkcja } from "../../akcje";
-import { BibliotekaKrokow, IKONY_WEZLOW, KAFELEK, KATEGORIE, type TypDoDodania } from "./biblioteka-krokow";
+import { BibliotekaKrokow, IKONY_WEZLOW, KAFELEK, KATEGORIE, PasekKrokow, type TypDoDodania } from "./biblioteka-krokow";
+import { ListaProblemow, Minimapa } from "./nawigacja-kanwy";
 import { KartaWezla, PanelWezla, wysokoscWezla, type StatWezla, type Tryb } from "./wezly";
 import { WyborPonownegoWejscia, type MetrykaDoWyboru } from "./wyzwalacz";
 
@@ -91,7 +100,11 @@ export interface DaneStartowe {
 
 type Stat = Omit<StatystykiAutomatyzacji, "przebiegAt"> & { przebiegAt: string | null };
 
-const ZOOMY = [0.5, 0.67, 0.8, 0.9, 1, 1.1, 1.25, 1.5];
+const ZOOMY = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5];
+/** "Dopasuj" nie schodzi ponizej tej skali: dluzszy graf przewijamy, zamiast sciskac do nieczytelnosci. */
+const MIN_ZOOM_DOPASUJ = 0.75;
+/** Wymiary celu upuszczenia na EKRANIE (px), niezaleznie od zoomu: min. 44 px wysokosci. */
+const CEL_UPUSZCZENIA = { w: 220, h: 48 };
 
 function godzina(iso: string): string {
   return new Date(iso).toLocaleTimeString("pl-PL", { hour: "2-digit", minute: "2-digit" });
@@ -121,6 +134,7 @@ function Szczelina({
   slot,
   x,
   y,
+  zoom,
   otwarta,
   przeciaganie,
   onOtworz,
@@ -130,6 +144,7 @@ function Szczelina({
   slot: Slot;
   x: number;
   y: number;
+  zoom: number;
   otwarta: boolean;
   przeciaganie: boolean;
   onOtworz: (s: Slot | null) => void;
@@ -137,25 +152,38 @@ function Szczelina({
   blokady: Partial<Record<TypDoDodania, string>>;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: `slot:${slot.po}:${slot.port}`, data: { slot } });
+  // Podczas przeciagania cel upuszczenia ma staly rozmiar NA EKRANIE (220 x 48 px), takze przy
+  // zoomie 75%: dzielimy przez zoom, bo element siedzi w przeskalowanej warstwie kanwy.
+  const cel = przeciaganie ? { width: CEL_UPUSZCZENIA.w / zoom, height: CEL_UPUSZCZENIA.h / zoom } : undefined;
   return (
-    <div ref={setNodeRef} data-slot={`${slot.po}:${slot.port}`} className="absolute z-20" style={{ left: x, top: y, transform: "translate(-50%, -50%)" }} onClick={(e) => e.stopPropagation()}>
-      <button
-        type="button"
-        aria-label="Dodaj krok w tym miejscu"
-        aria-expanded={otwarta}
-        onClick={() => onOtworz(otwarta ? null : slot)}
-        className={`grid place-items-center rounded-full border bg-white text-[var(--color-tekst-2)] shadow-[var(--cien-karta)] transition-[width,height,border-color,color,background] ${
-          przeciaganie
-            ? `h-11 w-11 border-2 border-dashed ${isOver ? "border-[var(--color-akcent)] bg-[var(--color-akcent-tlo)] text-[var(--color-akcent)]" : "border-[var(--color-akcent-ramka)]"}`
-            : otwarta
-              ? "h-7 w-7 border-[var(--color-akcent)] bg-[var(--color-akcent)] text-white"
-              : "h-7 w-7 border-[var(--color-linia-mocna)] hover:border-[var(--color-akcent)] hover:text-[var(--color-akcent)]"
-        }`}
-      >
-        <Plus size={przeciaganie ? 18 : 14} strokeWidth={2.25} />
-      </button>
+    <div ref={setNodeRef} data-slot={`${slot.po}:${slot.port}`} className="absolute z-20 grid place-items-center" style={{ left: x, top: y, transform: "translate(-50%, -50%)", ...cel }} onClick={(e) => e.stopPropagation()}>
+      {przeciaganie ? (
+        <div
+          aria-hidden="true"
+          className={`absolute inset-0 grid place-items-center rounded-xl border-2 border-dashed transition-colors ${isOver ? "border-[var(--color-akcent)] bg-[var(--color-akcent-tlo)]" : "border-[var(--color-akcent-ramka)] bg-white/70"}`}
+        >
+          <span className="text-[12px] font-semibold text-[var(--color-akcent)]" style={{ fontSize: 12 / zoom }}>{isOver ? "Upuść tutaj" : "Tutaj"}</span>
+        </div>
+      ) : (
+        // przycisk 44 x 44 (cel dotyku), widoczne kolko 32 px
+        <button
+          type="button"
+          aria-label="Dodaj krok w tym miejscu"
+          aria-expanded={otwarta}
+          onClick={() => onOtworz(otwarta ? null : slot)}
+          className="group/plus grid h-11 w-11 place-items-center rounded-full"
+        >
+          <span className={`grid h-8 w-8 place-items-center rounded-full border shadow-[var(--cien-karta)] transition-colors ${
+            otwarta
+              ? "border-[var(--color-akcent)] bg-[var(--color-akcent)] text-white"
+              : "border-[var(--color-linia-mocna)] bg-white text-[var(--color-tekst-2)] group-hover/plus:border-[var(--color-akcent)] group-hover/plus:text-[var(--color-akcent)]"
+          }`}>
+            <Plus size={15} strokeWidth={2.25} />
+          </span>
+        </button>
+      )}
       {otwarta ? (
-        <div role="menu" className="absolute left-1/2 top-9 z-40 w-[268px] -translate-x-1/2 rounded-[10px] border border-[var(--color-linia)] bg-white p-1.5 shadow-[var(--cien-uniesiony)]">
+        <div role="menu" className="absolute left-1/2 top-11 z-40 w-[268px] -translate-x-1/2 rounded-[10px] border border-[var(--color-linia)] bg-white p-1.5 shadow-[var(--cien-uniesiony)]">
           {KATEGORIE.map((k) => (
             <div key={k.tytul}>
               <div className="etykieta px-2 pb-0.5 pt-1.5">{k.tytul}</div>
@@ -219,6 +247,10 @@ export function Kanwa({
   const [potwierdzenie, setPotwierdzenie] = useState<"szkic" | null>(null);
   const [toast, setToast] = useState<{ ton: "ok" | "blad" | "uwaga"; tekst: string } | null>(komunikat ? { ton: komunikat.ton, tekst: komunikat.tekst } : null);
   const kanwaRef = useRef<HTMLDivElement>(null);
+  const grafRef = useRef<HTMLDivElement>(null);
+  // panel ustawien automatyzacji (gdy nic nie jest zaznaczone) i paleta krokow jako szuflada
+  const [panelUstawien, setPanelUstawien] = useState(false);
+  const [paletaOtwarta, setPaletaOtwarta] = useState(false);
 
   // ── slowniki i walidacja (lokalnie, natychmiast) ──
   const slowniki = useMemo(
@@ -229,19 +261,24 @@ export function Kanwa({
     }),
     [start.listy, start.segmenty, emaile],
   );
+  // niedokonczone warunki filtra: stan roboczy tej karty (nie ida na serwer, blokuja wlaczenie)
+  const niedokonczone = useMemo(() => niedokonczoneWarunki(g), [g]);
+  const szkic = useMemo(() => szkicDoZapisu(g), [g]);
   const bledy = useMemo(() => {
-    const lokalne = zwalidujGraf(g, {
+    const lokalne = zwalidujGraf(szkic, {
       emaile: Object.fromEntries(Object.entries(emaile).map(([id, e]) => [id, { temat: e.temat, maTresc: e.maTresc }])),
       listy: new Set(start.listy.map((l) => l.id)),
       segmenty: new Set(start.segmenty.map((s) => s.id)),
       metryki: new Map(start.metryki.map((m) => [kluczMetryki(m), { canTrigger: m.canTrigger }])),
       ponowneWejscieDostepne: start.ponowneWejscieDostepne,
       grafV2Dostepny: start.grafV2Dostepny,
+      wymagajAkcji: true,
     }).bledy;
+    const robocze: BladGrafu[] = niedokonczone.map((n) => ({ wezelId: n.wezelId, tresc: n.tresc }));
     // serwer moze wiedziec wiecej (np. tresc maila zapisana w innej karcie): laczymy bez duplikatow
-    const klucze = new Set(lokalne.map((b) => `${b.wezelId}|${b.tresc}`));
-    return [...lokalne, ...bramkaSerwera.filter((b) => !klucze.has(`${b.wezelId}|${b.tresc}`))];
-  }, [g, emaile, start.listy, start.segmenty, start.metryki, start.ponowneWejscieDostepne, start.grafV2Dostepny, bramkaSerwera]);
+    const klucze = new Set([...robocze, ...lokalne].map((b) => `${b.wezelId}|${b.tresc}`));
+    return [...robocze, ...lokalne, ...bramkaSerwera.filter((b) => !klucze.has(`${b.wezelId}|${b.tresc}`))];
+  }, [szkic, niedokonczone, emaile, start.listy, start.segmenty, start.metryki, start.ponowneWejscieDostepne, start.grafV2Dostepny, bramkaSerwera]);
   const bledyWezla = useCallback((id: string) => bledy.filter((b) => b.wezelId === id).map((b) => b.tresc), [bledy]);
   const ostrzezenia = useMemo(() => ostrzezeniaGrafu(g), [g]);
 
@@ -399,7 +436,9 @@ export function Kanwa({
   const wersjaSzkicu = useRef(start.draftVersion);
   const zapisanyJson = useRef(JSON.stringify(start.graf));
   const ostatnioWyslany = useRef(zapisanyJson.current);
-  const biezacyJson = useMemo(() => JSON.stringify(g), [g]);
+  // Autozapis wysyla graf BEZ niedokonczonych warunkow (szkicDoZapisu): szkic w bazie jest
+  // zawsze poprawnym grafem, a pusty warunek nie zatrzymuje zapisu reszty zmian.
+  const biezacyJson = useMemo(() => JSON.stringify(szkic), [szkic]);
   const brudny = biezacyJson !== zapisanyJson.current || biezacyJson !== ostatnioWyslany.current;
   const kolejka = useRef<Promise<unknown>>(Promise.resolve());
   const odrzucony = useRef<string | null>(null);
@@ -440,7 +479,8 @@ export function Kanwa({
   }, [konflikt, brudny, zapis.trwa, zapis.blad, biezacyJson, zapiszTeraz]);
 
   useEffect(() => {
-    if (!brudny && !emaileCzekaja) return;
+    // niedokonczony warunek zyje tylko w tej karcie: zamkniecie karty by go zgubilo
+    if (!brudny && !emaileCzekaja && !niedokonczone.length) return;
     const przed = (e: BeforeUnloadEvent) => {
       // zmiany tematu czekajace na timer: proba dopisania w tle, a przegladarka i tak pyta
       if (Object.keys(zmianyEmaili.current).length) void wypchnijEmaile();
@@ -449,7 +489,7 @@ export function Kanwa({
     };
     window.addEventListener("beforeunload", przed);
     return () => window.removeEventListener("beforeunload", przed);
-  }, [brudny, emaileCzekaja, wypchnijEmaile]);
+  }, [brudny, emaileCzekaja, niedokonczone.length, wypchnijEmaile]);
 
   // ── statystyki na zywo: liczniki bez przychodu (przychod tylko przy ladowaniu strony) ──
   useEffect(() => {
@@ -524,7 +564,7 @@ export function Kanwa({
       if (mod && k === "s") { e.preventDefault(); void zapiszTeraz(); return; }
       if (mod && (k === "z" || k === "y")) { e.preventDefault(); setHistoria((h) => (k === "y" || e.shiftKey ? ponowGraf(h) : cofnijGraf(h))); return; }
       if (zaznaczony && (e.key === "Delete" || e.key === "Backspace")) { e.preventDefault(); usunKrok(zaznaczony); }
-      else if (e.key === "Escape") { setZaznaczony(null); setMenuSlot(null); }
+      else if (e.key === "Escape") { setZaznaczony(null); setMenuSlot(null); setPanelUstawien(false); setPaletaOtwarta(false); }
     };
     window.addEventListener("keydown", obsluz);
     return () => window.removeEventListener("keydown", obsluz);
@@ -555,13 +595,54 @@ export function Kanwa({
     el.addEventListener("wheel", kolko, { passive: false });
     return () => el.removeEventListener("wheel", kolko);
   }, [zoomuj]);
-  const dopasuj = useCallback(() => {
+  // Dopasuj: najwyzej 100%, najmniej 75% (ponizej tekst kart jest nieczytelny; dluzszy graf
+  // sie przewija). Na telefonie (tylko podglad) dopasowanie do szerokosci, do 50%.
+  const dopasuj = useCallback((minimum = MIN_ZOOM_DOPASUJ) => {
     const el = kanwaRef.current;
     if (!el) return;
-    const z = Math.min(1, (el.clientWidth - 48) / uklad.szerokosc, (el.clientHeight - 48) / uklad.wysokosc);
-    setZoom(Math.max(0.5, Math.round(z * 100) / 100));
-    el.scrollTo({ left: 0, top: 0 });
+    const z = Math.min(1, (el.clientWidth - 48) / uklad.szerokosc, minimum < MIN_ZOOM_DOPASUJ ? 1 : (el.clientHeight - 120) / uklad.wysokosc);
+    const docelowy = Math.max(minimum, Math.floor(z * 100) / 100);
+    setZoom(docelowy);
+    requestAnimationFrame(() => el.scrollTo({ left: Math.max(0, (el.scrollWidth - el.clientWidth) / 2), top: 0 }));
   }, [uklad.szerokosc, uklad.wysokosc]);
+  // telefon: kanwa tylko do podgladu, od razu dopasowana do szerokosci ekranu
+  const [mobilny, setMobilny] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 767px)");
+    const ustaw = () => setMobilny(mq.matches);
+    ustaw();
+    mq.addEventListener("change", ustaw);
+    return () => mq.removeEventListener("change", ustaw);
+  }, []);
+  useEffect(() => {
+    if (mobilny) { dopasuj(0.5); setZaznaczony(null); setMenuSlot(null); setPanelUstawien(false); }
+    // celowo tylko przy zmianie trybu urzadzenia, nie przy kazdej zmianie grafu
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mobilny]);
+
+  // przejscie do kroku (lista problemow, minimapa): zaznacz, przewin do karty, fokus na pierwszym bledzie
+  const przejdzDoKroku = useCallback((wezelId: string | null, tresc?: string) => {
+    setMenuSlot(null);
+    // brak akcji: nie ma czego poprawiac w wyzwalaczu, otwieramy "+" pod nim (dodanie kroku)
+    if (tresc === BLAD_BEZ_AKCJI && wezelId) {
+      setZaznaczony(null);
+      setPanelUstawien(false);
+      setMenuSlot({ po: wezelId, port: "next" });
+      requestAnimationFrame(() => document.querySelector(`[data-slot="${CSS.escape(wezelId)}:next"] button`)?.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" }));
+      return;
+    }
+    if (!wezelId) { setZaznaczony(null); setPanelUstawien(true); return; }
+    setPanelUstawien(false);
+    setZaznaczony(wezelId);
+    requestAnimationFrame(() => {
+      document.querySelector(`[data-wezel-poz="${CSS.escape(wezelId)}"]`)?.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
+      setTimeout(() => {
+        const el = document.querySelector('[aria-label="Właściwości"] [data-niepoprawne]');
+        const pole = el?.matches("input, select, textarea") ? el : el?.querySelector("input, select, textarea");
+        (pole as HTMLElement | null | undefined)?.focus({ preventScroll: true });
+      }, 120);
+    });
+  }, []);
 
   // przewijanie kanwy przeciaganiem tla (pan)
   const pan = useRef<{ x: number; y: number; sx: number; sy: number } | null>(null);
@@ -581,6 +662,7 @@ export function Kanwa({
   // ── przeciaganie z biblioteki na szczeline ──
   const sensory = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 6 } }));
   const naStart = (e: DragStartEvent) => {
+    // przy przeciaganiu z szuflady chowamy ja wizualnie (zostaje w DOM, zeby drag trwal)
     const d = e.active.data.current as { zrodlo: string; typ: TypDoDodania } | undefined;
     if (d?.zrodlo === "paleta") { setPrzeciagany(d.typ); setMenuSlot(null); }
   };
@@ -594,12 +676,19 @@ export function Kanwa({
   // ── rendering ──
   const stan = STATUSY[status];
   const wToku = Object.values(stat.wToku).reduce((s, n) => s + n, 0);
-  const pierwszyBlad = bledy[0]?.tresc ?? null;
-  const powodBlokadyWlaczenia = pierwszyBlad ? (bledy.length > 1 ? `${pierwszyBlad} (+${bledy.length - 1})` : pierwszyBlad) : zapis.blad ? "Najpierw musi się udać zapis szkicu." : null;
+  // W naglowku nie ma tekstu bledu: licznik "N rzeczy do uzupelnienia" z lista (ListaProblemow).
+  const powodBlokadyWlaczenia = bledy.length
+    ? `Najpierw uzupełnij: ${bledy.length} ${bledy.length === 1 ? "rzecz" : "rzeczy"} (lista obok).`
+    : zapis.blad ? "Najpierw musi się udać zapis szkicu." : null;
+  const bledneWezly = useMemo(() => new Set(bledy.map((b) => b.wezelId).filter((x): x is string => Boolean(x))), [bledy]);
+  const nazwaKroku = useCallback((id: string) => {
+    const w = g.wezly.find((x) => x.id === id);
+    return w ? tytulWezla(w, slowniki) : null;
+  }, [g.wezly, slowniki]);
   const stanZapisu = zapis.trwa ? (
     <span className="flex items-center gap-1.5 text-[var(--color-tekst-2)]"><Loader2 size={14} className="animate-spin" /> Zapisuję…</span>
   ) : zapis.blad ? (
-    <button type="button" onClick={() => void zapiszTeraz()} className="flex items-center gap-1.5 font-medium text-[var(--color-blad)]" role="alert"><AlertTriangle size={14} /> Nie zapisano. Ponów</button>
+    <button type="button" onClick={() => void zapiszTeraz()} title={zapis.blad} className="flex items-center gap-1.5 font-medium text-[var(--color-blad)]" role="alert"><AlertTriangle size={14} /> Nie zapisano. Ponów</button>
   ) : brudny ? (
     <span className="flex items-center gap-1.5 text-[var(--color-czeka)]"><span className="h-2 w-2 rounded-full bg-[var(--color-czeka)]" /> Niezapisane zmiany</span>
   ) : zapis.kiedy ? (
@@ -609,42 +698,54 @@ export function Kanwa({
   );
   const segment = (aktywny: boolean) => `flex h-7 items-center gap-1.5 rounded-md px-2.5 text-[13px] font-medium transition-colors ${aktywny ? "bg-white text-[var(--color-tekst)] shadow-[var(--cien-karta)]" : "text-[var(--color-tekst-2)] hover:text-[var(--color-tekst)]"}`;
   const trwa = zmianaStatusu !== null;
+  const edycja = tryb === "edycja" && !mobilny;
+  const panelOtwarty = !mobilny && (wezelZaznaczony !== null || panelUstawien);
+  const przyciskNarzedzia = "grid h-8 w-8 place-items-center rounded-md text-[var(--color-tekst-2)] hover:bg-[var(--color-powierzchnia-2)] disabled:opacity-30";
 
   return (
     <DndContext id={`kanwa-${flowId}`} sensors={sensory} collisionDetection={pointerWithin} onDragStart={naStart} onDragEnd={naKoniec} onDragCancel={() => setPrzeciagany(null)}>
-      <div className="-mx-4 flex h-screen flex-col bg-[var(--color-app)] md:-mx-8">
-        {/* Pasek gorny */}
-        <header className="flex min-h-[60px] flex-wrap items-center gap-x-3 gap-y-2 border-b border-[var(--color-linia)] bg-[var(--color-app)] px-4 py-2">
-          <div className="flex min-w-0 items-center gap-3">
-            <Link href={`/t/${tenantId}/automatyzacje`} className="text-[13px] font-medium text-[var(--color-tekst-2)] hover:text-[var(--color-akcent)]">Automatyzacje</Link>
+      <div className="flex h-[var(--wysokosc-pelnego-ekranu)] min-w-0 flex-col bg-[var(--color-app)]">
+        {/* Pasek gorny: jedna linia (56 px), bez tekstu bledow */}
+        <header className="flex min-h-14 items-center gap-3 border-b border-[var(--color-linia)] bg-[var(--color-app)] px-4 max-md:flex-wrap max-md:gap-y-1.5 max-md:py-2">
+          <div className="flex min-w-0 flex-1 items-center gap-2 max-md:basis-full">
+            <Link href={`/t/${tenantId}/automatyzacje`} className="shrink-0 text-[13px] font-medium text-[var(--color-tekst-2)] hover:text-[var(--color-akcent)]">Automatyzacje</Link>
             <span aria-hidden="true" className="text-[var(--color-tekst-3)]">/</span>
             <input
               aria-label="Nazwa automatyzacji"
               value={nazwa}
               maxLength={200}
+              readOnly={mobilny}
               onChange={(e) => zmienNazwe(e.target.value)}
-              className="h-9 min-w-[160px] max-w-[360px] rounded-md border border-transparent bg-transparent px-2 text-[18px] font-[650] leading-[26px] tracking-[-0.012em] hover:border-[var(--color-linia)] focus:border-[var(--color-linia-mocna)] focus:bg-white focus:outline-none"
-              style={{ width: `${Math.max(12, Math.min(40, nazwa.length + 2))}ch` }}
+              title={nazwa}
+              className="h-9 min-w-[120px] max-w-[320px] truncate rounded-md border border-transparent bg-transparent px-2 text-[17px] font-[650] leading-[24px] tracking-[-0.012em] hover:border-[var(--color-linia)] focus:border-[var(--color-linia-mocna)] focus:bg-white focus:outline-none max-md:min-w-0 max-md:flex-1"
+              style={{ width: `${Math.max(12, Math.min(34, nazwa.length + 2))}ch` }}
             />
-            {bladNazwy ? <span role="alert" className="max-w-[28ch] text-[12px] leading-4 text-[var(--color-blad)]">{bladNazwy}</span> : null}
-            <span className={`plakietka plakietka-${stan.ton}`}>{stan.etykieta}</span>
-            {status !== "szkic" && niepublikowane ? <span className="text-[12px] text-[var(--color-czeka)]">szkic różni się od wersji {liveVersion}</span> : null}
+            {bladNazwy ? <span role="alert" className="max-w-[24ch] truncate text-[12px] leading-4 text-[var(--color-blad)]" title={bladNazwy}>{bladNazwy}</span> : null}
+            <span className={`plakietka plakietka-${stan.ton} shrink-0`}>{stan.etykieta}</span>
+            {status !== "szkic" && niepublikowane ? <span className="shrink-0 whitespace-nowrap text-[12px] text-[var(--color-czeka)] max-xl:hidden" title={`Szkic różni się od wersji ${liveVersion}`}>zmiany nieopublikowane</span> : null}
           </div>
 
-          <div className="mx-auto flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-3">
             <div role="radiogroup" aria-label="Tryb" className="flex rounded-lg bg-[var(--color-powierzchnia-2)] p-0.5">
-              <button type="button" role="radio" aria-checked={tryb === "edycja"} className={segment(tryb === "edycja")} onClick={() => setTryb("edycja")}><PenLine size={14} /> Edycja</button>
-              <button type="button" role="radio" aria-checked={tryb === "analityka"} className={segment(tryb === "analityka")} onClick={() => { setTryb("analityka"); setMenuSlot(null); }}><BarChart3 size={14} /> Analityka</button>
+              <button type="button" role="radio" aria-checked={tryb === "edycja"} className={segment(tryb === "edycja")} onClick={() => setTryb("edycja")}><PenLine size={14} /> {mobilny ? "Ścieżka" : "Edycja"}</button>
+              <button type="button" role="radio" aria-checked={tryb === "analityka"} className={segment(tryb === "analityka")} onClick={() => { setTryb("analityka"); setMenuSlot(null); setPaletaOtwarta(false); }}><BarChart3 size={14} /> Analityka</button>
             </div>
-            <span className="text-[13px]">{stanZapisu}</span>
+            <span className="whitespace-nowrap text-[13px] max-lg:hidden">{stanZapisu}</span>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2 max-md:hidden">
+            <ListaProblemow bledy={bledy} gotowa={status === "szkic" || niepublikowane} nazwaKroku={nazwaKroku} onWybierz={przejdzDoKroku} />
+            <button
+              type="button"
+              aria-pressed={panelUstawien && !wezelZaznaczony}
+              onClick={() => { setZaznaczony(null); setPanelUstawien((p) => !(p && !wezelZaznaczony)); }}
+              className="przycisk przycisk-wtorny przycisk-maly"
+              title="Reguły wyjścia, ponowne wejście i liczby tej automatyzacji"
+            >
+              <Settings2 size={14} /> Ustawienia
+            </button>
             {status !== "szkic" && niepublikowane ? (
-              <span className="inline-flex items-center gap-2">
-                <button type="button" className="przycisk przycisk-maly" disabled={trwa || Boolean(powodBlokadyWlaczenia)} onClick={() => void zmienStatus("opublikuj")} title="Szkic (kroki i treści maili) stanie się nową wersją. Osoby w toku kończą na swojej.">{zmianaStatusu === "wlaczony" ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} Opublikuj zmiany</button>
-                {powodBlokadyWlaczenia ? <span className="max-w-[28ch] text-[12px] leading-[16px] text-[var(--color-tekst-2)]">{powodBlokadyWlaczenia}</span> : null}
-              </span>
+              <button type="button" className="przycisk przycisk-maly" disabled={trwa || Boolean(powodBlokadyWlaczenia)} onClick={() => void zmienStatus("opublikuj")} title={powodBlokadyWlaczenia ?? "Szkic (kroki i treści maili) stanie się nową wersją. Osoby w toku kończą na swojej."}>{zmianaStatusu === "wlaczony" ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />} Opublikuj zmiany</button>
             ) : null}
             {status === "wlaczony" ? (
               <>
@@ -658,14 +759,17 @@ export function Kanwa({
                 <button type="button" className="przycisk przycisk-wtorny przycisk-maly" disabled={trwa} onClick={() => setPotwierdzenie("szkic")}><Power size={14} /> Wyłącz</button>
               </>
             ) : (
-              <span className="inline-flex items-center gap-2">
-                <button type="button" className="przycisk przycisk-maly" disabled={trwa || Boolean(powodBlokadyWlaczenia)} onClick={() => void zmienStatus("wlaczony")} title={powodBlokadyWlaczenia ?? undefined}>{zmianaStatusu === "wlaczony" ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />} Włącz</button>
-                {powodBlokadyWlaczenia ? <span className="max-w-[30ch] text-[12px] leading-[16px] text-[var(--color-tekst-2)]">{powodBlokadyWlaczenia}</span> : null}
-              </span>
+              <button type="button" className="przycisk przycisk-maly" disabled={trwa || Boolean(powodBlokadyWlaczenia)} onClick={() => void zmienStatus("wlaczony")} title={powodBlokadyWlaczenia ?? undefined}>{zmianaStatusu === "wlaczony" ? <Loader2 size={14} className="animate-spin" /> : <Play size={14} />} Włącz</button>
             )}
           </div>
         </header>
 
+        {mobilny ? (
+          <div role="note" className="flex items-start gap-2 border-b border-[var(--color-info-ramka,var(--color-linia))] bg-[var(--color-info-tlo)] px-4 py-2.5 text-[13px] leading-[18px] text-[var(--color-tekst-2)]">
+            <MonitorSmartphone size={16} className="mt-0.5 shrink-0 text-[var(--color-info)]" aria-hidden="true" />
+            <span>Na telefonie kanwa jest tylko do podglądu: zobaczysz ścieżkę i wyniki. Kroki, treści i włączanie zmienisz na komputerze.</span>
+          </div>
+        ) : null}
         {konflikt ? (
           <div role="alert" className="flex items-center gap-3 border-b border-[var(--color-blad-ramka)] bg-[var(--color-blad-tlo)] px-4 py-2 text-[13px] text-[var(--color-blad)]">
             <AlertTriangle size={14} />
@@ -680,170 +784,217 @@ export function Kanwa({
           </div>
         ) : null}
 
-        <div className="flex min-h-0 flex-1">
-          {tryb === "edycja" ? (
-            <aside className="w-[248px] shrink-0 overflow-y-auto border-r border-[var(--color-linia)] bg-[var(--color-panel)]" aria-label="Biblioteka kroków">
-              <BibliotekaKrokow onDodaj={(typ) => void dodajKrok(typ, pierwszySlot())} blokady={blokady} />
+        <div className="relative flex min-h-0 flex-1">
+          {/* Paleta: zwiniety pasek ikon (domyslnie) + szuflada 232 px nad kanwa */}
+          {edycja ? (
+            <aside className="relative z-30 flex w-14 shrink-0 flex-col items-center border-r border-[var(--color-linia)] bg-[var(--color-panel)] pt-2" aria-label="Kroki do dodania">
+              <span className="etykieta !text-[10px]" aria-hidden="true">Kroki</span>
+              <button type="button" onClick={() => setPaletaOtwarta((o) => !o)} aria-expanded={paletaOtwarta} aria-controls="szuflada-krokow" title={paletaOtwarta ? "Zwiń opisy kroków" : "Pokaż kroki z opisami"} aria-label={paletaOtwarta ? "Zwiń opisy kroków" : "Pokaż kroki z opisami"} className={przyciskNarzedzia}>
+                {paletaOtwarta ? <ChevronsLeft size={17} /> : <ChevronsRight size={17} />}
+              </button>
+              <span className="my-1.5 h-px w-8 bg-[var(--color-linia)]" />
+              <PasekKrokow onDodaj={(typ) => void dodajKrok(typ, pierwszySlot())} blokady={blokady} />
+              {paletaOtwarta ? (
+                <div
+                  id="szuflada-krokow"
+                  className={`absolute left-full top-0 h-full w-[232px] overflow-y-auto border-r border-[var(--color-linia)] bg-[var(--color-panel)] shadow-[var(--cien-uniesiony)] transition-opacity ${przeciagany ? "pointer-events-none opacity-0" : ""}`}
+                >
+                  <BibliotekaKrokow onDodaj={(typ) => { void dodajKrok(typ, pierwszySlot()); setPaletaOtwarta(false); }} blokady={blokady} />
+                </div>
+              ) : null}
             </aside>
           ) : null}
 
-          <main
-            ref={kanwaRef}
-            aria-label="Kanwa automatyzacji"
-            className="relative min-w-0 flex-1 cursor-grab overflow-auto active:cursor-grabbing"
-            style={{ backgroundColor: "#f6f7f9", backgroundImage: "radial-gradient(#cfd4db 1px, transparent 1.2px)", backgroundSize: "22px 22px" }}
-            onClick={() => { setZaznaczony(null); setMenuSlot(null); }}
-            onPointerDown={naPointerDown}
-            onPointerMove={naPointerMove}
-            onPointerUp={naPointerUp}
-            onPointerLeave={naPointerUp}
-          >
-            <div className="flex min-h-full min-w-full justify-center">
-             <div className="shrink-0" style={{ width: uklad.szerokosc * zoom, height: uklad.wysokosc * zoom }}>
-              <div className="relative" style={{ width: uklad.szerokosc, height: uklad.wysokosc, transform: `scale(${zoom})`, transformOrigin: "0 0" }}>
-                <svg className="pointer-events-none absolute inset-0" width={uklad.szerokosc} height={uklad.wysokosc} aria-hidden="true">
-                  {uklad.krawedzie.map((k) => (
-                    <path key={`${k.od}:${k.port}`} d={sciezkaSvg(k.punkty)} fill="none" stroke="#b8bec8" strokeWidth={1.5} />
-                  ))}
-                </svg>
-                {uklad.krawedzie.map((k) =>
-                  k.etykieta && k.etykietaPunkt ? (
-                    <span
-                      key={`et:${k.od}:${k.port}`}
-                      className={`absolute z-10 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[12px] font-semibold ${k.port === "next_if_true" || k.port === "a" ? "border-[var(--color-ok-ramka)] bg-[var(--color-ok-tlo)] text-[var(--color-ok)]" : "border-[var(--color-linia-mocna)] bg-white text-[var(--color-tekst-2)]"}`}
-                      style={{ left: k.etykietaPunkt.x, top: k.etykietaPunkt.y, transform: "translate(-50%, -50%)" }}
-                    >
-                      {k.etykieta}
-                      <span className="liczba ml-1 font-medium opacity-75" title="Tyle osób poszło tą gałęzią">· {stat.galezie?.[`${k.od}:${k.do}`] ?? 0}</span>
-                    </span>
-                  ) : null,
-                )}
-                {uklad.wezly.map((p) => {
-                  const w = g.wezly.find((x) => x.id === p.id)!;
-                  const b = bledyWezla(w.id);
-                  return (
-                    <div key={p.id} className="absolute" style={{ left: p.x, top: p.y, width: p.w, height: p.h }}>
-                      <KartaWezla
-                        wezel={w}
-                        slowniki={slowniki}
-                        zaznaczony={zaznaczony === w.id}
-                        tryb={tryb}
-                        stat={statWezla(w)}
-                        blad={b[0] ?? null}
-                        waluta={waluta}
-                        onZaznacz={() => { setZaznaczony(w.id); setMenuSlot(null); }}
-                        onUsun={w.typ === "wyzwalacz" || w.typ === "koniec" ? null : () => usunKrok(w.id)}
-                      />
-                    </div>
-                  );
-                })}
-                {tryb === "edycja"
-                  ? uklad.krawedzie.map((k) => (
-                      <Szczelina
-                        key={`sl:${k.od}:${k.port}`}
-                        slot={{ po: k.od, port: k.port }}
-                        x={k.slot.x}
-                        y={k.slot.y}
-                        otwarta={menuSlot?.po === k.od && menuSlot?.port === k.port}
-                        przeciaganie={przeciagany !== null}
-                        onOtworz={setMenuSlot}
-                        onWybierz={(typ) => void dodajKrok(typ, { po: k.od, port: k.port })}
-                        blokady={blokady}
-                      />
-                    ))
-                  : null}
-              </div>
-             </div>
-            </div>
-
-            {/* Sterowanie kanwa (prawy dolny rog, jak w Klaviyo) */}
-            <div className="sticky bottom-4 float-right mr-4 flex flex-col items-center gap-1 rounded-lg border border-[var(--color-linia)] bg-white p-1 shadow-[var(--cien-uniesiony)]" onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
-              <button type="button" onClick={() => setHistoria(cofnijGraf)} disabled={!historia.przeszlosc.length} aria-label="Cofnij (Ctrl+Z)" title="Cofnij (Ctrl+Z)" className="grid h-8 w-8 place-items-center rounded-md text-[var(--color-tekst-2)] hover:bg-[var(--color-powierzchnia-2)] disabled:opacity-30"><Undo2 size={16} /></button>
-              <button type="button" onClick={() => setHistoria(ponowGraf)} disabled={!historia.przyszlosc.length} aria-label="Ponów (Ctrl+Shift+Z)" title="Ponów" className="grid h-8 w-8 place-items-center rounded-md text-[var(--color-tekst-2)] hover:bg-[var(--color-powierzchnia-2)] disabled:opacity-30"><Redo2 size={16} /></button>
-              <span className="my-0.5 h-px w-6 bg-[var(--color-linia)]" />
-              <button type="button" onClick={() => zoomuj(1)} aria-label="Powiększ" title="Powiększ (Ctrl + kółko)" className="grid h-8 w-8 place-items-center rounded-md text-[var(--color-tekst-2)] hover:bg-[var(--color-powierzchnia-2)]"><Plus size={16} /></button>
-              <span className="liczba text-[11px] text-[var(--color-tekst-3)]">{Math.round(zoom * 100)}%</span>
-              <button type="button" onClick={() => zoomuj(-1)} aria-label="Pomniejsz" title="Pomniejsz" className="grid h-8 w-8 place-items-center rounded-md text-[var(--color-tekst-2)] hover:bg-[var(--color-powierzchnia-2)]"><Minus size={16} /></button>
-              <button type="button" onClick={dopasuj} aria-label="Dopasuj do okna" title="Dopasuj do okna" className="grid h-8 w-8 place-items-center rounded-md text-[var(--color-tekst-2)] hover:bg-[var(--color-powierzchnia-2)]"><Maximize size={15} /></button>
-            </div>
-          </main>
-
-          <aside className="w-[312px] shrink-0 overflow-y-auto border-l border-[var(--color-linia)] bg-[var(--color-app)]" aria-label="Właściwości">
-            {przeciagany ? (
-              <div className="pusty-stan"><h2 className="text-[14px]">Upuść krok na „+”</h2><p className="text-[13px]">Każda szczelina między krokami przyjmie nowy krok.</p></div>
-            ) : wezelZaznaczony ? (
-              <PanelWezla
-                key={wezelZaznaczony.id}
-                wezel={wezelZaznaczony}
-                slowniki={slowniki}
-                listy={start.listy}
-                segmenty={start.segmenty}
-                metryki={start.metryki}
-                grafV2Dostepny={start.grafV2Dostepny}
-                emaile={emaile}
-                bledy={bledyWezla(wezelZaznaczony.id)}
-                ostrzezenia={ostrzezenia.filter((o) => o.wezelId === wezelZaznaczony.id).map((o) => o.tresc)}
-                tenantId={tenantId}
-                flowId={flowId}
-                stat={statWezla(wezelZaznaczony)}
-                onZmiana={(z) => zmienKrok(wezelZaznaczony.id, z)}
-                onZmianaEmaila={zmienEmail}
-                onUsun={wezelZaznaczony.typ === "wyzwalacz" || wezelZaznaczony.typ === "koniec" ? null : () => usunKrok(wezelZaznaczony.id)}
-              />
-            ) : (
-              <div>
-                <section className="border-b border-[var(--color-linia-0)] px-4 py-4">
-                  <h3 className="mb-3 text-[13px] font-semibold">Ta automatyzacja</h3>
-                  <dl className="grid grid-cols-2 gap-2 text-[13px]">
-                    <div className="rounded-md bg-[var(--color-powierzchnia-2)] px-3 py-2"><dt className="etykieta">W toku</dt><dd className="liczba text-[16px] font-semibold">{wToku}</dd></div>
-                    <div className="rounded-md bg-[var(--color-powierzchnia-2)] px-3 py-2"><dt className="etykieta">Weszło łącznie</dt><dd className="liczba text-[16px] font-semibold">{stat.wejscia}</dd></div>
-                    <div className="rounded-md bg-[var(--color-powierzchnia-2)] px-3 py-2"><dt className="etykieta">Zakończyło</dt><dd className="liczba text-[16px] font-semibold">{stat.zakonczyli}</dd></div>
-                    <div className="rounded-md bg-[var(--color-powierzchnia-2)] px-3 py-2"><dt className="etykieta">Wyszło wcześniej</dt><dd className="liczba text-[16px] font-semibold">{stat.wyszli + stat.przerwani}</dd></div>
-                  </dl>
-                  <p className="mt-2 text-[12px] leading-4 text-[var(--color-tekst-3)]">Liczby odświeżają się co 10 s. Przychód w trybie analityki pochodzi z ostatniego przeliczenia atrybucji{stat.przebiegAt ? "" : " (jeszcze go nie było)"}.</p>
-                </section>
-                <section className="border-b border-[var(--color-linia-0)] px-4 py-4">
-                  <h3 className="mb-3 text-[13px] font-semibold">Reguły wyjścia</h3>
-                  <label className="flex items-start gap-2.5 text-[13px] leading-5">
-                    <input type="checkbox" className="mt-1 accent-[var(--color-akcent)]" checked={g.ustawienia.wyjsciePoZakupie} onChange={(e) => aktualizuj((d) => ({ ...d, ustawienia: { ...d.ustawienia, wyjsciePoZakupie: e.target.checked } }))} />
-                    <span>Osoba, która kupi po wejściu, wychodzi z automatyzacji<span className="block text-[12px] text-[var(--color-tekst-3)]">Do win-backu i przypomnień. Wypis ze zgód zawsze kończy ścieżkę na kroku e-mail.</span></span>
-                  </label>
-                </section>
-                <section className="border-b border-[var(--color-linia-0)] px-4 py-4">
-                  <h3 className="mb-3 text-[13px] font-semibold">Ponowne wejście</h3>
-                  <WyborPonownegoWejscia
-                    wartosc={g.ustawienia.ponowneWejscie}
-                    dostepne={start.ponowneWejscieDostepne}
-                    onZmiana={(ponowneWejscie) => aktualizuj((d) => ({ ...d, ustawienia: { ...d.ustawienia, ponowneWejscie } }))}
-                  />
-                </section>
-                {ostrzezenia.length ? (
-                  <section className="border-b border-[var(--color-linia-0)] px-4 py-4">
-                    <h3 className="mb-2 flex items-center gap-1.5 text-[13px] font-semibold text-[var(--color-czeka)]"><AlertTriangle size={14} /> Uwagi (nie blokują włączenia)</h3>
-                    <ul className="space-y-1.5 text-[12px] leading-4 text-[var(--color-tekst-2)]">
-                      {ostrzezenia.map((o, i) => <li key={i}><button type="button" className="text-left underline decoration-dotted underline-offset-2 hover:text-[var(--color-akcent)]" onClick={() => o.wezelId && setZaznaczony(o.wezelId)}>{o.tresc}</button></li>)}
-                    </ul>
-                  </section>
-                ) : null}
-                <section className="px-4 py-4">
-                  <h3 className="mb-2 flex items-center gap-1.5 text-[13px] font-semibold">
-                    {bledy.length ? <><AlertTriangle size={14} className="text-[var(--color-czeka)]" /> Do poprawy przed włączeniem</> : <><Check size={14} className="text-[var(--color-ok)]" /> Gotowa do włączenia</>}
-                  </h3>
-                  {bledy.length ? (
-                    <ul className="space-y-1.5 text-[12px] leading-4 text-[var(--color-tekst-2)]">
-                      {bledy.slice(0, 8).map((b, i) => (
-                        <li key={i}>
-                          {b.wezelId ? <button type="button" className="text-left underline decoration-dotted underline-offset-2 hover:text-[var(--color-akcent)]" onClick={() => setZaznaczony(b.wezelId)}>{b.tresc}</button> : b.tresc}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="text-[12px] leading-4 text-[var(--color-tekst-3)]">Każda gałąź kończy się końcem, każdy mail ma temat i treść, graf nie zawraca.</p>
+          <div className="relative min-w-0 flex-1">
+            <main
+              ref={kanwaRef}
+              aria-label="Kanwa automatyzacji"
+              className={`absolute inset-0 select-none overflow-auto overscroll-contain ${mobilny ? "" : "cursor-grab active:cursor-grabbing"}`}
+              style={{ backgroundColor: "#f6f7f9", backgroundImage: "radial-gradient(#cfd4db 1px, transparent 1.2px)", backgroundSize: "22px 22px" }}
+              onClick={() => { setZaznaczony(null); setMenuSlot(null); setPaletaOtwarta(false); }}
+              onPointerDown={naPointerDown}
+              onPointerMove={naPointerMove}
+              onPointerUp={naPointerUp}
+              onPointerLeave={naPointerUp}
+            >
+              {/* margines dolny 96 px: kontrolki i minimapa nigdy nie zaslaniaja na stale konca grafu */}
+              <div className="flex min-h-full min-w-full justify-center px-6 pb-24 pt-6 max-md:px-3">
+               <div ref={grafRef} className="shrink-0" style={{ width: uklad.szerokosc * zoom, height: uklad.wysokosc * zoom }}>
+                <div className="relative" style={{ width: uklad.szerokosc, height: uklad.wysokosc, transform: `scale(${zoom})`, transformOrigin: "0 0" }}>
+                  <svg className="pointer-events-none absolute inset-0" width={uklad.szerokosc} height={uklad.wysokosc} aria-hidden="true">
+                    {uklad.krawedzie.map((k) => (
+                      <path key={`${k.od}:${k.port}`} d={sciezkaSvg(k.punkty)} fill="none" stroke="#b8bec8" strokeWidth={1.5} />
+                    ))}
+                  </svg>
+                  {uklad.krawedzie.map((k) =>
+                    k.etykieta && k.etykietaPunkt ? (
+                      <span
+                        key={`et:${k.od}:${k.port}`}
+                        className={`absolute z-10 whitespace-nowrap rounded-full border px-2.5 py-0.5 text-[12px] font-semibold ${k.port === "next_if_true" || k.port === "a" ? "border-[var(--color-ok-ramka)] bg-[var(--color-ok-tlo)] text-[var(--color-ok)]" : "border-[var(--color-linia-mocna)] bg-white text-[var(--color-tekst-2)]"}`}
+                        style={{ left: k.etykietaPunkt.x, top: k.etykietaPunkt.y, transform: "translate(-50%, -50%)" }}
+                      >
+                        {k.etykieta}
+                        <span className="liczba ml-1 font-medium opacity-75" title="Tyle osób poszło tą gałęzią">· {stat.galezie?.[`${k.od}:${k.do}`] ?? 0}</span>
+                      </span>
+                    ) : null,
                   )}
-                </section>
+                  {uklad.wezly.map((p) => {
+                    const w = g.wezly.find((x) => x.id === p.id)!;
+                    const b = bledyWezla(w.id);
+                    return (
+                      <div key={p.id} data-wezel-poz={p.id} className="absolute" style={{ left: p.x, top: p.y, width: p.w, height: p.h }}>
+                        <KartaWezla
+                          wezel={w}
+                          slowniki={slowniki}
+                          zaznaczony={zaznaczony === w.id}
+                          tryb={tryb}
+                          stat={statWezla(w)}
+                          blad={b[0] ?? null}
+                          waluta={waluta}
+                          onZaznacz={() => { if (mobilny) return; setZaznaczony(w.id); setPanelUstawien(false); setMenuSlot(null); setPaletaOtwarta(false); }}
+                          onUsun={!edycja || w.typ === "wyzwalacz" || w.typ === "koniec" ? null : () => usunKrok(w.id)}
+                        />
+                      </div>
+                    );
+                  })}
+                  {edycja
+                    ? uklad.krawedzie.map((k) => (
+                        <Szczelina
+                          key={`sl:${k.od}:${k.port}`}
+                          slot={{ po: k.od, port: k.port }}
+                          x={k.slot.x}
+                          y={k.slot.y}
+                          zoom={zoom}
+                          otwarta={menuSlot?.po === k.od && menuSlot?.port === k.port}
+                          przeciaganie={przeciagany !== null}
+                          onOtworz={(sl) => { setMenuSlot(sl); setPaletaOtwarta(false); }}
+                          onWybierz={(typ) => void dodajKrok(typ, { po: k.od, port: k.port })}
+                          blokady={blokady}
+                        />
+                      ))
+                    : null}
+                </div>
+               </div>
               </div>
-            )}
-          </aside>
+            </main>
+
+            {przeciagany ? (
+              <div className="pointer-events-none absolute left-1/2 top-3 z-30 -translate-x-1/2 rounded-full border border-[var(--color-akcent-ramka)] bg-white px-3 py-1 text-[12px] font-medium text-[var(--color-akcent)] shadow-[var(--cien-karta)]">
+                Upuść krok w podświetlonym miejscu między krokami
+              </div>
+            ) : null}
+
+            {/* Sterowanie kanwa: poziomo w lewym dolnym rogu, POZA przewijana warstwa (nie jedzie z grafem) */}
+            <div className="absolute bottom-3 left-3 z-30 flex items-center max-md:left-auto max-md:right-3 gap-0.5 rounded-lg border border-[var(--color-linia)] bg-white p-1 shadow-[var(--cien-uniesiony)]" onClick={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
+              {edycja ? (
+                <>
+                  <button type="button" onClick={() => setHistoria(cofnijGraf)} disabled={!historia.przeszlosc.length} aria-label="Cofnij (Ctrl+Z)" title="Cofnij (Ctrl+Z)" className={przyciskNarzedzia}><Undo2 size={16} /></button>
+                  <button type="button" onClick={() => setHistoria(ponowGraf)} disabled={!historia.przyszlosc.length} aria-label="Ponów (Ctrl+Shift+Z)" title="Ponów (Ctrl+Shift+Z)" className={przyciskNarzedzia}><Redo2 size={16} /></button>
+                  <span className="mx-0.5 h-6 w-px bg-[var(--color-linia)]" />
+                </>
+              ) : null}
+              <button type="button" onClick={() => zoomuj(-1)} aria-label="Pomniejsz" title="Pomniejsz (Ctrl + kółko)" className={przyciskNarzedzia}><Minus size={16} /></button>
+              <button type="button" onClick={() => setZoom(1)} aria-label={`Powiększenie ${Math.round(zoom * 100)}%. Kliknij, żeby wrócić do 100%`} title="Wróć do 100%" className="liczba h-8 min-w-[46px] rounded-md px-1 text-[12px] font-medium text-[var(--color-tekst-2)] hover:bg-[var(--color-powierzchnia-2)]">{Math.round(zoom * 100)}%</button>
+              <button type="button" onClick={() => zoomuj(1)} aria-label="Powiększ" title="Powiększ (Ctrl + kółko)" className={przyciskNarzedzia}><Plus size={16} /></button>
+              <button type="button" onClick={() => dopasuj(mobilny ? 0.5 : MIN_ZOOM_DOPASUJ)} aria-label="Dopasuj do okna" title="Dopasuj do okna (najmniej 75%, dłuższy graf przewiń)" className={przyciskNarzedzia}><Maximize size={15} /></button>
+            </div>
+
+            {/* minimapa nie przykrywa grafu, gdy obok jest otwarty panel (wezsza kanwa) */}
+            <div className={`absolute bottom-3 right-3 z-30 max-md:hidden ${panelOtwarty ? "hidden" : ""}`}>
+              <Minimapa uklad={uklad} zoom={zoom} kanwaRef={kanwaRef} grafRef={grafRef} zaznaczony={zaznaczony} bledne={bledneWezly} />
+            </div>
+          </div>
+
+          {panelOtwarty ? (
+            <aside className="relative w-[344px] shrink-0 overflow-y-auto border-l border-[var(--color-linia)] bg-[var(--color-app)]" aria-label="Właściwości">
+              <button
+                type="button"
+                onClick={() => { setZaznaczony(null); setPanelUstawien(false); }}
+                aria-label="Zamknij panel (Esc)"
+                title="Zamknij (Esc)"
+                className="absolute right-2 top-2.5 z-10 grid h-8 w-8 place-items-center rounded-md text-[var(--color-tekst-3)] hover:bg-[var(--color-powierzchnia-2)] hover:text-[var(--color-tekst)]"
+              >
+                <X size={16} />
+              </button>
+              {wezelZaznaczony ? (
+                <PanelWezla
+                  key={wezelZaznaczony.id}
+                  wezel={wezelZaznaczony}
+                  slowniki={slowniki}
+                  listy={start.listy}
+                  segmenty={start.segmenty}
+                  metryki={start.metryki}
+                  grafV2Dostepny={start.grafV2Dostepny}
+                  emaile={emaile}
+                  // niedokonczone warunki maja komunikat przy samym polu; tu reszta problemow kroku
+                  bledy={bledyWezla(wezelZaznaczony.id).filter((t) => t !== BLAD_BEZ_AKCJI && !niedokonczone.some((n) => n.wezelId === wezelZaznaczony.id && n.tresc === t))}
+                  ostrzezenia={ostrzezenia.filter((o) => o.wezelId === wezelZaznaczony.id).map((o) => o.tresc)}
+                  tenantId={tenantId}
+                  flowId={flowId}
+                  stat={statWezla(wezelZaznaczony)}
+                  onZmiana={(z) => zmienKrok(wezelZaznaczony.id, z)}
+                  onZmianaEmaila={zmienEmail}
+                  onUsun={wezelZaznaczony.typ === "wyzwalacz" || wezelZaznaczony.typ === "koniec" ? null : () => usunKrok(wezelZaznaczony.id)}
+                />
+              ) : (
+                <div>
+                  <div className="border-b border-[var(--color-linia)] px-4 py-3.5 pr-12">
+                    <h2 className="text-[14px] font-semibold leading-5">Ustawienia automatyzacji</h2>
+                    <p className="text-[12px] leading-4 text-[var(--color-tekst-3)]">Dotyczą całej ścieżki, nie jednego kroku.</p>
+                  </div>
+                  <section className="border-b border-[var(--color-linia-0)] px-4 py-4">
+                    <h3 className="mb-3 text-[13px] font-semibold">Ta automatyzacja</h3>
+                    <dl className="grid grid-cols-2 gap-2 text-[13px]">
+                      <div className="rounded-md bg-[var(--color-powierzchnia-2)] px-3 py-2"><dt className="etykieta">W toku</dt><dd className="liczba text-[16px] font-semibold">{wToku}</dd></div>
+                      <div className="rounded-md bg-[var(--color-powierzchnia-2)] px-3 py-2"><dt className="etykieta">Weszło łącznie</dt><dd className="liczba text-[16px] font-semibold">{stat.wejscia}</dd></div>
+                      <div className="rounded-md bg-[var(--color-powierzchnia-2)] px-3 py-2"><dt className="etykieta">Zakończyło</dt><dd className="liczba text-[16px] font-semibold">{stat.zakonczyli}</dd></div>
+                      <div className="rounded-md bg-[var(--color-powierzchnia-2)] px-3 py-2"><dt className="etykieta">Wyszło wcześniej</dt><dd className="liczba text-[16px] font-semibold">{stat.wyszli + stat.przerwani}</dd></div>
+                    </dl>
+                    <p className="mt-2 text-[12px] leading-4 text-[var(--color-tekst-3)]">Liczby odświeżają się co 10 s. Przychód w trybie analityki pochodzi z ostatniego przeliczenia atrybucji{stat.przebiegAt ? "" : " (jeszcze go nie było)"}.</p>
+                  </section>
+                  <section className="border-b border-[var(--color-linia-0)] px-4 py-4">
+                    <h3 className="mb-3 text-[13px] font-semibold">Reguły wyjścia</h3>
+                    <label className="flex items-start gap-2.5 text-[13px] leading-5">
+                      <input type="checkbox" className="mt-1 accent-[var(--color-akcent)]" checked={g.ustawienia.wyjsciePoZakupie} onChange={(e) => aktualizuj((d) => ({ ...d, ustawienia: { ...d.ustawienia, wyjsciePoZakupie: e.target.checked } }))} />
+                      <span>Osoba, która kupi po wejściu, wychodzi z automatyzacji<span className="block text-[12px] text-[var(--color-tekst-3)]">Do win-backu i przypomnień. Wypis ze zgód zawsze kończy ścieżkę na kroku e-mail.</span></span>
+                    </label>
+                  </section>
+                  <section className="border-b border-[var(--color-linia-0)] px-4 py-4">
+                    <h3 className="mb-3 text-[13px] font-semibold">Ponowne wejście</h3>
+                    <WyborPonownegoWejscia
+                      wartosc={g.ustawienia.ponowneWejscie}
+                      dostepne={start.ponowneWejscieDostepne}
+                      onZmiana={(ponowneWejscie) => aktualizuj((d) => ({ ...d, ustawienia: { ...d.ustawienia, ponowneWejscie } }))}
+                    />
+                  </section>
+                  {ostrzezenia.length ? (
+                    <section className="border-b border-[var(--color-linia-0)] px-4 py-4">
+                      <h3 className="mb-2 flex items-center gap-1.5 text-[13px] font-semibold text-[var(--color-czeka)]"><AlertTriangle size={14} /> Uwagi (nie blokują włączenia)</h3>
+                      <ul className="space-y-1.5 text-[12px] leading-4 text-[var(--color-tekst-2)]">
+                        {ostrzezenia.map((o, i) => <li key={i}><button type="button" className="text-left underline decoration-dotted underline-offset-2 hover:text-[var(--color-akcent)]" onClick={() => przejdzDoKroku(o.wezelId)}>{o.tresc}</button></li>)}
+                      </ul>
+                    </section>
+                  ) : null}
+                  <section className="px-4 py-4">
+                    <h3 className="mb-2 flex items-center gap-1.5 text-[13px] font-semibold">
+                      {bledy.length ? <><AlertTriangle size={14} className="text-[var(--color-czeka)]" /> Do uzupełnienia przed włączeniem</> : <><Check size={14} className="text-[var(--color-ok)]" /> Gotowa do włączenia</>}
+                    </h3>
+                    {bledy.length ? (
+                      <ul className="space-y-1.5 text-[12px] leading-4 text-[var(--color-tekst-2)]">
+                        {bledy.slice(0, 12).map((b, i) => (
+                          <li key={i}>
+                            {b.wezelId ? <button type="button" className="text-left underline decoration-dotted underline-offset-2 hover:text-[var(--color-akcent)]" onClick={() => przejdzDoKroku(b.wezelId)}>{b.tresc}</button> : b.tresc}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-[12px] leading-4 text-[var(--color-tekst-3)]">Jest co najmniej jeden krok, który coś robi, każda gałąź ma koniec, każdy mail ma temat i treść, graf nie zawraca.</p>
+                    )}
+                  </section>
+                </div>
+              )}
+            </aside>
+          ) : null}
         </div>
       </div>
 

@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { pobierzAutomatyzacje, statystykiAutomatyzacji } from "../../../../../../usecases/automatyzacje/journeye";
 import { przychodPrzegladu } from "../../../../../../usecases/raport-przegladu";
 import { wymaganyTenant } from "../../../../../autoryzacja";
+import { TrybPelnyEkran } from "../../../../../ui/tryb-pelny-ekran";
 import { Kanwa } from "./kanwa";
 
 export const dynamic = "force-dynamic";
@@ -30,6 +31,9 @@ export default async function EdytorAutomatyzacji({
   if (!widok || !stat) notFound();
 
   return (
+    <>
+    {/* rama zwija boczny pasek do 64 px i oddaje kanwie cala szerokosc (kontrakt strumienia R) */}
+    <TrybPelnyEkran />
     <Kanwa
       tenantId={tenantId}
       flowId={widok.id}
@@ -52,5 +56,6 @@ export default async function EdytorAutomatyzacji({
       waluta={przeglad.waluta}
       komunikat={blad ? { ton: "blad", tekst: blad } : ok ? { ton: "ok", tekst: ok } : null}
     />
+    </>
   );
 }
