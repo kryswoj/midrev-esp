@@ -1,4 +1,4 @@
-import { nowyBlok, pustyDokument } from "./fabryka";
+import { nowyBlok, pustyDokument, type DaneKonta } from "./fabryka";
 import type { Blok, BlokTypu, DokumentMaila, TypBloku } from "./schemat";
 
 /**
@@ -6,6 +6,10 @@ import type { Blok, BlokTypu, DokumentMaila, TypBloku } from "./schemat";
  * dokładnie tak samo jak treść zbudowaną od zera. Obrazy są celowo puste: płótno pokazuje
  * w ich miejscu „wstaw adres obrazu", a render pomija obraz bez adresu, więc szablon
  * nie wyśle nikomu cudzego zdjęcia ani obrazka z zewnętrznego serwisu zastępczego.
+ *
+ * Nagłówek bierze nazwę sklepu z konta (`DaneKonta`), stopka nie zawiera adresu: dane
+ * firmy dokleja silnik wysyłki z ustawień konta pod każdym mailem. Szablon nigdy nie
+ * wstawia przykładowej nazwy firmy ani adresu (audyt UX 02.10, P0-2).
  */
 export type IdSzablonu = "pusty" | "newsletter" | "promocja" | "powitanie";
 
@@ -13,12 +17,12 @@ export interface Szablon {
   id: IdSzablonu;
   nazwa: string;
   opis: string;
-  /** struktura do miniatury: kolejność typów bloków */
-  zbuduj: () => DokumentMaila;
+  /** struktura do miniatury: kolejność typów bloków; `konto` wypełnia nagłówek nazwą sklepu */
+  zbuduj: (konto?: DaneKonta) => DokumentMaila;
 }
 
-function b<T extends TypBloku>(typ: T, zmiany: Partial<BlokTypu<T>> = {}): Blok {
-  return { ...nowyBlok(typ), ...zmiany } as Blok;
+function b<T extends TypBloku>(typ: T, zmiany: Partial<BlokTypu<T>> = {}, konto?: DaneKonta): Blok {
+  return { ...nowyBlok(typ, konto), ...zmiany } as Blok;
 }
 
 function dokument(bloki: Blok[], style: Partial<DokumentMaila["style"]> = {}): DokumentMaila {
@@ -39,9 +43,9 @@ export const SZABLONY: Szablon[] = [
     id: "newsletter",
     nazwa: "Newsletter",
     opis: "Logo, główny artykuł, dwie zapowiedzi i stopka.",
-    zbuduj: () =>
+    zbuduj: (konto) =>
       dokument([
-        b("naglowek"),
+        b("naglowek", {}, konto),
         b("obraz", { alt: "Zdjęcie główne" }),
         b("tekst", { wariant: "h1", html: "Co nowego w tym miesiącu", gora: 28, dol: 4 }),
         b("tekst", { html: "Krótko o tym, co przygotowaliśmy. Dwa, trzy zdania, które zachęcą do czytania dalej — bez lania wody." }),
@@ -59,10 +63,10 @@ export const SZABLONY: Szablon[] = [
     id: "promocja",
     nazwa: "Promocja / wyprzedaż",
     opis: "Mocny nagłówek, kod rabatowy, produkty i jeden przycisk.",
-    zbuduj: () =>
+    zbuduj: (konto) =>
       dokument(
         [
-          b("naglowek", { tlo: "#111111", nazwa: "Twój sklep", boki: 24 }),
+          b("naglowek", { tlo: "#111111", boki: 24 }, konto),
           b("tekst", { wariant: "h1", html: "−30% na wszystko. Tylko do niedzieli.", wyrownanie: "center", gora: 36, dol: 4 }),
           b("tekst", { html: "Największa wyprzedaż sezonu. Rabat naliczy się w koszyku po wpisaniu kodu.", wyrownanie: "center", dol: 8 }),
           b("kod", { kod: "WYPRZEDAZ30", tytul: "Kod na −30%", opis: "Ważny do niedzieli do północy." }),
@@ -79,9 +83,9 @@ export const SZABLONY: Szablon[] = [
     id: "powitanie",
     nazwa: "Powitanie",
     opis: "Pierwszy mail po zapisie: kim jesteście i kod na start.",
-    zbuduj: () =>
+    zbuduj: (konto) =>
       dokument([
-        b("naglowek"),
+        b("naglowek", {}, konto),
         b("obraz", { alt: "Witamy" }),
         b("tekst", { wariant: "h1", html: "Dzień dobry, cieszymy się, że jesteś", wyrownanie: "center", gora: 28, dol: 4 }),
         b("tekst", { html: "Dziękujemy za zapis. Będziemy pisać rzadko i konkretnie: nowości, porady i oferty tylko dla subskrybentów.", wyrownanie: "center" }),
@@ -95,4 +99,33 @@ export const SZABLONY: Szablon[] = [
 
 export function szablon(id: string): Szablon | undefined {
   return SZABLONY.find((s) => s.id === id);
+}
+
+/**
+ * Przykładowe dane firmy z dawnych szablonów (przed 02.10.2026): szkice zbudowane wtedy
+ * dalej je mają. Mail z „ul. Przykładowa 1" podaje odbiorcy fałszywy adres nadawcy, więc
+ * lista kontrolna traktuje to jako brak do poprawy, a płótno pokazuje ostrzeżenie w bloku.
+ */
+const WZORY_PRZYKLADOW: { wzor: RegExp; opis: string }[] = [
+  { wzor: /ul\.\s*Przyk(?:ł|l)adowa\s*1/i, opis: "przykładowy adres „ul. Przykładowa 1”" },
+  { wzor: /00-001\s+Warszawa/i, opis: "przykładowy kod i miasto „00-001 Warszawa”" },
+  { wzor: /Tw(?:ó|o)j sklep sp\. z o\.o\./i, opis: "przykładowa firma „Twój sklep sp. z o.o.”" },
+];
+
+/** Opisy przykładowych danych w bloku (pusta tablica = blok czysty). */
+export function przykladyWBloku(blok: Blok): string[] {
+  const teksty: string[] = [];
+  if (blok.typ === "naglowek") {
+    if (!blok.logoUrl.trim() && /^tw(?:ó|o)j sklep$/i.test(blok.nazwa.trim())) teksty.push("przykładowa nazwa „Twój sklep” w nagłówku");
+    return teksty;
+  }
+  const html = blok.typ === "stopka" || blok.typ === "tekst" || blok.typ === "html" ? blok.html : blok.typ === "kolumny" ? `${blok.lewa.html} ${blok.prawa.html}` : "";
+  const tekst = html.replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ");
+  for (const p of WZORY_PRZYKLADOW) if (p.wzor.test(tekst)) teksty.push(p.opis);
+  return teksty;
+}
+
+/** Wszystkie przykładowe dane w dokumencie, bez powtórzeń. */
+export function przykladoweDane(dokument: DokumentMaila): string[] {
+  return [...new Set(dokument.bloki.flatMap(przykladyWBloku))];
 }

@@ -140,8 +140,8 @@ describe("render bloków: XSS i złe adresy", () => {
     );
     expect(html).not.toMatch(/<script|javascript:|data:image/);
     expect(html).toContain("%22%3E%3Cscript%3Ex%3C/script%3E");
-    expect(uwagi.join(" ")).toMatch(/Przycisk „B" nie ma poprawnego linku/);
-    expect(uwagi.join(" ")).toMatch(/Obraz: adres obrazu musi zaczynać się od http/);
+    expect(uwagi.join(" ")).toMatch(/Przycisk „B" ma niepoprawny link/);
+    expect(uwagi.join(" ")).toMatch(/Obraz: adres obrazu musi zaczynać się od https:\/\//);
   });
 
   it("przycisk z mailto: jest klikalny (panel i render dopuszczają te same protokoły), silnik go nie przepisuje", () => {

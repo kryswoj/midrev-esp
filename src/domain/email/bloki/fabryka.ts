@@ -24,11 +24,30 @@ export function noweId(): string {
  */
 const OPRAWA = { gora: 12, dol: 12, boki: 0, tlo: "" as const };
 
+/**
+ * Dane konta, z których startują nagłówek i stopka (audyt UX 02.10, P0-2). Tylko to, co
+ * operator sam wpisał: nazwa sklepu (`tenants.name`) i dane firmy z 0029. Nic nie jest
+ * zgadywane ani uzupełniane przykładem — brak danych to pusty blok, który płótno
+ * pokazuje jako prośbę o uzupełnienie, a nie „Twój sklep, ul. Przykładowa 1".
+ */
+export interface DaneKonta {
+  nazwaSklepu?: string | null;
+  firma?: string | null;
+  adres?: string | null;
+}
+
+/** Tekst stopki startowej. Adres i NIP dokleja silnik wysyłki z ustawień konta, więc tu ich nie ma. */
+export const STOPKA_STARTOWA = "Masz pytanie? Odpisz na tego maila.";
+
+function nazwaZKonta(konto?: DaneKonta): string {
+  return (konto?.nazwaSklepu || konto?.firma || "").replace(/[\r\n]+/g, " ").trim().slice(0, 300);
+}
+
 /** Blok z sensownymi wartościami startowymi — taki, jaki ląduje po upuszczeniu z biblioteki. */
-export function nowyBlok<T extends TypBloku>(typ: T): BlokTypu<T> {
+export function nowyBlok<T extends TypBloku>(typ: T, konto?: DaneKonta): BlokTypu<T> {
   const id = noweId();
   const bloki: { [K in TypBloku]: BlokTypu<K> } = {
-    naglowek: { id, typ: "naglowek", ...OPRAWA, gora: 24, dol: 24, logoUrl: "", logoAlt: "", logoSzerokosc: 140, nazwa: "Twój sklep", link: "", wyrownanie: "center" },
+    naglowek: { id, typ: "naglowek", ...OPRAWA, gora: 24, dol: 24, logoUrl: "", logoAlt: "", logoSzerokosc: 140, nazwa: nazwaZKonta(konto), link: "", wyrownanie: "center" },
     tekst: { id, typ: "tekst", ...OPRAWA, html: "Napisz tu, co chcesz powiedzieć klientom. Zaznacz fragment, żeby go pogrubić albo podlinkować.", wariant: "akapit", kolor: "", wyrownanie: "left" },
     obraz: { id, typ: "obraz", ...OPRAWA, boki: 0, src: "", alt: "", link: "", szerokosc: 100, zaokraglenie: 0, wyrownanie: "center" },
     przycisk: { id, typ: "przycisk", ...OPRAWA, gora: 16, dol: 16, tekst: "Zobacz ofertę", link: "", kolorTla: "", kolorTekstu: "#ffffff", zaokraglenie: 8, rozmiar: "sredni", pelnaSzerokosc: false, wyrownanie: "center" },
@@ -42,7 +61,7 @@ export function nowyBlok<T extends TypBloku>(typ: T): BlokTypu<T> {
     produkt: { id, typ: "produkt", ...OPRAWA, gora: 16, dol: 16, obrazUrl: "", obrazAlt: "", nazwa: "Nazwa produktu", opis: "Jedno zdanie o tym, dlaczego warto.", cena: "129,00 zł", cenaPrzed: "", przyciskTekst: "Kup teraz", link: "", wyrownanie: "center" },
     kod: { id, typ: "kod", ...OPRAWA, gora: 16, dol: 16, tytul: "Twój kod rabatowy", kod: "RABAT10", opis: "Wpisz go w koszyku. Ważny do końca tygodnia.", kolorRamki: "#814ac8", tloKodu: "#f4eefc" },
     social: { id, typ: "social", ...OPRAWA, gora: 16, dol: 16, linki: [{ siec: "instagram", url: "" }, { siec: "facebook", url: "" }], styl: "kolor", wyrownanie: "center" },
-    stopka: { id, typ: "stopka", ...OPRAWA, gora: 24, dol: 8, html: "Twój sklep sp. z o.o. · ul. Przykładowa 1, 00-001 Warszawa<br>Masz pytanie? Odpisz na tego maila.", kolor: "#868d97", wyrownanie: "center" },
+    stopka: { id, typ: "stopka", ...OPRAWA, gora: 24, dol: 8, html: STOPKA_STARTOWA, kolor: "#868d97", wyrownanie: "center" },
     html: { id, typ: "html", ...OPRAWA, html: "" },
   };
   return bloki[typ] as BlokTypu<T>;
