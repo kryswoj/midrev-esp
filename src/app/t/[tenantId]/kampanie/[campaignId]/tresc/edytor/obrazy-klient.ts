@@ -35,7 +35,10 @@ export function rozmiarPliku(bajty: number): string {
 /** Wstępna ocena pliku przed wysłaniem. `null` = można wysyłać. */
 export function ocenPlikObrazu(plik: { name: string; size: number; type: string }): string | null {
   const nazwa = plik.name || "plik";
-  if (!(TYPY_OBRAZOW as readonly string[]).includes(plik.type)) {
+  // Pusty MIME (bywa przy plikach z niektórych aplikacji i dysków sieciowych): decyduje
+  // rozszerzenie, a serwer i tak rozpoznaje format po bajtach i odrzuci podróbkę.
+  const typOk = plik.type ? (TYPY_OBRAZOW as readonly string[]).includes(plik.type) : /\.(png|jpe?g|gif|webp)$/i.test(nazwa);
+  if (!typOk) {
     return `„${nazwa}" to nie jest obraz, który obsługują skrzynki. Wgraj PNG, JPEG, GIF albo WebP.`;
   }
   if (plik.size === 0) return `„${nazwa}" jest pusty.`;

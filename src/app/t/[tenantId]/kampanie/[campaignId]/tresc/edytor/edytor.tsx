@@ -407,6 +407,48 @@ function ListaBrakow({ braki }: { braki: Brak[] }) {
 
 // ── Wysyłka testowa ─────────────────────────────────────────────────────────────────
 
+/**
+ * Dymek nad paskiem (lista braków, okno testu): Esc i klik poza nim zamykają go z każdego
+ * miejsca, nie tylko z fokusem w środku; po zamknięciu fokus wraca tam, skąd go otwarto.
+ */
+function useDymek<T extends HTMLElement>(zamknij: () => void) {
+  const ref = useRef<T | null>(null);
+  const zamknijRef = useRef(zamknij);
+  zamknijRef.current = zamknij;
+  useEffect(() => {
+    const poprzedni = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const naKlawisz = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      e.stopPropagation();
+      zamknijRef.current();
+    };
+    const naKlik = (e: PointerEvent) => {
+      const cel = e.target as Node | null;
+      if (ref.current && cel && !ref.current.contains(cel) && !(poprzedni && poprzedni.contains(cel))) zamknijRef.current();
+    };
+    document.addEventListener("keydown", naKlawisz, true);
+    document.addEventListener("pointerdown", naKlik, true);
+    return () => {
+      document.removeEventListener("keydown", naKlawisz, true);
+      document.removeEventListener("pointerdown", naKlik, true);
+      if (poprzedni?.isConnected) poprzedni.focus();
+    };
+  }, []);
+  return ref;
+}
+
+function DymekBrakow({ children, onZamknij }: { children: React.ReactNode; onZamknij: () => void }) {
+  const ref = useDymek<HTMLDivElement>(onZamknij);
+  useEffect(() => {
+    ref.current?.focus();
+  }, [ref]);
+  return (
+    <div ref={ref} tabIndex={-1} role="dialog" aria-label="Do poprawy przed wysyłką" className="absolute right-0 top-[calc(100%+8px)] z-50 w-[360px] rounded-[12px] border border-[var(--color-linia)] bg-white p-4 shadow-[var(--cien-uniesiony)] outline-none">
+      {children}
+    </div>
+  );
+}
+
 function OknoTestu({
   tenantId,
   campaignId,
@@ -428,8 +470,10 @@ function OknoTestu({
   const [trwa, setTrwa] = useState(false);
   const [wynik, setWynik] = useState<{ ok: boolean; tekst: string } | null>(null);
   const bezTematu = !temat.trim();
+  const ref = useDymek<HTMLFormElement>(onZamknij);
   return (
     <form
+      ref={ref}
       className="absolute right-0 top-[calc(100%+8px)] z-50 w-[380px] space-y-3 rounded-[12px] border border-[var(--color-linia)] bg-white p-4 shadow-[var(--cien-uniesiony)] max-md:fixed max-md:inset-x-3 max-md:bottom-3 max-md:top-auto max-md:w-auto"
       role="dialog"
       aria-label="Wysyłka testowa"
@@ -954,28 +998,37 @@ export function Edytor({
         return;
       }
       setToast({ tekst: `Wgrywam ${dobre.length === 1 ? "obraz" : `${dobre.length} ${formaOdmiany(dobre.length, "obraz", "obrazy", "obrazów")}`}…`, ton: "trwa" });
-      let indeks = cel.indeks;
-      let wstawione = 0;
-      let ostatni: string | null = null;
-      for (const [n, plik] of dobre.entries()) {
+      // Najpierw wszystkie wysyłki, potem JEDNA zmiana dokumentu: cały drop to jeden krok
+      // historii (Ctrl+Z i „Cofnij" w toaście cofają wszystkie obrazy naraz, review r1).
+      const adresy: string[] = [];
+      for (const plik of dobre) {
         const w = await wyslijObraz(tenantId, plik);
-        if (!w.ok) {
-          bledy.push(w.blad);
-          continue;
-        }
-        if (n === 0 && cel.obraz) {
-          // plik upuszczony na blok obrazu podmienia jego zdjęcie (Ctrl+Z przywraca)
-          const id = cel.obraz;
-          aktualizuj((d) => zmienBlok(d, id, { src: w.obraz.url } as Partial<Blok>));
-          ostatni = id;
-        } else {
-          const blok = { ...nowyBlok("obraz"), src: w.obraz.url } as Blok;
-          const tutaj = indeks;
-          aktualizuj((d) => wstawBlok(d, blok, tutaj));
-          indeks += 1;
-          ostatni = blok.id;
-        }
-        wstawione += 1;
+        if (w.ok) adresy.push(w.obraz.url);
+        else bledy.push(w.blad);
+      }
+      const wstawione = adresy.length;
+      let ostatni: string | null = null;
+      if (wstawione) {
+        const bloki = adresy.map((src) => ({ ...nowyBlok("obraz"), src }) as Blok);
+        const podmiana = cel.obraz;
+        const nowe = podmiana ? bloki.slice(1) : bloki;
+        ostatni = nowe.length ? nowe[nowe.length - 1].id : podmiana;
+        aktualizuj((d) => {
+          let wynik = d;
+          let indeks = Math.min(cel.indeks, d.bloki.length);
+          // blok, na który upuszczono plik, mógł zniknąć w trakcie wysyłki: wtedy wszystko jako nowe bloki
+          const i = podmiana ? d.bloki.findIndex((b) => b.id === podmiana) : -1;
+          if (podmiana && i !== -1) {
+            // plik upuszczony na blok obrazu podmienia jego zdjęcie, kolejne pliki lądują tuż pod nim
+            wynik = zmienBlok(wynik, podmiana, { src: adresy[0] } as Partial<Blok>);
+            indeks = i + 1;
+          }
+          for (const blok of podmiana && i === -1 ? bloki : nowe) {
+            wynik = wstawBlok(wynik, blok, indeks);
+            indeks += 1;
+          }
+          return wynik;
+        });
       }
       setOdswiezObrazy((n) => n + 1);
       if (ostatni) {
@@ -983,7 +1036,7 @@ export function Edytor({
         przewinDo(ostatni);
       }
       if (bledy.length) setToast({ tekst: `${wstawione ? `Wstawiono ${wstawione}. ` : ""}${bledy.join(" ")}`, ton: "blad" });
-      else setToast({ tekst: `${wstawione === 1 ? "Obraz jest w mailu" : `${wstawione} obrazy są w mailu`} i w bibliotece sklepu. Dodaj opis obrazu w panelu po prawej.`, cofnij: true });
+      else setToast({ tekst: `${wstawione === 1 ? "Obraz jest w mailu" : `${wstawione} ${formaOdmiany(wstawione, "obraz jest", "obrazy są", "obrazów jest")} w mailu`} i w bibliotece sklepu. Dodaj opis obrazu w panelu po prawej.`, cofnij: true });
     },
     [aktualizuj, przewinDo, tenantId],
   );
@@ -1014,7 +1067,7 @@ export function Edytor({
     setPlikNad(null);
     if (!edycjaMozliwa) return;
     const obraz = obrazPod(e.target) ?? cel?.obraz ?? null;
-    void wgrajPliki(Array.from(e.dataTransfer.files), { indeks: obraz ? 0 : (cel?.indeks ?? indeksDlaY(e.clientY)), obraz });
+    void wgrajPliki(Array.from(e.dataTransfer.files), { indeks: cel?.indeks ?? indeksDlaY(e.clientY), obraz });
   };
 
   // obraz z zakładki „Obrazy": do zaznaczonego bloku obrazu albo jako nowy blok pod zaznaczeniem
@@ -1044,12 +1097,11 @@ export function Edytor({
   // brak jakiegokolwiek linku). Reszta uwag renderu to zalecenia (audyt Codeksa, design r1).
   const wszystkieBraki = useMemo((): Brak[] => {
     const braki: Brak[] = [];
-    if (!konto.adres?.trim() || !konto.firma?.trim()) {
-      braki.push({
-        tekst: !konto.adres?.trim() ? "W stopce brakuje adresu firmy. Bez niego kampania nie wyjdzie." : "W stopce brakuje nazwy firmy.",
-        link: { href: adresDanychFirmy, etykieta: "Uzupełnij dane firmy" },
-        wymagane: true,
-      });
+    // Wymagany jest adres (jak na liście kontrolnej serwera); sama nazwa firmy to zalecenie.
+    if (!konto.adres?.trim()) {
+      braki.push({ tekst: "W stopce brakuje adresu firmy. Bez niego kampania nie wyjdzie.", link: { href: adresDanychFirmy, etykieta: "Uzupełnij dane firmy" }, wymagane: true });
+    } else if (!konto.firma?.trim()) {
+      braki.push({ tekst: "W stopce brakuje nazwy firmy. Odbiorca zobaczy sam adres.", link: { href: adresDanychFirmy, etykieta: "Uzupełnij dane firmy" } });
     }
     const przyklady = przykladoweDane(dok);
     if (przyklady.length) braki.push({ tekst: `W mailu zostały dane z szablonu: ${przyklady.join(", ")}. Zastąp je swoimi.`, wymagane: true });
@@ -1203,7 +1255,7 @@ export function Edytor({
                   {liczbaZalecen ? <span className={liczbaWymaganych ? "font-medium text-[var(--color-czeka)]" : ""}>{liczbaZalecen} <span className="hidden min-[1440px]:inline">{formaOdmiany(liczbaZalecen, "zalecenie", "zalecenia", "zaleceń")}</span></span> : null}
                 </button>
                 {uwagiOtwarte ? (
-                  <div role="dialog" aria-label="Do poprawy przed wysyłką" className="absolute right-0 top-[calc(100%+8px)] z-50 w-[360px] rounded-[12px] border border-[var(--color-linia)] bg-white p-4 shadow-[var(--cien-uniesiony)]" onKeyDown={(e) => { if (e.key === "Escape") { e.stopPropagation(); setUwagiOtwarte(false); } }}>
+                  <DymekBrakow onZamknij={() => setUwagiOtwarte(false)}>
                     <div className="flex items-center justify-between">
                       <h3 className="text-[14px]">Do poprawy przed wysyłką</h3>
                       <button type="button" onClick={() => setUwagiOtwarte(false)} aria-label="Zamknij" className="grid h-7 w-7 place-items-center rounded-md text-[var(--color-tekst-3)] hover:bg-[var(--color-powierzchnia-2)]">
@@ -1229,7 +1281,7 @@ export function Edytor({
                       ))}
                     </ul>
                     <p className="mt-3 border-t border-[var(--color-linia-0)] pt-2.5 text-[12px] leading-[17px] text-[var(--color-tekst-2)]">Czerwone zatrzymają wysyłkę kampanii, pomarańczowe to zalecenia. Bloki z brakami mają na płótnie znacznik, kliknij go, żeby poprawić w miejscu.</p>
-                  </div>
+                  </DymekBrakow>
                 ) : null}
               </div>
             ) : null}

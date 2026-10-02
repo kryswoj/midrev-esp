@@ -1,4 +1,5 @@
 import { nowyBlok, pustyDokument, type DaneKonta } from "./fabryka";
+import { odkodujEncje } from "./bezpieczenstwo";
 import type { Blok, BlokTypu, DokumentMaila, TypBloku } from "./schemat";
 
 /**
@@ -120,9 +121,26 @@ export function przykladyWBloku(blok: Blok): string[] {
     return teksty;
   }
   const html = blok.typ === "stopka" || blok.typ === "tekst" || blok.typ === "html" ? blok.html : blok.typ === "kolumny" ? `${blok.lewa.html} ${blok.prawa.html}` : "";
-  const tekst = html.replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ");
-  for (const p of WZORY_PRZYKLADOW) if (p.wzor.test(tekst)) teksty.push(p.opis);
-  return teksty;
+  return przykladyWHtml(html);
+}
+
+// Polskie litery zapisane encjami nazwanymi (stare edytory i wklejki z Worda): odkodujEncje
+// zna tylko podstawowe, a „Tw&oacute;j sklep" odbiorca i tak przeczyta jako „Twój sklep".
+const ENCJE_PL: Record<string, string> = { oacute: "ó", Oacute: "Ó", lstrok: "ł", Lstrok: "Ł" };
+
+/** Tekst widoczny dla odbiorcy: bez znaczników, z odkodowanymi encjami, spacje zwinięte. */
+function tekstWidoczny(html: string): string {
+  return odkodujEncje(html.replace(/<[^>]*>/g, " ").replace(/&(oacute|Oacute|lstrok|Lstrok);/g, (_c, n: string) => ENCJE_PL[n] ?? ""))
+    .replace(/\s+/g, " ");
+}
+
+/**
+ * Przykładowe dane w dowolnym HTML-u (także w kampanii zapisanej jako sam `content.html`,
+ * bez bloków): lista kontrolna serwera sprawdza tak każdą kampanię, nie tylko blokową.
+ */
+export function przykladyWHtml(html: string): string[] {
+  const tekst = tekstWidoczny(html);
+  return WZORY_PRZYKLADOW.filter((p) => p.wzor.test(tekst)).map((p) => p.opis);
 }
 
 /** Wszystkie przykładowe dane w dokumencie, bez powtórzeń. */

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { nowyBlok, przykladoweDane, przykladyWBloku, pustyDokument, STOPKA_STARTOWA, SZABLONY, type DokumentMaila } from "../src/domain/email/bloki";
+import { nowyBlok, przykladoweDane, przykladyWBloku, przykladyWHtml, pustyDokument, STOPKA_STARTOWA, SZABLONY, type DokumentMaila } from "../src/domain/email/bloki";
 import { renderujDokument } from "../src/usecases/tresc/render-blokow";
 import { ocenGotowosc } from "../src/usecases/tresc/lista-kontrolna";
 import { akcjaKlawisza, type KontekstKlawisza } from "../src/app/t/[tenantId]/kampanie/[campaignId]/tresc/edytor/klawisze";
@@ -127,5 +127,15 @@ describe("upuszczony plik: typ i rozmiar sprawdzane przed wysłaniem", () => {
     expect(ocenPlikObrazu({ name: "x.html", size: 10, type: "text/html" })).toMatch(/nie jest obraz/);
     expect(ocenPlikObrazu({ name: "duzy.jpg", size: MAKS_BAJTOW_OBRAZU + 1, type: "image/jpeg" })).toMatch(/Limit to 5 MB/);
     expect(ocenPlikObrazu({ name: "pusty.png", size: 0, type: "image/png" })).toMatch(/pusty/);
+    // pusty MIME: decyduje rozszerzenie (serwer i tak sprawdza bajty)
+    expect(ocenPlikObrazu({ name: "zdjecie.JPG", size: 1000, type: "" })).toBeNull();
+    expect(ocenPlikObrazu({ name: "skrypt.html", size: 1000, type: "" })).toMatch(/nie jest obraz/);
+  });
+});
+
+describe("przykładowe dane w samym HTML-u (kampanie bez bloków, encje)", () => {
+  it("wykrywa adres i firmę także zapisane encjami", () => {
+    expect(przykladyWHtml("<p>Tw&oacute;j sklep sp. z o.o.<br>ul. Przyk&#322;adowa 1, 00-001&nbsp;Warszawa</p>")).toHaveLength(3);
+    expect(przykladyWHtml("<p>Sklep Ani sp. z o.o., ul. Długa 5, 31-001 Kraków</p>")).toEqual([]);
   });
 });

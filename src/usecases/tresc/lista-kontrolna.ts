@@ -1,7 +1,7 @@
 import { getPool } from "../../adapters/db/pool";
 import { czyHostDeweloperski } from "../../adapters/email/bezpieczny-host";
 import { adresSledzenia, config } from "../../config";
-import { linkiSledzone, prawdziweLinki, przykladoweDane, wczytajDokument } from "../../domain/email/bloki";
+import { linkiSledzone, prawdziweLinki, przykladoweDane, przykladyWHtml, wczytajDokument } from "../../domain/email/bloki";
 import { policzOdbiorcow, type RozbicieOdbiorcow } from "../policz-odbiorcow";
 import { odczytajSerwer, type WidokSerwera } from "../wysylka-konfiguracja/serwer";
 import { zlozWiadomosc } from "../wysylka/renderuj";
@@ -259,7 +259,8 @@ export async function listaKontrolnaKampanii(
     }),
     uwagiTresci,
     adresPocztowy: kampania.sender_postal_address ?? null,
-    przyklady: zrodlo === "bloki" ? przykladoweDane(dokument) : [],
+    // kampania z samym HTML-em (bez bloków) też bywa ze starego szablonu: sprawdzamy tekst
+    przyklady: zrodlo === "bloki" ? przykladoweDane(dokument) : przykladyWHtml(html),
   });
   // Obraz z biblioteki usunięty po wstawieniu do szkicu (usuwanie ze szkiców jest dozwolone)
   // dałby w mailu ikonę zepsutego obrazka. Twarda bramka, jak reszta punktów „blad".
