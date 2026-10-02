@@ -208,7 +208,7 @@ export async function zmienKlauzule(
   const t = schematKlauzuli.safeParse(wejscie.consentWording);
   if (!t.success) return { ok: false, blad: `Klauzula musi mieć od ${MIN_KLAUZULA} do ${MAX_KLAUZULA} znaków.` };
   const u = schematAdresuPolityki.safeParse(wejscie.privacyUrl);
-  if (!u.success) return { ok: false, blad: "Adres polityki prywatności musi zaczynać się od https:// (albo zostaw puste pole)." };
+  if (!u.success) return { ok: false, blad: "Adres polityki prywatności musi zaczynać się od https:// albo http:// (albo zostaw puste pole)." };
   const l = z.string().uuid().nullable().safeParse(wejscie.listId);
   if (!l.success) return { ok: false, blad: "Wybrana lista nie istnieje." };
   const klient = await getPool().connect();

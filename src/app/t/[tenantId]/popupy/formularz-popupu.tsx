@@ -101,7 +101,8 @@ export function FormularzPopupu({ tenantId, listy, domyslnaKlauzula }: { tenantI
             domyslne={{
               consentWording: stan?.wartosci?.consentWording ?? domyslnaKlauzula,
               privacyUrl: stan?.wartosci?.privacyUrl ?? "",
-              listId: stan?.wartosci?.listId ?? listy[0]?.id ?? "",
+              // domyślnie bez listy: zapis na listę odpala wyzwalacz list.joined, więc ma być świadomym wyborem
+              listId: stan?.wartosci?.listId ?? "",
             }}
           />
         </div>

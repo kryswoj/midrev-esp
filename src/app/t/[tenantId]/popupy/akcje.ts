@@ -37,7 +37,7 @@ export async function utworzPopupAkcja(
     return { blad: `Klauzula zgody jest wymagana: od ${MIN_KLAUZULA} do ${MAX_KLAUZULA} znaków. To ją zobaczy osoba przy polu wyboru.`, wartosci };
   }
   if (wartosci.privacyUrl && !/^https?:\/\/[^\s<>"]+$/.test(wartosci.privacyUrl)) {
-    return { blad: "Adres polityki prywatności musi zaczynać się od https:// (albo zostaw puste pole).", wartosci };
+    return { blad: "Adres polityki prywatności musi zaczynać się od https:// albo http:// (albo zostaw puste pole).", wartosci };
   }
 
   try {
