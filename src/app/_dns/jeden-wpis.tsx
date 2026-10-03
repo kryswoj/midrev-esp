@@ -34,7 +34,7 @@ function Stan({ ocena }: { ocena: OcenaDelegacji | null }) {
 function StanWpisu({ ocena, serwer, strefa }: { ocena: OcenaDelegacji | null; serwer: string; strefa: string }) {
   if (!ocena || ocena.stan === "dziala" || ocena.stan === "brak") return <Stan ocena={ocena} />;
   const z = new Set(ocena.znalezione);
-  const klucz = z.has(`${serwer}.${strefa}`) ? "zle" : z.has(serwer) ? (ocena.stan === "konflikt" ? "zle" : "jest") : ocena.stan === "bledna" || ocena.stan === "konflikt" ? "zle" : "brak";
+  const klucz = z.has(`${serwer}.${strefa}`) ? "zle" : z.has(serwer) ? (ocena.stan === "konflikt" ? "zle" : "jest") : "brak";
   const p = { jest: { klasa: "plakietka-uwaga", slowo: "wpisany" }, zle: { klasa: "plakietka-blad", slowo: "do poprawy" }, brak: { klasa: "plakietka-szkic", slowo: "do dodania" } }[klucz];
   return <span className={`plakietka ${p.klasa} whitespace-nowrap`}>{p.slowo}</span>;
 }
@@ -76,7 +76,7 @@ export function JedenWpis({
   strefa: string;
 }) {
   const wartosci = serwery.map((s) => (dostawca.kropkaNaKoncu ? `${s}.` : s));
-  const brakujace = new Set(ocena?.stan === "czesciowa" ? ocena.brakujace : []);
+  const brakujace = new Set(ocena && ocena.stan !== "dziala" && ocena.stan !== "brak" ? ocena.brakujace : []);
   const znalezione = new Set(ocena?.znalezione ?? []);
   const doPoprawy = ocena && ["czesciowa", "bledna", "konflikt"].includes(ocena.stan);
   const komunikat = ocena?.komunikat && ocena.stan !== "dziala" && ocena.stan !== "brak" ? ocena.komunikat : null;
@@ -189,7 +189,6 @@ export function JedenWpis({
           </li>
         ) : null}
         {dostawca.nsUwaga ? <li>{dostawca.nsUwaga}</li> : null}
-        <li>Jeśli pod nazwą {nazwa} jest już inny wpis (np. CNAME), usuń go. Pozostałych wpisów nie ruszaj.</li>
       </ul>
     </div>
   );

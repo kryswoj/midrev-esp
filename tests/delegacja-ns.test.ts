@@ -158,6 +158,7 @@ describe("Ocena delegacji (co klient wpisał u siebie)", () => {
     expect(o.stan).toBe("konflikt");
     expect(o.komunikat).toContain("CNAME");
     expect(o.komunikat).toContain("Rekordy pod innymi nazwami zostaw");
+    expect(o.komunikat).toContain("tylko wtedy, gdy nic z niego nie korzysta");
   });
 
   it("„dziala” tylko przy komplecie naszych serwerów widzianym przez internet (review r1)", () => {

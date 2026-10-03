@@ -342,7 +342,7 @@ async function przygotujDelegacje(
 ) {
   const od = opcjeDelegacji(o);
   const r53 = route53Z(od);
-  let powod: PowodBrakuDelegacji | null = r53 ? await powodBrakuDelegacji(p, o.resolver ?? resolverSystemowy()) : "route53";
+  let powod: PowodBrakuDelegacji | null = r53 ? await powodBrakuDelegacji({ ...p, tenantId }, o.resolver ?? resolverSystemowy()) : "route53";
   if (powod || !r53) {
     await przypnijStrefe(tenantId, domainId, null, powod);
     return;
@@ -769,10 +769,17 @@ export async function sprawdzDomenePlatformowa(tenantId: string, domainId: strin
   let ocenaDelegacji: OcenaDelegacji | null = null;
   let poDmarc = (await domenaPlatformowaPoId(tenantId, domainId)) ?? d;
   // Opcji nie było, bo DNS nie odpowiedział albo Route 53 był niedostępny: proponujemy ją
-  // teraz, ale tylko domenie, która jeszcze nie jest gotowa. Klient, który zaczął wpisywać
-  // rekordy, zostaje przy nich (jeden wpis pojawi się jako alternatywa).
-  if (!poDmarc.delegacja && (poDmarc.delegacjaNiedostepna === "niesprawdzona" || poDmarc.delegacjaNiedostepna === "route53") && poDmarc.status !== "verified" && route53Z(opcjeDelegacji(o))) {
-    const zaczal = Object.values(poDmarc.raport?.rekordy ?? {}).some((r) => r && r.stan !== "brak");
+  // teraz, ale tylko domenie, która jeszcze nie jest gotowa (także wg ŚWIEŻEGO odczytu SES,
+  // review r2). Klient widział już tabelę ręczną, więc widok główny się nie zmienia: jeden
+  // rekord pojawia się jako alternatywa, a tryb przestawi się sam, gdy wykryjemy wpis NS.
+  if (
+    !poDmarc.delegacja &&
+    (poDmarc.delegacjaNiedostepna === "niesprawdzona" || poDmarc.delegacjaNiedostepna === "route53") &&
+    poDmarc.status !== "verified" &&
+    !t?.gotowaDoWysylki &&
+    route53Z(opcjeDelegacji(o))
+  ) {
+    const zaczal = true;
     let wlasny: string | null = null;
     try {
       wlasny = await rekordDmarc(poDmarc.domena, resolver);

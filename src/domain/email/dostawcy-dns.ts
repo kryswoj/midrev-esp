@@ -129,7 +129,7 @@ export const DOSTAWCY_DNS: readonly DostawcaDns[] = [
     link: "https://console.cloud.google.com/net-services/dns/zones",
     nsDlaSubdomeny: true,
     nsWJednymWpisie: true,
-    nsUwaga: "Jeśli domena jest w Squarespace (dawniej Google Domains), wyłącz najpierw DNSSEC, inaczej panel nie przyjmie wpisu NS.",
+    nsUwaga: "Jeśli domena jest w Squarespace (dawniej Google Domains): ten panel przyjmuje wpis NS dla subdomeny dopiero po wyłączeniu DNSSEC w ustawieniach domeny. Jeśli nie chcesz go wyłączać, wpisz rekordy samodzielnie (niżej).",
   },
 ];
 

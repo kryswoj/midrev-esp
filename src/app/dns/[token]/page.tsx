@@ -43,9 +43,9 @@ export default async function InstrukcjaDns({ params }: { params: Promise<{ toke
         <section className="karta overflow-hidden">
           <div className="karta-naglowek">
             <div className="min-w-0">
-              <h1 className="break-all text-[22px] font-[650] leading-[29px] tracking-[-0.02em]">Rekordy DNS dla {i.domena}</h1>
+              <h1 className="[overflow-wrap:anywhere] text-[22px] font-[650] leading-[29px] tracking-[-0.02em]">Rekordy DNS dla {i.domena}</h1>
               <p className="karta-opis">
-                Ktoś poprosił Cię o dodanie tych rekordów w strefie {i.strefa}. Służą do wysyłki newslettera z tej domeny. Nie zmieniają zwykłej poczty firmy ani strony.
+                Ktoś poprosił Cię o dodanie tych rekordów w ustawieniach DNS domeny {i.strefa}. Służą do wysyłki newslettera z tej domeny. Nie zmieniają zwykłej poczty firmy ani strony.
               </p>
             </div>
           </div>
@@ -62,7 +62,7 @@ export default async function InstrukcjaDns({ params }: { params: Promise<{ toke
             ))}
             {i.delegacja && i.tryb === "delegacja" ? (
               <>
-                <p className="text-[15px] font-semibold leading-[22px]">Najprościej: jeden rekord NS</p>
+                <p className="text-[15px] font-semibold leading-[22px]">Najprościej: tylko rekord NS dla nazwy {i.delegacja.nazwa}</p>
                 <JedenWpis nazwa={i.delegacja.nazwa} serwery={i.delegacja.serwery} dostawca={i.dostawca} ocena={i.delegacja.ocena} strefa={i.strefa} />
                 <details className="rounded-[10px] border border-[var(--color-linia)]">
                   <summary className="cursor-pointer px-4 py-3 text-[13px] font-medium text-[var(--color-tekst-2)]">Wolisz wpisać rekordy samodzielnie?</summary>

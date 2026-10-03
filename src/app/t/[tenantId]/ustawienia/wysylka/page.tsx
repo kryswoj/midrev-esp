@@ -133,6 +133,8 @@ function StatusDomeny({ d }: { d: DomenaPlatformowa }) {
   if (d.gotowa) return <Badge ton="ok">gotowa</Badge>;
   // wpis NS działa: rekordy są nasze, czekamy tylko na potwierdzenie (nie „czeka na rekordy")
   if (d.tryb === "delegacja" && (d.delegacja?.ocena?.stan === "dziala" || d.delegacja?.ocena?.stan === "czeka")) return <Badge ton="uwaga">sprawdzamy</Badge>;
+  // wpis NS jest, ale z błędem: „do poprawy", nie „czeka na rekordy" (krytyka designu r2)
+  if (d.tryb === "delegacja" && ["czesciowa", "bledna", "konflikt"].includes(d.delegacja?.ocena?.stan ?? "")) return <Badge ton="blad">do poprawy</Badge>;
   if (d.status === "partial") return <Badge ton="uwaga">w trakcie</Badge>;
   return <Badge ton="szkic">czeka na rekordy</Badge>;
 }
@@ -200,7 +202,7 @@ function WidokDomeny({ tenantId, d }: { tenantId: string; d: DomenaPlatformowa }
         ) : jedenWpis ? (
           <div className="space-y-1">
             <p className="text-[15px] font-semibold leading-[22px]">
-              {stanNs === "dziala" ? "Wpis działa. Resztę ustawiliśmy sami" : "Najprościej: jeden rekord u dostawcy domeny"}
+              {stanNs === "dziala" ? "Wpis działa. Resztę ustawiliśmy sami" : `Najprościej: tylko rekord NS dla nazwy ${jedenWpis.nazwa}`}
             </p>
             <p className="tekst-pomocniczy">
               {stanNs === "dziala"
@@ -260,7 +262,7 @@ function WidokDomeny({ tenantId, d }: { tenantId: string; d: DomenaPlatformowa }
             {tabelaReczna}
             {alternatywaNs ? (
               <details className="rounded-[10px] border border-[var(--color-linia)]">
-                <summary className="cursor-pointer px-4 py-3 text-[13px] font-medium text-[var(--color-tekst-2)]">Prościej: jeden rekord NS zamiast {d.rekordy.length}</summary>
+                <summary className="cursor-pointer px-4 py-3 text-[13px] font-medium text-[var(--color-tekst-2)]">Zamiast tych {d.rekordy.length} rekordów: sam rekord NS (wybierz jedną drogę)</summary>
                 <div className="border-t border-[var(--color-linia)] p-4 max-md:p-3">
                   <JedenWpis nazwa={alternatywaNs.nazwa} serwery={alternatywaNs.serwery} dostawca={d.dostawca} ocena={alternatywaNs.ocena} strefa={d.strefa} />
                 </div>

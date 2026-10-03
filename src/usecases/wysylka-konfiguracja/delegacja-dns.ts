@@ -86,12 +86,23 @@ export type PowodBrakuDelegacji = "apex" | "zajeta_nazwa" | "dostawca" | "route5
  *   - panel dostawcy nie pozwala na NS dla subdomeny.
  */
 export async function powodBrakuDelegacji(
-  o: { domena: string; strefa: string; dostawca: DostawcaDns },
+  o: { domena: string; strefa: string; dostawca: DostawcaDns; tenantId?: string },
   resolver: ResolverDns,
 ): Promise<PowodBrakuDelegacji | null> {
+  // NS wskazujący na strefę TEGO tenanta (ponowne podłączenie po odłączeniu) to nie „zajęta nazwa"
+  const swoje = new Set<string>();
+  if (o.tenantId) {
+    const { rows } = await getPool().query<{ name_servers: string[] }>(
+      "select name_servers from dns_hosted_zones where tenant_id = $1 and domain = $2",
+      [o.tenantId, nazwaBezKropki(o.domena)],
+    );
+    for (const n of rows[0]?.name_servers ?? []) swoje.add(nazwaBezKropki(n));
+  }
   if (o.domena === o.strefa) return "apex";
   if (!o.dostawca.nsDlaSubdomeny) return "dostawca";
   const zapytania: (() => Promise<unknown[]>)[] = [
+    // subdomena już przekazana komuś innemu (własny NS): przejęcie jej wyłączyłoby tamtą usługę (review r2, P1)
+    async () => (resolver.ns ? (await resolver.ns(o.domena)).filter((n) => !swoje.has(nazwaBezKropki(n))) : []),
     () => resolver.a(o.domena),
     () => resolver.aaaa(o.domena),
     () => resolver.cname(o.domena),

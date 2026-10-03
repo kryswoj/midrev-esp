@@ -367,6 +367,18 @@ describe("Jeden wpis NS: strefa Route 53, rekordy, ocena delegacji", () => {
     const po = (await domenaPlatformowa(tenantC))!;
     expect(po.delegacja?.serwery).toHaveLength(4);
     expect(po.delegacjaNiedostepna).toBeNull();
+    // klient widział już tabelę ręczną: jeden rekord jest alternatywą, widok się nie zmienia (review r2)
+    expect(po.tryb).toBe("reczny");
+  });
+
+  it("subdomena przekazana już komuś innemu (własny NS pod news) = bez jednego rekordu, bez strefy (review r2)", async () => {
+    await getPool().query("delete from sending_domains where tenant_id = $1", [tenantC]);
+    const s = new Swiat("ns-k.test", r53);
+    s.rodzic["news.ns-k.test"] = { NS: ["ns1.inna-usluga.com", "ns2.inna-usluga.com"] };
+    const w = await podlaczDomene(tenantC, { wpis: "ns-k.test", nazwaNadawcy: "C", odpowiedzDo: "" }, opcje(s));
+    expect(w.ok).toBe(true);
+    expect((await domenaPlatformowa(tenantC))?.delegacjaNiedostepna).toBe("zajeta_nazwa");
+    expect([...r53.strefy.values()].some((z) => z.nazwa === "news.ns-k.test")).toBe(false);
   });
 
   it("klient wpisał rekordy ręcznie zamiast NS → tryb „reczny”; potem dodał NS → wraca „delegacja”", async () => {

@@ -209,7 +209,7 @@ export function ocenDelegacje(o: {
     return {
       ...bazowa,
       stan: "konflikt",
-      komunikat: `Pod nazwą ${o.nazwaWzgledna} jest jeszcze stary wpis (${[...new Set(o.konflikty)].join(", ")}). Usuń go: przez niego wpis NS nie działa. Rekordy pod innymi nazwami zostaw.`,
+      komunikat: `Pod nazwą ${o.nazwaWzgledna} jest jeszcze stary wpis (${[...new Set(o.konflikty)].join(", ")}). Przez niego wpis NS nie działa. Usuń go tylko wtedy, gdy nic z niego nie korzysta; jeśli korzysta, napisz do nas, zmienimy przedrostek. Rekordy pod innymi nazwami zostaw.`,
     };
   }
   // „działa" tylko przy KOMPLECIE naszych serwerów i niczym obcym (review r1, P2)
