@@ -2,9 +2,9 @@ import { Badge, Icon, type NazwaIkony } from "../../../ui";
 
 /**
  * Kafle platform w kreatorze „Połącz sklep” (plan integracji F.1). Jedna lista dla wszystkich
- * platform: agent Shopify wpina swój kreator, zmieniając `href` wpisu `shopify` na
- * `/sklepy/shopify` i podając stan połączenia (webhooki Shopify idą na jeden adres
- * `/api/webhooks/shopify`, nie per sklep, więc zdrowie liczy jego kreator, nie lista webhooków).
+ * platform. Shopify prowadzi do własnego kreatora `/sklepy/shopify` (stan połączenia podaje
+ * strona; webhooki Shopify idą na jeden adres `/api/webhooks/shopify`, nie per sklep, więc
+ * zdrowie liczy jego kreator, nie lista webhooków).
  */
 export type StanKafla = "polaczony" | "w_trakcie" | "podstawowa" | null;
 
@@ -19,7 +19,7 @@ export interface Platforma {
 
 export const PLATFORMY: Platforma[] = [
   { klucz: "woocommerce", nazwa: "WooCommerce", opis: "Wtyczka MidRev: zamówienia, porzucony koszyk, link do koszyka, zgoda w kasie.", ikona: "sklep", href: (t) => `/t/${t}/sklepy/woocommerce` },
-  { klucz: "shopify", nazwa: "Shopify", opis: "Aplikacja MidRev: zamówienia, porzucony checkout, zgody i formularze bez kodu.", ikona: "zamowienie", href: () => null },
+  { klucz: "shopify", nazwa: "Shopify", opis: "Aplikacja MidRev: zamówienia, porzucony checkout, zgody i formularze bez kodu.", ikona: "zamowienie", href: (t) => `/t/${t}/sklepy/shopify` },
   { klucz: "shoper", nazwa: "Shoper", opis: "Zamówienia, koszyk i formularze ze sklepu Shoper.", ikona: "kampania", href: () => null },
   { klucz: "wlasna", nazwa: "Własna strona / inny sklep", opis: "Jeden kod jak w Klaviyo: Magento, PrestaShop, IdoSell, własny sklep, landing.", ikona: "formularz", href: (t) => `/t/${t}/sklepy/wlasna-strona` },
 ];

@@ -6,6 +6,7 @@ import { wymaganyTenant } from "../../../../autoryzacja";
 import { Kopiuj } from "../../../../_dns/kopiuj";
 import { Alert, Badge, Button, Card, CardHeader, Field, Input, PrzyciskFormularza } from "../../../../ui";
 import { Komunikat, Naglowek } from "../../naglowek";
+import { GotoweAutomatyzacje } from "../gotowe-automatyzacje";
 import { sprawdzPonownieAkcja, zapiszAplikacjeAkcja } from "./akcje";
 import { PasekImportu, SprawdzNaZywo } from "./na-zywo";
 import { PlanImportu } from "./plan-importu";
@@ -171,13 +172,17 @@ export default async function Shopify({
                   )}
                 </Krok>
 
-                <Krok numer={6} id="automatyzacje" tytul="Automatyzacje" opis="Porzucony checkout, porzucony koszyk, oglądany produkt, powitanie, po zakupie.">
+                {/* id kroku inny niż karty: „Utwórz”/„Włącz” na wspólnej karcie wracają z kotwicą #automatyzacje */}
+                <Krok numer={6} id="krok-automatyzacje" tytul="Automatyzacje" opis="Porzucony checkout, porzucony koszyk, oglądany produkt, powitanie, po zakupie.">
                   <div className="flex flex-col items-start gap-2">
                     <Alert tone="uwaga" title="Wyłącz przypomnienie Shopify">
                       Shopify ma własny mail o porzuconym checkoucie (Ustawienia &gt; Powiadomienia). Wyłącz go, zanim włączysz automatyzację w MidRev, inaczej klient dostanie dwa maile.
                     </Alert>
-                    <Button href={`/t/${tenantId}/automatyzacje`} variant="secondary">Przejdź do automatyzacji</Button>
-                    <p className="tekst-meta">Maile o porzuconym koszyku i checkoucie wychodzą tylko do osób ze zgodą marketingową.</p>
+                    {polaczony ? (
+                      <Button href="#automatyzacje" variant="secondary">Gotowe automatyzacje niżej</Button>
+                    ) : (
+                      <p className="tekst-meta">Dostępne po instalacji aplikacji.</p>
+                    )}
                   </div>
                 </Krok>
               </>
@@ -198,6 +203,15 @@ export default async function Shopify({
               </section>
             )}
           </Card>
+          {/* wspólna karta szablonów sklepu (Woo, Shopify, własna strona): szablony stoją na rolach
+              metryk, które instalacja Shopify ustawia (started_checkout = shopify/Started Checkout) */}
+          {polaczony ? (
+            <GotoweAutomatyzacje
+              tenantId={tenantId}
+              powrot={`/t/${tenantId}/sklepy/shopify`}
+              uwaga="Najpierw wyłącz w Shopify mail o porzuconym checkoucie (krok 6), inaczej klient dostanie dwa maile."
+            />
+          ) : null}
         </div>
       </div>
     </>
