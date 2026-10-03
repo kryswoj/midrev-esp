@@ -1,7 +1,10 @@
 import { randomBytes } from "node:crypto";
-import { AdapterWoo, type PoswiadczeniaWoo } from "../adapters/store/woo/adapter";
-import { odszyfruj, zaszyfruj } from "../adapters/crypto";
+import type { PoswiadczeniaWoo } from "../adapters/store/woo/adapter";
+import { zaszyfruj } from "../adapters/crypto";
 import { zapiszSklep } from "../adapters/db/repozytoria";
+import { getPool } from "../adapters/db/pool";
+import { adapterSklepu, BladSklepu, odszyfrujPoswiadczenia } from "../adapters/store/fabryka";
+import { definicjaPlatformy, type DefinicjaPlatformy } from "../adapters/store/rejestr";
 import {
   odczytajStanWebhookow,
   sklepDoRejestracji,
@@ -10,16 +13,16 @@ import {
   zapiszStanWebhookow,
 } from "../adapters/store/stan-webhookow";
 import {
-  adresDostawy,
+  adresDostawySklepu,
   normalizujStatus,
-  TEMATY_WEBHOOKOW,
   wszystkieAktywne,
   type StanWebhookow,
   type WebhookSklepu,
   type WpisWebhooka,
 } from "../adapters/store/webhooki";
 import { config } from "../config";
-import type { WynikWeryfikacji } from "../domain/store/contract";
+import type { PlatformaSklepu, PortWebhookow, WynikWeryfikacji } from "../domain/store/contract";
+import { ustawRoleSklepu } from "./integracja/role-metryk";
 
 export type WynikPodlaczenia =
   | {
@@ -32,20 +35,49 @@ export type WynikPodlaczenia =
     }
   | { ok: false; blad: string; szczegoly?: string };
 
+/** Jak sklep został połączony (`stores.connection_method`, 0046). */
+export type MetodaPolaczenia = "klucze" | "wtyczka" | "wc_auth" | "oauth";
+
 /**
- * Podłączenie sklepu (FR8, FR9, B3). Poświadczenia są sprawdzane ZAKRES PO ZAKRESIE zanim
- * cokolwiek zapiszemy, bo klucze bez uprawnienia do zamówień przechodzą zwykły test
- * połączenia, a potem import kończy się pustym wynikiem wyglądającym jak sklep bez historii.
- *
- * Po zapisie sklepu rejestrujemy webhooki PO STRONIE SKLEPU. Bez tego kroku sklep po
- * imporcie historii cicho staje w miejscu: nowe zamówienia nie wpadają, atrybucja liczy
- * na starych danych, a automatyzacja na "zamówienie utworzone" nigdy nie strzela.
+ * Podłączenie sklepu WooCommerce kluczami REST (FR8, FR9, B3). Cienkie opakowanie
+ * portu „Sklep”: ta sama droga co wtyczka i `/wc-auth`, inne są tylko źródła kluczy.
  */
 export async function podlaczSklepWoo(
   tenantId: string,
   poswiadczenia: PoswiadczeniaWoo,
+  opcje: { metoda?: MetodaPolaczenia; dodatkowe?: Record<string, unknown> } = {},
 ): Promise<WynikPodlaczenia> {
-  const adapter = new AdapterWoo(tenantId, poswiadczenia);
+  return podlaczSklep(tenantId, {
+    platforma: "woocommerce",
+    baseUrl: poswiadczenia.baseUrl,
+    poswiadczenia: { ck: poswiadczenia.consumerKey, cs: poswiadczenia.consumerSecret, ...(opcje.dodatkowe ?? {}) },
+    metoda: opcje.metoda ?? "klucze",
+  });
+}
+
+/**
+ * Podłączenie sklepu dowolnej platformy (port „Sklep”, plan E.1). Poświadczenia są
+ * sprawdzane ZAKRES PO ZAKRESIE zanim cokolwiek zapiszemy, bo klucze bez uprawnienia do
+ * zamówień przechodzą zwykły test połączenia, a potem import kończy się pustym wynikiem
+ * wyglądającym jak sklep bez historii.
+ *
+ * Po zapisie sklepu rejestrujemy webhooki PO STRONIE SKLEPU (jeśli platforma je ma). Bez tego
+ * kroku sklep po imporcie historii cicho staje w miejscu. Na końcu role metryk zamówień
+ * (placed_order itd.) wskazują metryki tej platformy: szablony flow wskazują rolę.
+ */
+export async function podlaczSklep(
+  tenantId: string,
+  dane: {
+    platforma: Exclude<PlatformaSklepu, "custom">;
+    baseUrl: string;
+    /** poświadczenia w kształcie platformy (Woo: `{ck, cs}`); szyfrowane w całości (AD-13) */
+    poswiadczenia: Record<string, unknown>;
+    metoda: MetodaPolaczenia;
+  },
+): Promise<WynikPodlaczenia> {
+  const definicja = definicjaPlatformy(dane.platforma);
+  if (!definicja) return { ok: false, blad: `Platforma ${dane.platforma} nie ma jeszcze adaptera` };
+  const adapter = definicja.utworzAdapter(tenantId, dane.baseUrl, dane.poswiadczenia);
   const weryfikacja: WynikWeryfikacji = await adapter.weryfikujPoswiadczenia();
 
   if (!weryfikacja.ok) {
@@ -62,36 +94,41 @@ export async function podlaczSklepWoo(
     return { ok: false, blad: "Sklep nie odpowiada", szczegoly: weryfikacja.szczegoly };
   }
 
-  // Ponowne podłączenie tego samego sklepu ODZYSKUJE sekret webhooka. Nowy sekret
-  // przy webhookach, które już istnieją w sklepie, oznaczałby, że sklep podpisuje
-  // po staremu, a endpoint odrzuca każdą dostawę jako zły podpis - cisza zamiast błędu.
-  const zastany = await znajdzSklepPoAdresie(tenantId, "woocommerce", poswiadczenia.baseUrl);
-  const webhookSecret = odzyskajSekret(zastany?.credentials_encrypted) ?? randomBytes(32).toString("hex");
+  // Ponowne podłączenie tego samego sklepu ODZYSKUJE sekret webhooka (i inne sekrety, np.
+  // wtyczki). Nowy sekret przy webhookach, które już istnieją w sklepie, oznaczałby, że sklep
+  // podpisuje po staremu, a endpoint odrzuca każdą dostawę jako zły podpis - cisza zamiast błędu.
+  const zastany = await znajdzSklepPoAdresie(tenantId, dane.platforma, dane.baseUrl);
+  const zastanePoswiadczenia = odzyskajPoswiadczenia(zastany?.credentials_encrypted);
+  const webhookSecret =
+    (typeof zastanePoswiadczenia?.webhookSecret === "string" && zastanePoswiadczenia.webhookSecret) ||
+    randomBytes(32).toString("hex");
   // stan czytamy PRZED zapisem: upsert nadpisuje całe `capabilities` świeżymi
   // możliwościami adaptera, więc po nim poprzedniego stanu już nie ma
   const poprzedni = zastany ? await odczytajStanWebhookow(tenantId, zastany.id) : null;
 
   const sklep = await zapiszSklep(tenantId, {
-    platform: "woocommerce",
-    baseUrl: poswiadczenia.baseUrl,
+    platform: dane.platforma,
+    baseUrl: dane.baseUrl,
     // szyfrogram, nie tekst (AD-13). Sekret webhooka leży razem z kluczami REST,
     // bo endpoint ingestu czyta go stąd przy weryfikacji podpisu HMAC.
-    credentialsEncrypted: zaszyfruj(
-      JSON.stringify({ ck: poswiadczenia.consumerKey, cs: poswiadczenia.consumerSecret, webhookSecret }),
-    ),
+    credentialsEncrypted: zaszyfruj(JSON.stringify({ ...(zastanePoswiadczenia ?? {}), ...dane.poswiadczenia, webhookSecret })),
     capabilities: adapter.mozliwosci() as unknown as Record<string, boolean>,
     status: "connected",
+    connectionMethod: dane.metoda,
   });
 
-  const stan = await zarejestrujWebhoki(adapter, sklep.id, webhookSecret, poprzedni);
+  const stan = definicja.webhooki && adapter.listujWebhooki
+    ? await zarejestrujWebhoki(adapter as PortWebhookow, definicja, sklep.id, webhookSecret, poprzedni)
+    : pustyStan(definicja, sklep.id, "Platforma nie obsługuje webhooków");
   await zapiszStanWebhookow(tenantId, sklep.id, stan);
+  await ustawRoleSklepu(getPool(), tenantId, dane.platforma);
 
   return {
     ok: true,
     storeId: sklep.id,
     mozliwosci: sklep.capabilities,
     webhooki: stan,
-    ostrzezenie: wszystkieAktywne(stan) ? undefined : opisBraku(stan),
+    ostrzezenie: wszystkieAktywne(stan, definicja.webhooki?.tematy) ? undefined : opisBraku(stan),
   };
 }
 
@@ -106,36 +143,51 @@ export async function odswiezWebhokiSklepu(
 ): Promise<{ ok: true; stan: StanWebhookow } | { ok: false; blad: string }> {
   const sklep = await sklepDoRejestracji(tenantId, storeId);
   if (!sklep) return { ok: false, blad: "Nie znaleziono takiego sklepu" };
-  if (sklep.platform !== "woocommerce") {
-    return { ok: false, blad: "Webhooki umie na razie wyłącznie adapter WooCommerce" };
+  const definicja = definicjaPlatformy(sklep.platform);
+  if (!definicja?.webhooki) {
+    return { ok: false, blad: "Ta platforma nie ma webhooków do rejestracji" };
   }
 
-  let ck: string;
-  let cs: string;
+  let poswiadczenia: Record<string, unknown>;
   let sekret: string;
   try {
-    const dane = JSON.parse(odszyfruj(sklep.credentials_encrypted));
-    ck = String(dane.ck ?? "");
-    cs = String(dane.cs ?? "");
-    sekret = String(dane.webhookSecret ?? "") || randomBytes(32).toString("hex");
-    if (!dane.webhookSecret) {
+    poswiadczenia = odszyfrujPoswiadczenia(sklep.credentials_encrypted);
+    sekret = (typeof poswiadczenia.webhookSecret === "string" && poswiadczenia.webhookSecret) || randomBytes(32).toString("hex");
+    if (!poswiadczenia.webhookSecret) {
       // sklep podłączony przed B3 nie ma sekretu webhooka: dopisujemy go teraz,
       // a rejestracja niżej wgra ten sam sekret do webhooków w sklepie
-      await zapiszPoswiadczenia(
-        tenantId,
-        storeId,
-        zaszyfruj(JSON.stringify({ ck, cs, webhookSecret: sekret })),
-      );
+      poswiadczenia = { ...poswiadczenia, webhookSecret: sekret };
+      await zapiszPoswiadczenia(tenantId, storeId, zaszyfruj(JSON.stringify(poswiadczenia)));
     }
   } catch {
     return { ok: false, blad: "Nie udało się odczytać poświadczeń sklepu" };
   }
 
-  const adapter = new AdapterWoo(tenantId, { baseUrl: sklep.base_url, consumerKey: ck, consumerSecret: cs });
+  const adapter = definicja.utworzAdapter(tenantId, sklep.base_url, poswiadczenia);
+  if (!adapter.listujWebhooki) return { ok: false, blad: "Ta platforma nie ma webhooków do rejestracji" };
   const poprzedni = await odczytajStanWebhookow(tenantId, storeId);
-  const stan = await zarejestrujWebhoki(adapter, storeId, sekret, poprzedni);
+  const stan = await zarejestrujWebhoki(adapter as PortWebhookow, definicja, storeId, sekret, poprzedni);
   await zapiszStanWebhookow(tenantId, storeId, stan);
   return { ok: true, stan };
+}
+
+/** Adapter sklepu z bazy (dla wołających spoza tego modułu); błąd = komunikat bez sekretów. */
+export async function adapterIstniejacegoSklepu(tenantId: string, storeId: string) {
+  try {
+    return await adapterSklepu(tenantId, storeId);
+  } catch (b) {
+    throw b instanceof BladSklepu ? b : new BladSklepu("Nie udało się odczytać poświadczeń sklepu");
+  }
+}
+
+function pustyStan(definicja: DefinicjaPlatformy, storeId: string, blad: string | null): StanWebhookow {
+  return {
+    adresDostawy: definicja.webhooki ? adresDostawySklepu(config().APP_URL, definicja.webhooki.sciezkaDostawy(storeId)) : "",
+    sprawdzonyAt: new Date().toISOString(),
+    wpisy: [],
+    blad,
+    usunieteDuplikaty: 0,
+  };
 }
 
 /**
@@ -150,12 +202,14 @@ export async function odswiezWebhokiSklepu(
  * co zastało, zamiast dokładać drugi webhook obok.
  */
 async function zarejestrujWebhoki(
-  adapter: AdapterWoo,
+  adapter: PortWebhookow,
+  definicja: DefinicjaPlatformy,
   storeId: string,
   sekret: string,
   poprzedni: StanWebhookow | null,
 ): Promise<StanWebhookow> {
-  const adres = adresDostawy(config().APP_URL, storeId);
+  const tematy = definicja.webhooki?.tematy ?? [];
+  const adres = adresDostawySklepu(config().APP_URL, definicja.webhooki!.sciezkaDostawy(storeId));
   const stan: StanWebhookow = {
     adresDostawy: adres,
     sprawdzonyAt: new Date().toISOString(),
@@ -172,7 +226,7 @@ async function zarejestrujWebhoki(
     zastane = await adapter.listujWebhooki();
   } catch (blad) {
     stan.blad = opisBledu(blad);
-    stan.wpisy = TEMATY_WEBHOOKOW.map((temat) => ({
+    stan.wpisy = tematy.map((temat) => ({
       temat,
       webhookId: null,
       stan: "blad" as const,
@@ -183,14 +237,14 @@ async function zarejestrujWebhoki(
     return stan;
   }
 
-  for (const temat of TEMATY_WEBHOOKOW) {
+  for (const temat of tematy) {
     stan.wpisy.push(await zadbajOTemat(adapter, zastane, adres, temat, sekret, stan));
   }
   return stan;
 }
 
 async function zadbajOTemat(
-  adapter: AdapterWoo,
+  adapter: PortWebhookow,
   zastane: WebhookSklepu[],
   adres: string,
   temat: string,
@@ -209,10 +263,14 @@ async function zadbajOTemat(
   // Aktywny ma pierwszeństwo na zachowanie, reszta to duplikaty do skasowania.
   const nasze = zastane
     .filter((w) => w.adresDostawy === adres && w.temat === temat)
-    .sort((a, b) => Number(b.status === "active") - Number(a.status === "active") || a.id - b.id);
+    .sort(
+      (a, b) =>
+        Number(b.status === "active") - Number(a.status === "active") ||
+        String(a.id).localeCompare(String(b.id), undefined, { numeric: true }),
+    );
 
   try {
-    let id: number;
+    let id: number | string;
     if (nasze.length === 0) {
       const utworzony = await adapter.utworzWebhook({
         nazwa: `MidRev ESP ${temat}`,
@@ -259,11 +317,10 @@ async function zadbajOTemat(
   }
 }
 
-function odzyskajSekret(szyfrogram: Buffer | undefined): string | null {
+function odzyskajPoswiadczenia(szyfrogram: Buffer | undefined): Record<string, unknown> | null {
   if (!szyfrogram) return null;
   try {
-    const dane = JSON.parse(odszyfruj(szyfrogram));
-    return typeof dane.webhookSecret === "string" && dane.webhookSecret ? dane.webhookSecret : null;
+    return odszyfrujPoswiadczenia(szyfrogram);
   } catch {
     return null;
   }

@@ -1,8 +1,7 @@
 import type { PoolClient } from "pg";
 import { getPool } from "../adapters/db/pool";
-import { odszyfruj } from "../adapters/crypto";
-import { poswiadczeniaSklepu, sklep as pobierzSklep } from "../adapters/db/repozytoria";
-import { AdapterWoo } from "../adapters/store/woo/adapter";
+import { adapterSklepu } from "../adapters/store/fabryka";
+import type { DefinicjaPlatformy } from "../adapters/store/rejestr";
 import type { ZamowienieSklepu } from "../domain/store/contract";
 import { upsertProfilKlienta, upsertZamowienie, ZASLEPKA_PAYLOADU } from "./przetworz-zdarzenie";
 import { emitujKlienta } from "./zdarzenia/emisja-sklepu";
@@ -48,6 +47,8 @@ export interface OpcjeImportu {
   od?: Date;
   /** Rozmiar strony. Domyślnie 100 (maksimum Woo); mniejszy tylko w testach paginacji. */
   naStrone?: number;
+  /** Postęp do paska w kreatorze (po każdej stronie): objęte / zaplanowane. */
+  postep?: (p: { etap: "klienci" | "zamowienia"; objete: number; plan: number; runId: string }) => Promise<void> | void;
 }
 
 const NA_STRONE = 100;
@@ -62,13 +63,9 @@ function znormalizuj(email: string | null): string | null {
   return email ? email.trim().toLowerCase() : null;
 }
 
+/** Adapter z fabryki portu „Sklep” (E.1): platforma z `stores.platform`, nie zaszyta. */
 async function adapterDlaSklepu(tenantId: string, storeId: string) {
-  const s = await pobierzSklep(tenantId, storeId);
-  if (!s) throw new Error("Sklep nie istnieje w tym tenancie");
-  const szyfrogram = await poswiadczeniaSklepu(tenantId, storeId);
-  if (!szyfrogram) throw new Error("Brak poświadczeń sklepu");
-  const { ck, cs } = JSON.parse(odszyfruj(szyfrogram));
-  return new AdapterWoo(tenantId, { baseUrl: s.base_url, consumerKey: ck, consumerSecret: cs });
+  return (await adapterSklepu(tenantId, storeId)).adapter;
 }
 
 /**
@@ -178,9 +175,10 @@ export async function wykonajImport(
   opcje: OpcjeImportu = {},
 ): Promise<WynikImportu> {
   const pool = getPool();
-  const adapter = await adapterDlaSklepu(tenantId, storeId);
+  const { adapter, definicja } = await adapterSklepu(tenantId, storeId);
   const naStrone = opcje.naStrone ?? NA_STRONE;
   const plan = await zaplanujImport(tenantId, storeId, opcje);
+  const postep = opcje.postep;
 
   // jeden trwający import na sklep: unikalny indeks częściowy (0024) odrzuca drugi
   // przebieg, zanim cokolwiek zapisze - dwóch operatorów naraz to nie dwa importy
@@ -228,8 +226,8 @@ export async function wykonajImport(
         // niestabilna paginacja Woo: ta sama pozycja potrafi wrócić na dwóch stronach
         if (objeciKlienci.has(k.externalId)) continue;
         await wTransakcji(klient, async () => {
-          const klucz = adapter.kluczIdempotencji("customer", k.externalId, wersja(k));
-          await zapiszSuroweZdarzenie(klient, tenantId, storeId, klucz, k.surowe);
+          const klucz = adapter.kluczIdempotencji("customer", k.externalId, definicja.wersjaBytu(k));
+          await zapiszSuroweZdarzenie(klient, tenantId, storeId, definicja, klucz, k.surowe);
           const wynik = await upsertProfilKlienta(klient, tenantId, k, storeId);
           if (wynik?.nagrobek) {
             pominieteRodo++;
@@ -250,6 +248,7 @@ export async function wykonajImport(
         });
         objeciKlienci.add(k.externalId);
       }
+      await postep?.({ etap: "klienci", objete: objeciKlienci.size, plan: plan.klienci, runId });
     }
 
     for await (const strona of strony((s) =>
@@ -259,12 +258,12 @@ export async function wykonajImport(
         if (objeteZamowienia.has(zamowienie.externalId)) continue;
         await wTransakcji(klient, async () => {
           // surowe zdarzenie z kluczem opisującym BYT, nie kanał (AD-4, AD-24)
-          const klucz = adapter.kluczIdempotencji("order", zamowienie.externalId, wersja(zamowienie));
-          await zapiszSuroweZdarzenie(klient, tenantId, storeId, klucz, zamowienie.surowe);
+          const klucz = adapter.kluczIdempotencji("order", zamowienie.externalId, definicja.wersjaBytu(zamowienie));
+          await zapiszSuroweZdarzenie(klient, tenantId, storeId, definicja, klucz, zamowienie.surowe);
 
           // TEN SAM upsert co faza 2 webhooka (osłona source_updated_at): zastane
           // zamówienie dostaje nowszy status i kwotę, starsza wersja jest pomijana
-          const wynik = await upsertZamowienie(klient, tenantId, storeId, zamowienie, { kanal: "import" });
+          const wynik = await upsertZamowienie(klient, tenantId, storeId, zamowienie, { kanal: "import", platforma: definicja.platforma });
           if (wynik.nagrobek) {
             pominieteRodo++;
             await zaslepSurowe(klient, tenantId, storeId, klucz);
@@ -275,6 +274,7 @@ export async function wykonajImport(
         });
         objeteZamowienia.add(zamowienie.externalId);
       }
+      await postep?.({ etap: "zamowienia", objete: objeteZamowienia.size, plan: plan.zamowienia, runId });
     }
   } catch (blad) {
     // przebieg przerwany (np. 5xx sklepu na 37. stronie): status 'failed' z nazwą
@@ -381,26 +381,22 @@ export async function wykonajImport(
   };
 }
 
-/** Wersja bytu do klucza idempotencji = data modyfikacji ze źródła; identycznie w webhooku (AD-24). */
-function wersja(byt: { surowe: unknown; zmodyfikowaneAt: Date }): string {
-  const s = byt.surowe as { date_modified_gmt?: string | null; date_created_gmt?: string | null } | null;
-  return String(s?.date_modified_gmt ?? s?.date_created_gmt ?? byt.zmodyfikowaneAt.toISOString());
-}
-
 async function zapiszSuroweZdarzenie(
   klient: PoolClient,
   tenantId: string,
   storeId: string,
+  definicja: DefinicjaPlatformy,
   klucz: string,
   payload: unknown,
 ) {
   // `channel = import`: ocena ciszy sklepu liczy wyłącznie kanał webhook (0023), więc
-  // import 8 tys. zamówień nie udaje przez dobę, że sklep dosyła dane
+  // import 8 tys. zamówień nie udaje przez dobę, że sklep dosyła dane.
+  // Wersja bytu w kluczu = `definicja.wersjaBytu`, identycznie jak w webhooku (AD-24).
   await klient.query(
     `insert into raw_events (tenant_id, store_id, source, idempotency_key, payload, processed_at, channel)
-     values ($1, $2, 'woocommerce', $3, $4, now(), 'import')
+     values ($1, $2, $3, $4, $5, now(), 'import')
      on conflict do nothing`,
-    [tenantId, storeId, klucz, JSON.stringify(payload)],
+    [tenantId, storeId, definicja.zrodloSurowych, klucz, JSON.stringify(payload)],
   );
 }
 
