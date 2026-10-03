@@ -67,11 +67,12 @@ export async function obsluzZadanieRodo(tenantId: string, rawEventId: string): P
     wynik.zanonimizowane = zanonimizowane;
     wynik.zaslepioneZamowienia = await zaslepZamowienia(tenantId, r.store_id, zadanie.klientId, zadanie.zamowienia);
   } else if (zadanie.temat === "shop/redact") {
+    // lista PRZED zaślepieniem: koszyki sklepu zaraz znikną, a też wskazują osoby (review r2)
+    const profile = await profileSklepu(tenantId, r.store_id);
     Object.assign(wynik, await zaslepSklep(tenantId, r.store_id));
     // Profile osób z tego sklepu to lista marketingowa klienta agencji (administratora), często
     // zasilana też z innych źródeł; automatycznie ich nie kasujemy. Żądanie zostaje OTWARTE
     // (needs_operator) z listą profili, dopóki człowiek nie zdecyduje z klientem (review r1).
-    const profile = await profileSklepu(tenantId, r.store_id);
     wynik.profileIds = profile.slice(0, 5000);
     wynik.profile = profile.length;
     status = "needs_operator";
@@ -172,10 +173,12 @@ async function przygotujZadanie(tenantId: string, rawEventId: string, storeId: s
   return { temat, profileIds, zamowienia, klientId };
 }
 
-/** Profile z zamówieniami tego sklepu (do decyzji operatora po shop/redact). */
+/** Profile z zamówieniami albo koszykami tego sklepu (do decyzji operatora po shop/redact). */
 async function profileSklepu(tenantId: string, storeId: string): Promise<string[]> {
   const { rows } = await getPool().query<{ id: string }>(
-    "select distinct profile_id as id from orders where tenant_id = $1 and store_id = $2 and profile_id is not null",
+    `select profile_id as id from orders where tenant_id = $1 and store_id = $2 and profile_id is not null
+     union
+     select profile_id from carts where tenant_id = $1 and store_id = $2 and profile_id is not null`,
     [tenantId, storeId],
   );
   return rows.map((x) => x.id);

@@ -215,7 +215,7 @@ async function zamknijKoszyki(k: Kontekst, z: ZamowienieSklepu, profileId: strin
       where tenant_id = $1 and stage <> 'ordered' and (
             (store_id = $2 and platform_token = any($3::text[]))
          or (store_id is null and $5::text is not null and platform_token = $5)
-         or ($6::uuid is not null and profile_id = $6 and source_updated_at <= $7::timestamptz + interval '5 minutes'))`,
+         or ($6::uuid is not null and store_id = $2 and profile_id = $6 and source_updated_at <= $7::timestamptz + interval '5 minutes'))`,
     [k.tenantId, k.storeId, tokeny, z.externalId, tokenKoszyka, profileId, z.occurredAt],
   );
 }

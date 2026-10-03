@@ -378,6 +378,25 @@ describe("Shopify: instalacja, webhooki, RODO, import (baza testowa + atrapa)", 
     const js = await (await getSkrypt(new NextRequest(new URL(`/js/v1/${idKlucza}.js`, "https://link.midrev.test")), { params: Promise.resolve({ plik: `${idKlucza}.js` }) })).text();
     expect(js).toContain('"zgoda":true');
     expect(js).toContain('"recz":true');
+    // runtime: na Shopify zwykłe consent(true) ze strony nie nadaje zgody; nadaje tylko platformConsent z mostu
+    const vm = await import("node:vm");
+    const wyslane: string[] = [];
+    const okno: any = {
+      location: { search: "", hostname: "sklep.test", href: "https://sklep.test/", protocol: "https:", pathname: "/" },
+      localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
+      fetch: (u: string) => { wyslane.push(u); return Promise.resolve({ status: 202 }); },
+      addEventListener: () => {}, setInterval: () => 0, clearInterval: () => {}, crypto: { getRandomValues: (a: Uint8Array) => a }, console,
+    };
+    const dok: any = { cookie: "", readyState: "complete", addEventListener: () => {}, getElementsByTagName: () => [], createElement: () => ({}), head: { appendChild: () => {} }, documentElement: {}, body: null, querySelector: () => null };
+    okno.window = okno;
+    vm.runInNewContext(js, { window: okno, document: dok, Promise, JSON, Date, Math, encodeURIComponent, decodeURIComponent, Object, String, Number, Array, Uint8Array, Blob: class {} });
+    okno.midrev.consent(true);
+    okno.midrev.push(["consent", true]);
+    await okno.midrev.identify({ email: "a@b.test" });
+    expect(wyslane).toHaveLength(0);
+    okno.midrev.push(["platformConsent", true]);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(wyslane.some((u) => u.includes("/client/profiles"))).toBe(true);
     // ponowne „Sprawdź” nie zakłada drugich subskrypcji
     const ile = atrapa.subskrypcje.length;
     const { poInstalacji } = await import("../src/usecases/shopify/instalacja");

@@ -56,6 +56,26 @@ export default async function Shopify({
   const app = config().APP_URL;
   const pkt = (k: string) => stan?.punkty.find((p) => p.klucz === k)?.ok ?? false;
 
+  const formularz = (
+    <form action={zapiszAplikacjeAkcja} className="flex flex-col gap-3">
+      <input type="hidden" name="tenantId" value={tenantId} />
+      <Field label="Adres sklepu" htmlFor="adres" hint={"nazwa-sklepu.myshopify.com (Ustawienia > Domeny w\u00a0panelu Shopify)"}>
+        <Input id="adres" name="adres" required defaultValue={sklep?.domena ?? ""} placeholder="twoj-sklep.myshopify.com" autoComplete="off" />
+      </Field>
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Client ID" htmlFor="clientId">
+          <Input id="clientId" name="clientId" required defaultValue={sklep?.poswiadczenia.clientId ?? ""} autoComplete="off" spellCheck={false} />
+        </Field>
+        <Field label="Client secret" htmlFor="clientSecret" hint={sklep ? "Zapisany i zaszyfrowany. Zostaw puste, jeśli się nie zmienił." : "Trzymamy go zaszyfrowanego, nie pokażemy go ponownie."}>
+          <Input id="clientSecret" name="clientSecret" type="password" required={!sklep} autoComplete="off" spellCheck={false} />
+        </Field>
+      </div>
+      <div>
+        <PrzyciskFormularza trwa="Zapisuję…" variant={sklep ? "secondary" : "primary"}>{sklep ? "Zapisz zmiany" : "Zapisz aplikację"}</PrzyciskFormularza>
+      </div>
+    </form>
+  );
+
   return (
     <>
       <Naglowek
@@ -66,7 +86,7 @@ export default async function Shopify({
       <Komunikat ok={q.ok} blad={q.blad} />
       {q.zainstalowano ? (
         <div className="pb-4">
-          <Alert tone="ok" title="Aplikacja zainstalowana">Został jeden krok w sklepie: włącz MidRev w motywie (krok 3).</Alert>
+          <Alert tone="ok" title="Aplikacja zainstalowana">{"Został jeden krok w\u00a0sklepie: włącz MidRev w\u00a0motywie (krok 3)."}</Alert>
         </div>
       ) : null}
 
@@ -87,24 +107,17 @@ export default async function Shopify({
               action={sklep ? <Badge ton={polaczony ? "ok" : sklep.status === "pending" ? "uwaga" : "blad"}>{polaczony ? "połączony" : sklep.status === "pending" ? "czeka na instalację" : "wymaga uwagi"}</Badge> : null}
             />
 
-            <Krok numer={1} id="aplikacja" tytul="Aplikacja klienta" zrobiony={Boolean(sklep)} opis="Adres sklepu i dane aplikacji z Shopify Dev Dashboard. Każdy sklep ma własną aplikację MidRev.">
-              <form action={zapiszAplikacjeAkcja} className="flex flex-col gap-3">
-                <input type="hidden" name="tenantId" value={tenantId} />
-                <Field label="Adres sklepu" htmlFor="adres" hint="nazwa-sklepu.myshopify.com (Ustawienia > Domeny w panelu Shopify)">
-                  <Input id="adres" name="adres" required defaultValue={sklep?.domena ?? ""} placeholder="twoj-sklep.myshopify.com" autoComplete="off" />
-                </Field>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <Field label="Client ID" htmlFor="clientId">
-                    <Input id="clientId" name="clientId" required defaultValue={sklep?.poswiadczenia.clientId ?? ""} autoComplete="off" spellCheck={false} />
-                  </Field>
-                  <Field label="Client secret" htmlFor="clientSecret" hint={sklep ? "Zapisany i zaszyfrowany. Zostaw puste, jeśli się nie zmienił." : "Trzymamy go zaszyfrowanego, nie pokażemy go ponownie."}>
-                    <Input id="clientSecret" name="clientSecret" type="password" required={!sklep} autoComplete="off" spellCheck={false} />
-                  </Field>
-                </div>
-                <div>
-                  <PrzyciskFormularza trwa="Zapisuję…" variant={sklep ? "secondary" : "primary"}>{sklep ? "Zapisz zmiany" : "Zapisz aplikację"}</PrzyciskFormularza>
-                </div>
-              </form>
+            <Krok numer={1} id="aplikacja" tytul="Aplikacja klienta" zrobiony={Boolean(sklep)} opis={"Adres sklepu i\u00a0dane aplikacji z\u00a0Shopify Dev Dashboard. Każdy sklep ma własną aplikację MidRev."}>
+              {sklep ? (
+                <details className="group">
+                  <summary className="cursor-pointer text-[14px] leading-5 text-[var(--color-tekst)] marker:text-[var(--color-tekst-3)]">
+                    <span className="font-medium">{sklep.domena}</span> <span className="tekst-meta">· Client ID {sklep.poswiadczenia.clientId.slice(0, 8)}… · zmień dane aplikacji</span>
+                  </summary>
+                  <div className="pt-3">{formularz}</div>
+                </details>
+              ) : (
+                formularz
+              )}
             </Krok>
 
             {sklep ? (
@@ -118,11 +131,11 @@ export default async function Shopify({
                         {sklep.status === "error" && sklep.ostatniBlad ? `${sklep.ostatniBlad} ` : ""}Po kliknięciu „Zainstaluj” Shopify przekieruje na MidRev, a ta strona pokaże kolejny krok.
                       </Alert>
                     )}
-                    <div className="grid gap-2 text-[13px] leading-[19px] text-[var(--color-tekst-2)]">
+                    {polaczony ? null : <div className="grid gap-2 text-[13px] leading-[19px] text-[var(--color-tekst-2)]">
                       <span>Adresy do ustawienia w aplikacji (Dev Dashboard &gt; Wersje):</span>
                       <span className="flex flex-wrap items-center gap-2"><code className="break-all">{app}/api/shopify/auth</code><Kopiuj wartosc={`${app}/api/shopify/auth`} etykieta="Adres aplikacji" /></span>
                       <span className="flex flex-wrap items-center gap-2"><code className="break-all">{app}/api/shopify/callback</code><Kopiuj wartosc={`${app}/api/shopify/callback`} etykieta="Adres powrotu" /></span>
-                    </div>
+                    </div>}
                   </div>
                 </Krok>
 
@@ -168,7 +181,22 @@ export default async function Shopify({
                   </div>
                 </Krok>
               </>
-            ) : null}
+            ) : (
+              <section className="formularz-sekcja">
+                <div className="formularz-sekcja-opis">
+                  <h3>Co dalej</h3>
+                  <p>Po zapisaniu aplikacji kreator poprowadzi przez resztę.</p>
+                </div>
+                <ol className="grid gap-2">
+                  {["Instalacja w\u00a0sklepie (klient klika „Zainstaluj”)", "Włącz w\u00a0motywie (jedno kliknięcie)", "Sprawdź połączenie na żywo", "Import historii z\u00a0paskiem postępu", "Automatyzacje e-commerce"].map((t, i) => (
+                    <li key={t} className="flex items-center gap-2.5 text-[14px] leading-5 text-[var(--color-tekst-2)]">
+                      <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full border border-[var(--color-linia)] text-[12px] font-semibold text-[var(--color-tekst-3)]">{i + 2}</span>
+                      {t}
+                    </li>
+                  ))}
+                </ol>
+              </section>
+            )}
           </Card>
         </div>
       </div>

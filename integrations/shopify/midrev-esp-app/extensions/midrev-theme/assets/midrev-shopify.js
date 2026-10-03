@@ -1,7 +1,8 @@
 /*
  * Most Shopify Customer Privacy API → midrev.js (wersja 1.0.0).
  * Zgoda MARKETINGOWA i ANALITYCZNA z banera Shopify (albo „nie wymagana” w regionie) = 
- * `_learnq.push(["consent", true])`; sprzeciw = `["consent", false]` (midrev.js usuwa wtedy
+ * `_learnq.push(["platformConsent", true])` (jedyna komenda, którą midrev.js na Shopify nadaje zgodę);
+ * sprzeciw = `["platformConsent", false]` (midrev.js usuwa wtedy
  * ciasteczko). Zalogowany klient: identify po e-mailu, kolejkowany w midrev.js do zgody.
  * Nigdy nie psuje strony: wszystko w try/catch.
  */
@@ -11,7 +12,7 @@
   w.__midrevShopifyMost = 1;
   var q = (w._learnq = w._learnq || []);
   function ustaw(zgoda) {
-    try { q.push(["consent", zgoda === true]); } catch (e) {}
+    try { q.push(["platformConsent", zgoda === true]); } catch (e) {}
   }
   function zPrywatnosci() {
     try {

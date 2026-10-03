@@ -390,7 +390,10 @@ export const RUNTIME_MIDREV = String.raw`(function (w, d, K) {
     if (nazwa === "identify") return identify(c[1]);
     if (nazwa === "track") return track(c[1], c[2]);
     if (nazwa === "trackViewedItem") return trackViewedItem(c[1]);
-    if (nazwa === "consent") { trybRecznej = true; ustawZgode(c[1] !== false, "push"); return P(true); }
+    // K.recz (Shopify): zwykłe consent ze strony (stary snippet, obcy CMP) może zgodę tylko COFNĄĆ;
+    // nadać ją może wyłącznie most platformy komendą platformConsent (Customer Privacy API)
+    if (nazwa === "consent") { if (K.recz && c[1] !== false) return P(false); trybRecznej = true; ustawZgode(c[1] !== false, "push"); return P(true); }
+    if (nazwa === "platformConsent") { trybRecznej = true; ustawZgode(c[1] === true, "platforma"); return P(true); }
     if (nazwa === "subscribe") return subscribe(c[1]);
     return P(false);
   }
@@ -405,7 +408,7 @@ export const RUNTIME_MIDREV = String.raw`(function (w, d, K) {
     trackViewedItem: function (o) { return bezpieczneWykonaj(["trackViewedItem", o]); },
     isIdentified: function () { return P(zgoda && rozpoznany()); },
     subscribe: function (o) { return bezpieczneWykonaj(["subscribe", o]); },
-    consent: function (v) { trybRecznej = true; ustawZgode(v !== false, "api"); return P(zgoda); },
+    consent: function (v) { if (K.recz && v !== false) return P(zgoda); trybRecznej = true; ustawZgode(v !== false, "api"); return P(zgoda); },
     _mapujGa4: mapujGa4,
     __midrev: true
   };

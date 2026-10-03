@@ -99,7 +99,7 @@ export default async function Sklepy({
               </span>
             </a>
           </div>
-          {sklepy.length === 0 ? (
+          {sklepy.length === 0 && shopify.length > 0 ? null : sklepy.length === 0 ? (
             <Card>
               <CardHeader title="Podłączony sklep" description="Źródło zamówień, profili i zdarzeń dla tego konta." />
               <EmptyState icon="sklep" title="Sklep nie jest jeszcze podłączony" description="Panel nie ma jeszcze skąd pobierać zamówień ani profili. Użyj formularza poniżej, aby połączyć WooCommerce." />
