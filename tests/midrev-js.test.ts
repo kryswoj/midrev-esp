@@ -114,11 +114,25 @@ describe("midrev.js w przeglądarce", () => {
     expect(await b.w.midrev.isIdentified()).toBe(false);
   });
 
-  it("jawna odmowa (Consent Mode denied) kasuje ciasteczko __mx_id z dawnej wizyty, choć zgody i tak nie było", async () => {
+  it("jawna odmowa (Consent Mode update denied) kasuje ciasteczko __mx_id z dawnej wizyty; stan domyślny „default denied” go nie rusza", async () => {
+    const stare = encodeURIComponent(JSON.stringify({ a: "staryIdentyfikator1", t: 1 }));
+    // default denied na starcie (typowe), potem update granted: powracająca osoba zachowuje identyfikator
+    const d = przegladarka({
+      przed: (w) => {
+        w.document.cookie = "__mx_id=" + stare + "; path=/";
+        w.dataLayer = [["consent", "default", { analytics_storage: "denied" }]];
+      },
+    });
+    await d.czekaj();
+    expect(d.ciasteczka.has("__mx_id")).toBe(true);
+    d.w.dataLayer.push(["consent", "update", { analytics_storage: "granted" }]);
+    await d.czekaj();
+    expect(JSON.parse(decodeURIComponent(d.ciasteczka.get("__mx_id")!)).a).toBe("staryIdentyfikator1");
+    // jawna odmowa (update denied) bez wcześniejszej zgody: stare ciasteczko znika
     const b = przegladarka({
       przed: (w) => {
-        w.document.cookie = "__mx_id=" + encodeURIComponent(JSON.stringify({ a: "staryIdentyfikator1", t: 1 })) + "; path=/";
-        w.dataLayer = [["consent", "default", { analytics_storage: "denied" }]];
+        w.document.cookie = "__mx_id=" + stare + "; path=/";
+        w.dataLayer = [["consent", "update", { analytics_storage: "denied" }]];
       },
     });
     await b.czekaj();

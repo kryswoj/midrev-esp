@@ -121,16 +121,21 @@ export const RUNTIME_MIDREV = String.raw`(function (w, d, K) {
   }
 
   // ── zgoda na cookies: ręczna, Google Consent Mode v2, popularne CMP ─────────
+  // czy ostatni odczyt zgody z CMP to DECYZJA osoby (update, odpowiedź banera), a nie stan
+  // domyślny („default denied” w Consent Mode jest na starcie prawie zawsze)
+  var cmpJawna = false;
   function zgodaCmp() {
+    cmpJawna = true;
     try {
       var ics = w.google_tag_data && w.google_tag_data.ics && w.google_tag_data.ics.entries;
       if (ics && ics.analytics_storage) {
         var s = ics.analytics_storage;
         var v = s.update !== undefined ? s.update : s["default"];
+        if (s.update === undefined) cmpJawna = false;
         if (v === true || v === "granted") return true;
         if (v === false || v === "denied") return false;
       }
-      if (gcm !== null) return gcm;
+      if (gcm !== null) { cmpJawna = gcmJawna; return gcm; }
       if (w.Cookiebot && w.Cookiebot.consent && w.Cookiebot.hasResponse) return !!w.Cookiebot.consent.statistics;
       if (typeof w.getCkyConsent === "function") { var c = w.getCkyConsent(); if (c && c.isUserActionCompleted) return !!(c.categories && c.categories.analytics); }
       if (typeof w.OnetrustActiveGroups === "string" && w.OneTrust && typeof w.OneTrust.IsAlertBoxClosed === "function" && w.OneTrust.IsAlertBoxClosed()) return w.OnetrustActiveGroups.indexOf(",C0002,") >= 0;
@@ -138,6 +143,7 @@ export const RUNTIME_MIDREV = String.raw`(function (w, d, K) {
       if (typeof w.wp_has_consent === "function" && w.consent_api_set_by) return !!w.wp_has_consent("statistics");
       var cp = w.customerPrivacy || (w.Shopify && w.Shopify.customerPrivacy);
       if (cp) {
+        cmpJawna = false;
         // Shopify: śledzenie MidRev to cel marketingowy, więc obie zgody naraz
         if (typeof cp.analyticsProcessingAllowed === "function" && typeof cp.marketingAllowed === "function") return cp.analyticsProcessingAllowed() === true && cp.marketingAllowed() === true;
         if (typeof cp.analyticsProcessingAllowed === "function") return !!cp.analyticsProcessingAllowed();
@@ -146,11 +152,12 @@ export const RUNTIME_MIDREV = String.raw`(function (w, d, K) {
     } catch (e) {}
     return null;
   }
-  var gcm = null;
+  var gcm = null, gcmJawna = false;
   function zgodaZDataLayer(a) {
     // gtag('consent', 'default'|'update', {analytics_storage: 'granted'|'denied'})
     if (a && a[0] === "consent" && a[2] && typeof a[2] === "object" && a[2].analytics_storage) {
       gcm = a[2].analytics_storage === "granted";
+      gcmJawna = a[1] === "update";
       return true;
     }
     return false;
@@ -160,7 +167,7 @@ export const RUNTIME_MIDREV = String.raw`(function (w, d, K) {
     v = !!v;
     // jawna odmowa przy braku zgody: ciasteczko z dawnej wizyty (np. sprzed włączenia wymogu zgody)
     // też znika; wtyczka Woo bierze samo __mx_id za zgodę (RODO wariant B, review r5)
-    if (v === zgoda) { if (!v && czytajCiasteczko()) usunCiasteczko(); return; }
+    if (v === zgoda) { if (!v && (zrodlo !== "cmp" || cmpJawna) && czytajCiasteczko()) usunCiasteczko(); return; }
     zgoda = v;
     log("zgoda", v, zrodlo);
     if (v) {
