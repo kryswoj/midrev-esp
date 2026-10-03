@@ -153,7 +153,7 @@ export function ZakladkaWyswietlanie({ def, zmienReguly, formId, snippet }: { de
                 <span className="w-full">
                   <input value={r.poKliknieciu} maxLength={200} aria-label="Selektor elementu" onChange={(e) => zmienReguly({ poKliknieciu: e.target.value || 'a[href="#newsletter"]' })} className="pole font-mono text-[13px]" />
                   <span className="mt-1 block text-[12px] leading-[17px] text-[var(--color-tekst-3)]">
-                    Najprościej: link <code className="font-mono">&lt;a href=&quot;#newsletter&quot;&gt;</code> w menu sklepu. Kliknięcie otwiera formularz zawsze, także po wcześniejszym zamknięciu.
+                    Najprościej: link <code className="font-mono">&lt;a href=&quot;#newsletter&quot;&gt;</code> w menu sklepu. Kliknięcie otwiera formularz także po wcześniejszym zamknięciu i zapisie; obowiązują tylko strony i urządzenia z ustawień niżej.
                   </span>
                 </span>
               ) : null}

@@ -63,6 +63,20 @@ export function uruchomFormularze(K: any, CSS: string, czyPokazac: (r: any, k: a
     };
   }
 
+  // Kontekst „jawnej intencji” (kliknięcie wyzwalacza, formularz osadzony): liczą się tylko
+  // adres strony i urządzenie; częstotliwość i „kto już się zapisał” nie blokują.
+  function tylkoMiejsce(f: any): boolean {
+    var k = kontekst(f);
+    k.zapisany = false;
+    k.zapisanyTutaj = false;
+    k.nowy = true;
+    k.zamknietoMs = null;
+    var r: any = {};
+    for (var x in f.reguly) if (Object.prototype.hasOwnProperty.call(f.reguly, x)) r[x] = f.reguly[x];
+    r.komu = "wszyscy";
+    return czyPokazac(r, k);
+  }
+
   function el(tag: string, klasa?: string, tekst?: string): any {
     var e = d.createElement(tag);
     if (klasa) e.className = klasa;
@@ -453,7 +467,7 @@ export function uruchomFormularze(K: any, CSS: string, czyPokazac: (r: any, k: a
       d.addEventListener("click", function (e: any) {
         var cel: any = null;
         try { cel = e.target && e.target.closest ? e.target.closest(r.poKliknieciu) : null; } catch (er) { cel = null; }
-        if (cel) { e.preventDefault(); if (!otwarty) pokaz(f); }
+        if (cel && tylkoMiejsce(f)) { e.preventDefault(); if (!otwarty) pokaz(f); }
       }, true);
     }
     if (!czyPokazac(r, kontekst(f))) {
@@ -484,6 +498,7 @@ export function uruchomFormularze(K: any, CSS: string, czyPokazac: (r: any, k: a
       var f = K.f[i];
       try {
         if (f.typ === "embed") {
+          if (!tylkoMiejsce(f)) continue;
           var miejsca = d.querySelectorAll('[data-midrev-form="' + f.id + '"]');
           for (var j = 0; j < miejsca.length; j++) if (!miejsca[j].getAttribute("data-mf-gotowe")) { miejsca[j].setAttribute("data-mf-gotowe", "1"); pokaz(f, miejsca[j]); }
         } else {
