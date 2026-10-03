@@ -57,7 +57,15 @@ export async function zapiszProduktyShopify(
       ],
     );
     const id = rows[0]?.id;
-    if (!id) continue;
+    if (!id) {
+      // wersja starsza niż zapisana: dane zostają, ale produkt JEST w źródle, więc znacznik
+      // przebiegu się przesuwa (inaczej pełny import uznałby go za usunięty i wyłączył)
+      await klient.query(
+        "update products set synced_at = greatest(synced_at, $4) where tenant_id = $1 and store_id = $2 and external_id = $3",
+        [tenantId, storeId, p.externalId, o.znacznik],
+      );
+      continue;
+    }
     ileP++;
     for (const [n, w] of p.warianty.entries()) {
       await klient.query(

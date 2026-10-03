@@ -26,6 +26,13 @@ import { sklepShopify, zaszyfrujPoswiadczenia } from "./sklep";
 
 const AKTOR = "shopify:compliance-webhook";
 
+interface ZadanieRodo {
+  temat: string;
+  profileIds: string[];
+  zamowienia: string[];
+  klientId: string | null;
+}
+
 export async function obsluzZadanieRodo(tenantId: string, rawEventId: string): Promise<void> {
   const pool = getPool();
   const { rows } = await pool.query<{ store_id: string; payload: any; idempotency_key: string; processed_at: Date | null }>(
@@ -34,43 +41,32 @@ export async function obsluzZadanieRodo(tenantId: string, rawEventId: string): P
     [tenantId, rawEventId],
   );
   const r = rows[0];
-  if (!r || r.processed_at || r.payload?.anonimizowano) return;
-  const temat = String(r.payload?._midrev?.temat ?? "");
+  if (!r || r.processed_at) return;
   const webhookId = r.idempotency_key.split(":")[4] ?? rawEventId;
-  const klientId = idZGid(r.payload?.customer?.id);
-  const email = typeof r.payload?.customer?.email === "string" && r.payload.customer.email.trim() ? r.payload.customer.email.trim().toLowerCase() : null;
-  const zamowienia: string[] = (Array.isArray(r.payload?.orders_to_redact) ? r.payload.orders_to_redact : Array.isArray(r.payload?.orders_requested) ? r.payload.orders_requested : [])
-    .map((x: unknown) => idZGid(x))
-    .filter((x: string | null): x is string => Boolean(x))
-    .slice(0, 5000);
+  const zadanie = await przygotujZadanie(tenantId, rawEventId, r.store_id, webhookId, r.payload);
+  if (!zadanie) {
+    // zaślepione bez wpisu żądania: nie ma już czego wykonać, tylko domknąć
+    await pool.query("update raw_events set processed_at = now(), process_error = coalesce(process_error, 'anonimizowano') where tenant_id = $1 and id = $2", [tenantId, rawEventId]);
+    return;
+  }
 
-  await pool.query(
-    `insert into shopify_gdpr_requests (tenant_id, store_id, topic, webhook_id, shopify_customer_id, email_hash, orders_count)
-     values ($1, $2, $3, $4, $5, $6, $7)
-     on conflict (tenant_id, store_id, webhook_id) do nothing`,
-    [tenantId, r.store_id, temat, webhookId, klientId, email ? hashAdresu(email) : null, zamowienia.length],
-  );
-
-  const profile = await profileOsoby(tenantId, r.store_id, email, zamowienia);
   let status: "done" | "needs_operator" = "done";
-  const wynik: Record<string, unknown> = { profile: profile.length };
+  const wynik: Record<string, unknown> = { profile: zadanie.profileIds.length, profileIds: zadanie.profileIds, zamowienia: zadanie.zamowienia.length };
   let alert: string | null = null;
-
-  if (temat === "customers/data_request") {
+  if (zadanie.temat === "customers/data_request") {
     status = "needs_operator";
-    wynik.profileIds = profile;
-    alert = profile.length
-      ? `Shopify: żądanie dostępu do danych klienta (RODO art. 15) w sklepie ${r.store_id}. Wygeneruj eksport w karcie profilu (${profile.join(", ")}) i przekaż sprzedawcy w ciągu 30 dni.`
+    alert = zadanie.profileIds.length
+      ? `Shopify: żądanie dostępu do danych klienta (RODO art. 15) w sklepie ${r.store_id}. Wygeneruj eksport w karcie profilu (${zadanie.profileIds.join(", ")}) i przekaż sprzedawcy w ciągu 30 dni.`
       : `Shopify: żądanie dostępu do danych klienta w sklepie ${r.store_id}; nie mamy profilu tej osoby. Odpowiedz sprzedawcy, że nie przetwarzamy jej danych.`;
-  } else if (temat === "customers/redact") {
+  } else if (zadanie.temat === "customers/redact") {
     let zanonimizowane = 0;
-    for (const pid of profile) {
-      const w = await anonimizujProfil(tenantId, pid, { aktor: AKTOR, powod: "żądanie usunięcia danych przekazane przez Shopify" });
-      if (w) zanonimizowane++;
+    for (const pid of zadanie.profileIds) {
+      // null = profil już usunięty (ponowienie po awarii): idempotentnie
+      if (await anonimizujProfil(tenantId, pid, { aktor: AKTOR, powod: "żądanie usunięcia danych przekazane przez Shopify" })) zanonimizowane++;
     }
     wynik.zanonimizowane = zanonimizowane;
-    wynik.zaslepioneZamowienia = await zaslepZamowieniaBezProfilu(tenantId, r.store_id, email, klientId, zamowienia);
-  } else if (temat === "shop/redact") {
+    wynik.zaslepioneZamowienia = await zaslepZamowienia(tenantId, r.store_id, zadanie.klientId, zadanie.zamowienia);
+  } else if (zadanie.temat === "shop/redact") {
     Object.assign(wynik, await zaslepSklep(tenantId, r.store_id));
     alert = `Shopify: shop/redact dla sklepu ${r.store_id}. Surowe dane sklepu zaślepione, token usunięty. Profile zostały (lista marketingowa klienta) - zdecyduj z klientem, czy je usunąć.`;
   }
@@ -87,7 +83,7 @@ export async function obsluzZadanieRodo(tenantId: string, rawEventId: string): P
       `update raw_events set payload = jsonb_build_object('anonimizowano', true, 'temat', $3::text),
               processed_at = now(), process_error = 'rodo:shopify'
         where tenant_id = $1 and id = $2`,
-      [tenantId, rawEventId, temat],
+      [tenantId, rawEventId, zadanie.temat],
     );
     await klient.query("commit");
   } catch (b) {
@@ -97,6 +93,76 @@ export async function obsluzZadanieRodo(tenantId: string, rawEventId: string): P
     klient.release();
   }
   if (alert) await wyslijAlert(alert, { poziom: "uwaga", tenantId });
+}
+
+/**
+ * Pierwsze przetworzenie: z payloadu (jedyne miejsce z adresem) liczymy profile osoby i zapisujemy
+ * żądanie BEZ adresu (hasz, id profili, id zamówień). Przy customers/redact w tej samej transakcji
+ * nagrobek (hasz adresu + id klienta Shopify) i usunięcie koszyków z adresem. Payload samego
+ * żądania zostaje do końca, ale gdyby anonimizacja go zaślepiła i coś padło, ponowienie czyta
+ * dane z wiersza żądania, nie z payloadu.
+ */
+async function przygotujZadanie(tenantId: string, rawEventId: string, storeId: string, webhookId: string, payload: any): Promise<ZadanieRodo | null> {
+  const pool = getPool();
+  const { rows: zastane } = await pool.query<{ topic: string; result: any; shopify_customer_id: string | null }>(
+    "select topic, result, shopify_customer_id from shopify_gdpr_requests where tenant_id = $1 and store_id = $2 and webhook_id = $3",
+    [tenantId, storeId, webhookId],
+  );
+  if (zastane[0]) {
+    return {
+      temat: zastane[0].topic,
+      profileIds: Array.isArray(zastane[0].result?.profileIds) ? zastane[0].result.profileIds : [],
+      zamowienia: Array.isArray(zastane[0].result?.zamowieniaIds) ? zastane[0].result.zamowieniaIds : [],
+      klientId: zastane[0].shopify_customer_id,
+    };
+  }
+  if (!payload || payload.anonimizowano) return null;
+  const temat = String(payload._midrev?.temat ?? "");
+  const klientId = idZGid(payload.customer?.id);
+  const email = typeof payload.customer?.email === "string" && payload.customer.email.trim() ? payload.customer.email.trim().toLowerCase() : null;
+  const zamowienia: string[] = (Array.isArray(payload.orders_to_redact) ? payload.orders_to_redact : Array.isArray(payload.orders_requested) ? payload.orders_requested : [])
+    .map((x: unknown) => idZGid(x))
+    .filter((x: string | null): x is string => Boolean(x))
+    .slice(0, 5000);
+  const profileIds = temat === "shop/redact" ? [] : await profileOsoby(tenantId, storeId, email, zamowienia);
+
+  const klient = await pool.connect();
+  try {
+    await klient.query("begin");
+    await klient.query(
+      `insert into shopify_gdpr_requests (tenant_id, store_id, topic, webhook_id, shopify_customer_id, email_hash, orders_count, result)
+       values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb)
+       on conflict (tenant_id, store_id, webhook_id) do nothing`,
+      [tenantId, storeId, temat, webhookId, klientId, email ? hashAdresu(email) : null, zamowienia.length, JSON.stringify({ profileIds, zamowieniaIds: zamowienia })],
+    );
+    if (temat === "customers/redact" && email) {
+      await klient.query(
+        `insert into rodo_nagrobki (tenant_id, email_hash, store_id, external_customer_ids)
+         values ($1, $2, $3, $4)
+         on conflict (tenant_id, email_hash) do update set
+           external_customer_ids = (select array_agg(distinct x) from unnest(rodo_nagrobki.external_customer_ids || excluded.external_customer_ids) x),
+           store_id = coalesce(rodo_nagrobki.store_id, excluded.store_id)`,
+        [tenantId, hashAdresu(email), storeId, klientId ? [klientId] : []],
+      );
+      await klient.query("delete from carts where tenant_id = $1 and store_id = $2 and lower(btrim(email)) = $3", [tenantId, storeId, email]);
+      // surowe zdarzenia Shopify z tym adresem gdziekolwiek w treści (poza samym żądaniem, które
+      // zaślepiamy na końcu): webhook innego tematu nie może przeżyć żądania usunięcia
+      await klient.query(
+        `update raw_events set payload = jsonb_build_object('anonimizowano', true), processed_at = coalesce(processed_at, now()),
+                process_error = coalesce(process_error, 'anonimizowano')
+          where tenant_id = $1 and store_id = $2 and source = 'shopify' and id <> $4 and not (payload ? 'anonimizowano')
+            and payload::text ilike '%' || $3 || '%'`,
+        [tenantId, storeId, email, rawEventId],
+      );
+    }
+    await klient.query("commit");
+  } catch (b) {
+    await klient.query("rollback").catch(() => {});
+    throw b;
+  } finally {
+    klient.release();
+  }
+  return { temat, profileIds, zamowienia, klientId };
 }
 
 /** Profile osoby: po adresie (tylko ten tenant) i po zamówieniach TEGO sklepu z żądania. */
@@ -112,23 +178,13 @@ async function profileOsoby(tenantId: string, storeId: string, email: string | n
 }
 
 /**
- * Zamówienia z żądania bez profilu (gość albo profil już usunięty): zaślepka `orders.raw` i
- * surowych zdarzeń tych zamówień; nagrobek po haszu adresu i id klienta Shopify.
+ * Zamówienia z żądania (także gościa bez profilu): zaślepka `orders.raw` i surowych zdarzeń tych
+ * zamówień i konta klienta Shopify. Po identyfikatorach, bez adresu (ponowienie go nie ma).
  */
-async function zaslepZamowieniaBezProfilu(tenantId: string, storeId: string, email: string | null, klientId: string | null, zamowienia: string[]): Promise<number> {
+async function zaslepZamowienia(tenantId: string, storeId: string, klientId: string | null, zamowienia: string[]): Promise<number> {
   const klient = await getPool().connect();
   try {
     await klient.query("begin");
-    if (email) {
-      await klient.query(
-        `insert into rodo_nagrobki (tenant_id, email_hash, store_id, external_customer_ids)
-         values ($1, $2, $3, $4)
-         on conflict (tenant_id, email_hash) do update set
-           external_customer_ids = (select array_agg(distinct x) from unnest(rodo_nagrobki.external_customer_ids || excluded.external_customer_ids) x),
-           store_id = coalesce(rodo_nagrobki.store_id, excluded.store_id)`,
-        [tenantId, hashAdresu(email), storeId, klientId ? [klientId] : []],
-      );
-    }
     const { rowCount } = await klient.query(
       `update orders set raw = '{"zanonimizowane": true}'::jsonb
         where tenant_id = $1 and store_id = $2 and external_id = any($3::text[]) and not (raw ? 'zanonimizowane')`,
@@ -138,22 +194,10 @@ async function zaslepZamowieniaBezProfilu(tenantId: string, storeId: string, ema
       `update raw_events set payload = jsonb_build_object('anonimizowano', true), processed_at = coalesce(processed_at, now()),
               process_error = coalesce(process_error, 'anonimizowano')
         where tenant_id = $1 and store_id = $2 and source = 'shopify' and not (payload ? 'anonimizowano')
-          and split_part(idempotency_key, ':', 3) in ('order', 'refund') and split_part(idempotency_key, ':', 4) = any($3::text[])`,
-      [tenantId, storeId, zamowienia],
-    );
-    await klient.query(
-      `update raw_events set payload = jsonb_build_object('anonimizowano', true), processed_at = coalesce(processed_at, now()),
-              process_error = coalesce(process_error, 'anonimizowano')
-        where tenant_id = $1 and store_id = $2 and source = 'shopify' and not (payload ? 'anonimizowano')
-          and $4::text is not null and split_part(idempotency_key, ':', 3) in ('customer', 'consent') and split_part(idempotency_key, ':', 4) = $4`,
+          and ((split_part(idempotency_key, ':', 3) in ('order', 'refund') and split_part(idempotency_key, ':', 4) = any($3::text[]))
+            or ($4::text is not null and split_part(idempotency_key, ':', 3) in ('customer', 'consent') and split_part(idempotency_key, ':', 4) = $4))`,
       [tenantId, storeId, zamowienia, klientId],
     );
-    if (email) {
-      await klient.query(
-        "delete from carts where tenant_id = $1 and store_id = $2 and lower(btrim(email)) = $3",
-        [tenantId, storeId, email],
-      );
-    }
     await klient.query("commit");
     return rowCount ?? 0;
   } catch (b) {

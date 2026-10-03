@@ -1,0 +1,22 @@
+{
+  "id": 929361462,
+  "order_id": 820982911946154500,
+  "created_at": "2026-10-05T12:00:00+02:00",
+  "note": "zwrot",
+  "refund_line_items": [
+    {
+      "id": 1,
+      "line_item_id": 518995019,
+      "quantity": 1
+    }
+  ],
+  "transactions": [
+    {
+      "id": 1,
+      "kind": "refund",
+      "status": "success",
+      "amount": "60.00",
+      "currency": "PLN"
+    }
+  ]
+}

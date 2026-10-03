@@ -51,13 +51,14 @@ interface Kontekst {
 
 export async function przetworzZdarzenieShopify(tenantId: string, rawEventId: string): Promise<void> {
   const pool = getPool();
-  const { rows: podglad } = await pool.query<{ temat: string | null }>(
-    `select payload -> '_midrev' ->> 'temat' as temat from raw_events
+  const { rows: podglad } = await pool.query<{ temat: string | null; byt: string }>(
+    `select payload -> '_midrev' ->> 'temat' as temat, split_part(idempotency_key, ':', 3) as byt from raw_events
       where tenant_id = $1 and id = $2 and source = 'shopify' and processed_at is null`,
     [tenantId, rawEventId],
   );
   if (!podglad[0]) return;
-  if ((TEMATY_RODO as readonly string[]).includes(podglad[0].temat ?? "")) {
+  // byt `gdpr` z klucza: także wtedy, gdy payload jest już zaślepiony (ponowienie po awarii)
+  if (podglad[0].byt === "gdpr" || (TEMATY_RODO as readonly string[]).includes(podglad[0].temat ?? "")) {
     await obsluzZadanieRodo(tenantId, rawEventId);
     return;
   }

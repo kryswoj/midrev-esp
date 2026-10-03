@@ -1,0 +1,62 @@
+{
+  "id": 820982911946154500,
+  "admin_graphql_api_id": "gid://shopify/Order/820982911946154500",
+  "name": "#1001",
+  "order_number": 1001,
+  "email": "jan.kowalski@example.test",
+  "contact_email": "jan.kowalski@example.test",
+  "created_at": "2026-10-03T10:20:00+02:00",
+  "updated_at": "2026-10-03T10:20:05+02:00",
+  "processed_at": "2026-10-03T10:20:00+02:00",
+  "cancelled_at": null,
+  "cancel_reason": null,
+  "financial_status": "paid",
+  "fulfillment_status": null,
+  "test": false,
+  "currency": "PLN",
+  "presentment_currency": "PLN",
+  "total_price": "258.00",
+  "current_total_price": "258.00",
+  "checkout_token": "ck-7f3a9b2c1d",
+  "cart_token": "Z2NwLWV1cm9wZS13ZXN0",
+  "buyer_accepts_marketing": false,
+  "line_items": [
+    {
+      "id": 466157049,
+      "product_id": 632910392,
+      "variant_id": 808950810,
+      "title": "Wosk do włosów",
+      "name": "Wosk do włosów - 100 ml",
+      "quantity": 2,
+      "price": "99.00",
+      "sku": "WOSK-100",
+      "total_discount": "0.00"
+    },
+    {
+      "id": 518995019,
+      "product_id": 632910393,
+      "variant_id": 808950811,
+      "title": "Grzebień",
+      "name": "Grzebień",
+      "quantity": 1,
+      "price": "60.00",
+      "sku": "GRZ-1",
+      "total_discount": "0.00"
+    }
+  ],
+  "customer": {
+    "id": 115310627314723950,
+    "email": "jan.kowalski@example.test",
+    "first_name": "Jan",
+    "last_name": "Kowalski"
+  },
+  "billing_address": {
+    "first_name": "Jan",
+    "last_name": "Kowalski",
+    "address1": "ul. Testowa 1",
+    "city": "Warszawa",
+    "phone": "+48 600 000 000"
+  },
+  "fulfillments": [],
+  "refunds": []
+}

@@ -1,4 +1,5 @@
 import { getPool } from "../../adapters/db/pool";
+import { parsujJsonShopify } from "../../adapters/store/shopify/json";
 import { zweryfikujHmacWebhooka } from "../../adapters/store/shopify/oauth";
 import { bytWebhooka, tematShopify } from "../../adapters/store/shopify/webhooki";
 import { dodajZadanie } from "../../jobs/kolejka";
@@ -37,7 +38,7 @@ export async function przyjmijWebhookShopify(
   if (!naglowki.webhookId || !WZOR_WEBHOOK_ID.test(naglowki.webhookId)) return { status: 400, tresc: "brak X-Shopify-Webhook-Id" };
   let dane: unknown;
   try {
-    dane = JSON.parse(cialo);
+    dane = parsujJsonShopify(cialo);
   } catch {
     return { status: 400, tresc: "nieczytelne ciało" };
   }
