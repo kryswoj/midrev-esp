@@ -11,6 +11,7 @@ import {
   zapiszGraf,
   zwalidujGraf,
   podniesDoV2,
+  podniesDoV3,
   type Graf,
   type GrafV1,
   type Wezel,
@@ -48,7 +49,7 @@ function powitalnyV1(): GrafV1 {
 }
 
 function powitalny(): Graf {
-  return podniesDoV2(powitalnyV1());
+  return podniesDoV3(podniesDoV2(powitalnyV1()));
 }
 
 const ctx = { emaile: { [EMAIL_ID]: { temat: "Witaj", maTresc: true }, [EMAIL_ID_2]: { temat: "Drugi", maTresc: true } }, listy: new Set([LIST_ID]), segmenty: new Set([SEG_ID]) };

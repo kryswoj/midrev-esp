@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { filtrPusty, opiszFiltr, schematFiltraZdarzenia } from "../filtry";
+import { filtrPusty, opiszFiltr, schematFiltraProfilu, schematFiltraZdarzenia, schematWarunku, type Filtr, type Warunek } from "../filtry";
 import { METRYKA_ZE_STAREGO_TYPU, METRYKI_WBUDOWANE } from "../zdarzenia/kontrakt";
 
 /**
@@ -28,7 +28,20 @@ import { METRYKA_ZE_STAREGO_TYPU, METRYKI_WBUDOWANE } from "../zdarzenia/kontrak
  * To jest expand/contract dla danych (AD-46): po rollbacku wydania stary kod dalej czyta
  * definicje wszystkich takich flow, a v2 dostaja tylko te, ktorych stary kod i tak nie umie.
  */
-export const WERSJA_GRAFU = 2;
+export const WERSJA_GRAFU = 3;
+
+/*
+ * Wersja 3 (E4b, plan 3.1 i 3.5): filtr profilu flow (przy wejsciu i przed kazda akcja),
+ * dodatkowe filtry, smart sending i flaga "transakcyjny" na mailu, warunek Tak/Nie z pelnym
+ * filtrem (wlasciwosci i historia profilu), split po zdarzeniu wyzwalajacym, ustaw/usun
+ * wlasciwosc profilu.
+ *
+ * Dlaczego osobna wersja zapisu, a nie opcjonalne pola w v2: Zod domyslnie USUWA nieznane
+ * klucze. Kod sprzed E4b po rollbacku przeczytalby v2 z `filtrProfilu` jako v2 bez filtra
+ * i wyslal maile osobom, ktore filtr mial odsiac (np. porzucony koszyk po zakupie). v3 stary
+ * kod odrzuca glosno (definicja nie przechodzi schematu, alert), a flow bez funkcji E4b dalej
+ * zapisuje sie jako v1 albo v2 (`grafDoZapisu`), wiec ich rollback nie dotyczy.
+ */
 
 /** Wyzwalacze wersji 1 (i ich etykiety). */
 export const ZDARZENIA_WYZWALACZA = {
@@ -107,13 +120,28 @@ export const schematReguly = z.discriminatedUnion("rodzaj", [
   z.object({ rodzaj: z.literal("w_segmencie"), segmentId: uuid }),
   z.object({ rodzaj: z.literal("wartosc_zamowienia"), minMinor: z.number().int().min(0).max(1_000_000_000) }),
 ]);
-export type RegulaWarunku = z.infer<typeof schematReguly>;
+export type RegulaWarunku = z.infer<typeof schematRegulyV3>;
 
 export const schematAkcjiProfilu = z.discriminatedUnion("rodzaj", [
   z.object({ rodzaj: z.literal("dodaj_do_listy"), listId: uuid }),
   z.object({ rodzaj: z.literal("usun_z_listy"), listId: uuid }),
 ]);
-export type AkcjaProfilu = z.infer<typeof schematAkcjiProfilu>;
+/** Klucz wlasciwosci profilu ustawianej przez automatyzacje (bez znakow sterujacych). */
+const kluczWlasciwosci = z.string().trim().min(1).max(255).regex(/^[^\u0000-\u001f\u007f]+$/).refine((k) => k !== "__proto__" && k !== "constructor" && k !== "prototype", "niedozwolona nazwa właściwości");
+
+/** v3: akcje listowe jak dotad plus ustawienie i usuniecie wlasciwosci profilu (plan 3.5). */
+export const schematAkcjiProfiluV3 = z.discriminatedUnion("rodzaj", [
+  ...schematAkcjiProfilu.options,
+  z.object({ rodzaj: z.literal("ustaw_wlasciwosc"), klucz: kluczWlasciwosci, wartosc: z.union([z.string().max(1000), z.number().finite().refine((x) => Math.abs(x) < 1e300), z.boolean()]) }),
+  z.object({ rodzaj: z.literal("usun_wlasciwosc"), klucz: kluczWlasciwosci }),
+]);
+export type AkcjaProfilu = z.infer<typeof schematAkcjiProfiluV3>;
+
+/** v3: warunek Tak/Nie z pelnym filtrem profilu (Klaviyo: conditional split). */
+export const schematRegulyV3 = z.discriminatedUnion("rodzaj", [
+  ...schematReguly.options,
+  z.object({ rodzaj: z.literal("filtr"), filtr: schematFiltraProfilu }),
+]);
 
 const linkNext = z.object({ next: link });
 
@@ -161,6 +189,39 @@ const wezlyWspolne = [
     links: linkNext,
   }),
   z.object({ id, typ: z.literal("koniec") }),
+] as const;
+
+// ── Wezly wersji 3 (rozszerzenia E4b) ───────────────────────────────────────
+
+const [opoznienieV, czekajDoV, warunekV12, abSplitV, emailV12, profilV12, koniecV] = wezlyWspolne;
+
+/** Domyslne okno smart sending (godziny), jak w Klaviyo. */
+export const SMART_SENDING_GODZIN = 16;
+
+const wezlyV3 = [
+  opoznienieV,
+  czekajDoV,
+  warunekV12.extend({ regula: schematRegulyV3 }),
+  abSplitV,
+  emailV12.extend({
+    /** dodatkowe filtry tego maila: kto nie spelnia, pomija TEN mail i idzie dalej */
+    dodatkoweFiltry: schematFiltraProfilu.optional(),
+    /** smart sending: pomin, jesli osoba dostala od nas mail w ostatnich N godzinach */
+    smartSending: z.boolean().optional(),
+    smartSendingGodzin: z.number().int().min(1).max(168).optional(),
+    /** transakcyjny: wychodzi bez zgody marketingowej i bez smart sending; supresje obowiazuja zawsze */
+    transakcyjny: z.boolean().optional(),
+  }),
+  profilV12.extend({ akcja: schematAkcjiProfiluV3 }),
+  /** split po wlasciwosciach zdarzenia, ktore wprowadzilo osobe (Klaviyo: trigger split) */
+  z.object({
+    id,
+    typ: z.literal("podzial_zdarzenia"),
+    etykieta: z.string().max(80).optional(),
+    filtr: schematFiltraZdarzenia,
+    links: z.object({ next_if_true: link, next_if_false: link }),
+  }),
+  koniecV,
 ] as const;
 
 // ── Wersja 1 (tylko odczyt; zapis przez grafDoZapisu) ──────────────────────────
@@ -230,7 +291,8 @@ const wyzwalaczV2 = z.object({
   links: linkNext,
 });
 
-export const schematWezla = z.discriminatedUnion("typ", [wyzwalaczV2, ...wezlyWspolne]);
+const schematWezlaV2 = z.discriminatedUnion("typ", [wyzwalaczV2, ...wezlyWspolne]);
+export const schematWezla = z.discriminatedUnion("typ", [wyzwalaczV2, ...wezlyV3]);
 export type Wezel = z.infer<typeof schematWezla>;
 export type TypWezla = Wezel["typ"];
 export type WezelTypu<T extends TypWezla> = Extract<Wezel, { typ: T }>;
@@ -242,17 +304,35 @@ export const schematGrafuV2 = z.object({
     wyjsciePoZakupie: z.boolean().default(false),
     ponowneWejscie: schematPonownegoWejscia.default({ tryb: "raz" }),
   }).default({ wyjsciePoZakupie: false, ponowneWejscie: { tryb: "raz" } }),
+  wezly: z.array(schematWezlaV2).min(1).max(200),
+});
+export type GrafV2 = z.infer<typeof schematGrafuV2>;
+
+export const schematGrafuV3 = z.object({
+  wersja: z.literal(3),
+  start: id,
+  ustawienia: z.object({
+    wyjsciePoZakupie: z.boolean().default(false),
+    ponowneWejscie: schematPonownegoWejscia.default({ tryb: "raz" }),
+    /** filtr profilu: przy wejsciu i przed kazda akcja; kto przestaje spelniac, wychodzi */
+    filtrProfilu: schematFiltraProfilu.optional(),
+  }).default({ wyjsciePoZakupie: false, ponowneWejscie: { tryb: "raz" } }),
   wezly: z.array(schematWezla).min(1).max(200),
 });
-export type Graf = z.infer<typeof schematGrafuV2>;
+export type Graf = z.infer<typeof schematGrafuV3>;
+
+/** v2 -> v3: te same wezly (v3 to nadzbior v2), bez nowych funkcji. */
+export function podniesDoV3(g: GrafV2): Graf {
+  return { ...g, wersja: 3, ustawienia: { ...g.ustawienia }, wezly: g.wezly as Wezel[] };
+}
 
 /** v1 -> v2. Czysta funkcja: ten sam graf, ten sam przebieg; wyzwalacz jako metryka/lista, wejscie "raz". */
-export function podniesDoV2(g: GrafV1): Graf {
+export function podniesDoV2(g: GrafV1): GrafV2 {
   return {
     wersja: 2,
     start: g.start,
     ustawienia: { wyjsciePoZakupie: g.ustawienia.wyjsciePoZakupie, ponowneWejscie: { tryb: "raz" } },
-    wezly: g.wezly.map((w): Wezel => {
+    wezly: g.wezly.map((w): GrafV2["wezly"][number] => {
       if (w.typ !== "wyzwalacz") return w;
       const zrodlo: ZrodloWyzwalacza = w.zdarzenie === "list.joined"
         ? { rodzaj: "lista", ...(w.listId ? { listId: w.listId } : {}), ...(w.takzeMasowe !== undefined ? { takzeMasowe: w.takzeMasowe } : {}) }
@@ -262,14 +342,48 @@ export function podniesDoV2(g: GrafV1): Graf {
   };
 }
 
-/**
- * Definicja do zapisu w bazie: v1, gdy graf da sie w niej wyrazic (patrz komentarz przy
- * WERSJA_GRAFU), inaczej v2. `schematGrafu.parse(grafDoZapisu(g))` zawsze daje `g`.
- */
-export function grafDoZapisu(g: Graf): GrafV1 | Graf {
-  if (g.ustawienia.ponowneWejscie.tryb !== "raz") return g;
-  const wezly: GrafV1["wezly"] = [];
+/** Funkcje E4b uzyte w grafie (puste = graf zapisze sie jako v2 albo v1). */
+export function funkcjeV3(g: Graf): string[] {
+  const wynik = new Set<string>();
+  if (!filtrPusty(g.ustawienia.filtrProfilu)) wynik.add("filtr profilu");
   for (const w of g.wezly) {
+    if (w.typ === "email") {
+      if (!filtrPusty(w.dodatkoweFiltry)) wynik.add("dodatkowe filtry maila");
+      if (w.smartSending) wynik.add("smart sending");
+      if (w.transakcyjny) wynik.add("mail transakcyjny");
+    } else if (w.typ === "warunek" && w.regula.rodzaj === "filtr") wynik.add("warunek z filtrem");
+    else if (w.typ === "podzial_zdarzenia") wynik.add("podział po zdarzeniu");
+    else if (w.typ === "profil" && (w.akcja.rodzaj === "ustaw_wlasciwosc" || w.akcja.rodzaj === "usun_wlasciwosc")) wynik.add("zmiana właściwości profilu");
+  }
+  return [...wynik];
+}
+
+/** Graf bez pol E4b (wylacznie gdy `funkcjeV3(g)` jest puste): ksztalt v2. */
+function doV2(g: Graf): GrafV2 {
+  return {
+    wersja: 2,
+    start: g.start,
+    ustawienia: { wyjsciePoZakupie: g.ustawienia.wyjsciePoZakupie, ponowneWejscie: g.ustawienia.ponowneWejscie },
+    wezly: g.wezly.map((w) => {
+      if (w.typ !== "email") return w;
+      const { dodatkoweFiltry: _f, smartSending: _s, smartSendingGodzin: _h, transakcyjny: _t, ...reszta } = w;
+      return reszta;
+    }) as GrafV2["wezly"],
+  };
+}
+
+/**
+ * Definicja do zapisu w bazie: NAJSTARSZA wersja, ktora wyraza graf (patrz komentarze przy
+ * WERSJA_GRAFU): v3 z funkcjami E4b, v2 z funkcjami E4a, inaczej v1.
+ * `schematGrafu.parse(grafDoZapisu(g))` daje `g` (z dokladnoscia do pol E4b ustawionych na
+ * wartosc neutralna, np. `smartSending: false`).
+ */
+export function grafDoZapisu(g: Graf): GrafV1 | GrafV2 | Graf {
+  if (funkcjeV3(g).length) return g;
+  const v2 = doV2(g);
+  if (g.ustawienia.ponowneWejscie.tryb !== "raz") return v2;
+  const wezly: GrafV1["wezly"] = [];
+  for (const w of v2.wezly) {
     if (w.typ !== "wyzwalacz") {
       wezly.push(w);
       continue;
@@ -285,7 +399,7 @@ export function grafDoZapisu(g: Graf): GrafV1 | Graf {
       continue;
     }
     const v1 = zdarzenieV1(z.metryka);
-    if (!v1 || (z.filtr && z.filtr.grupy.length)) return g;
+    if (!v1 || (z.filtr && z.filtr.grupy.length)) return v2;
     wezly.push({ id: w.id, typ: "wyzwalacz", zdarzenie: v1, links: w.links });
   }
   return { wersja: 1, start: g.start, ustawienia: { wyjsciePoZakupie: g.ustawienia.wyjsciePoZakupie }, wezly };
@@ -296,13 +410,15 @@ export function grafDoZapisu(g: Graf): GrafV1 | Graf {
  * schematu tej wersji, ktora deklaruje definicja (czytelne sciezki, bez "invalid union").
  */
 export const schematGrafu = z.unknown().transform((x, ctx): Graf => {
-  const v1 = !!x && typeof x === "object" && (x as { wersja?: unknown }).wersja === 1;
-  const r = v1 ? schematGrafuV1.safeParse(x) : schematGrafuV2.safeParse(x);
+  const wersja = !!x && typeof x === "object" ? (x as { wersja?: unknown }).wersja : undefined;
+  const r = wersja === 1 ? schematGrafuV1.safeParse(x) : wersja === 2 ? schematGrafuV2.safeParse(x) : schematGrafuV3.safeParse(x);
   if (!r.success) {
     for (const i of r.error.issues) ctx.addIssue({ code: "custom", message: i.message, path: i.path as (string | number)[] });
     return z.NEVER;
   }
-  return v1 ? podniesDoV2(r.data as GrafV1) : (r.data as Graf);
+  if (wersja === 1) return podniesDoV3(podniesDoV2(r.data as GrafV1));
+  if (wersja === 2) return podniesDoV3(r.data as GrafV2);
+  return r.data as Graf;
 });
 
 /** Wyzwalacz grafu (start) albo null. */
@@ -328,6 +444,7 @@ export function porty(w: Wezel): { port: string; etykieta: string | null }[] {
     case "koniec":
       return [];
     case "warunek":
+    case "podzial_zdarzenia":
       return [
         { port: "next_if_true", etykieta: "Tak" },
         { port: "next_if_false", etykieta: "Nie" },
@@ -504,53 +621,103 @@ export interface BladGrafu {
 //  - `niedokonczoneWarunki(g)` blokuje "Wlacz" w karcie, dopoki warunek nie jest dokonczony
 //    albo usuniety: filtr szerszy niz zamierzony nie wejdzie na produkcje po cichu.
 
+/** Gdzie w grafie lezy filtr (do komunikatu i do edytora). */
+export type MiejsceFiltra = "wyzwalacz" | "filtr_profilu" | "dodatkowe_filtry" | "warunek" | "podzial";
+
 export interface NiedokonczonyWarunek {
   wezelId: string;
+  miejsce: MiejsceFiltra;
   grupa: number;
   warunek: number;
   tresc: string;
 }
 
-function trescNiedokonczonego(w: unknown): string | null {
-  const r = schematFiltraZdarzenia.safeParse({ grupy: [{ warunki: [w] }] });
-  if (r.success) return null;
-  const pole = (w as { pole?: unknown })?.pole;
-  if (typeof pole !== "string" || !pole.trim()) return "Wpisz nazwę właściwości zdarzenia albo usuń pusty warunek.";
-  const i = r.error.issues.find((x) => x.path[x.path.length - 1] === "wartosc");
-  return i ? `Uzupełnij wartość warunku „${pole.trim()}”: ${i.message.replace(/\.$/, "")}.` : `Warunek „${pole.trim()}” jest niedokończony. Uzupełnij go albo usuń.`;
+/** Pierwsza nazwa pola warunku (do komunikatu), o ile jest. */
+function nazwaPola(w: unknown): string | null {
+  const x = w as { typ?: unknown; pole?: unknown; metryka?: { nazwa?: unknown } } | null;
+  if (typeof x?.pole === "string") return x.pole.trim() || null;
+  if (x?.pole && typeof x.pole === "object" && typeof (x.pole as { nazwa?: unknown }).nazwa === "string") return ((x.pole as { nazwa: string }).nazwa).trim() || null;
+  if (typeof x?.metryka?.nazwa === "string") return x.metryka.nazwa.trim() || null;
+  return null;
 }
 
-/** Niedokonczone warunki filtra wyzwalacza (tylko w karcie; serwer ich nie dostaje). */
+function trescNiedokonczonego(w: unknown): string | null {
+  const r = schematWarunku.safeParse(w);
+  if (r.success) return null;
+  const typ = (w as { typ?: unknown })?.typ;
+  const pole = nazwaPola(w);
+  if (!pole) {
+    if (typ === "metryka_profilu") return "Wybierz metrykę albo usuń pusty warunek.";
+    if (typ === "wlasciwosc_profilu") return "Wybierz właściwość profilu albo usuń pusty warunek.";
+    if (typ === "byl_w_flow") return "Wybierz automatyzację albo usuń warunek.";
+    return "Wpisz nazwę właściwości zdarzenia albo usuń pusty warunek.";
+  }
+  const i = r.error.issues.find((x) => x.path.includes("wartosc"));
+  return i ? `Uzupełnij wartość warunku „${pole}”: ${i.message.replace(/\.$/, "")}.` : `Warunek „${pole}” jest niedokończony. Uzupełnij go albo usuń.`;
+}
+
+/** Wszystkie filtry grafu z ich miejscem (wyzwalacz, filtr profilu, mail, warunek, split). */
+export function filtryGrafu(g: Graf): { wezelId: string; miejsce: MiejsceFiltra; filtr: Filtr }[] {
+  const wynik: { wezelId: string; miejsce: MiejsceFiltra; filtr: Filtr }[] = [];
+  if (g.ustawienia.filtrProfilu) wynik.push({ wezelId: g.start, miejsce: "filtr_profilu", filtr: g.ustawienia.filtrProfilu });
+  for (const w of g.wezly) {
+    if (w.typ === "wyzwalacz" && w.zrodlo.rodzaj === "metryka" && w.zrodlo.filtr) wynik.push({ wezelId: w.id, miejsce: "wyzwalacz", filtr: w.zrodlo.filtr });
+    else if (w.typ === "email" && w.dodatkoweFiltry) wynik.push({ wezelId: w.id, miejsce: "dodatkowe_filtry", filtr: w.dodatkoweFiltry });
+    else if (w.typ === "warunek" && w.regula.rodzaj === "filtr") wynik.push({ wezelId: w.id, miejsce: "warunek", filtr: w.regula.filtr });
+    else if (w.typ === "podzial_zdarzenia") wynik.push({ wezelId: w.id, miejsce: "podzial", filtr: w.filtr });
+  }
+  return wynik;
+}
+
+/** Niedokonczone warunki filtrow (tylko w karcie; serwer ich nie dostaje). */
 export function niedokonczoneWarunki(g: Graf): NiedokonczonyWarunek[] {
   const wynik: NiedokonczonyWarunek[] = [];
-  for (const w of g.wezly) {
-    if (w.typ !== "wyzwalacz" || w.zrodlo.rodzaj !== "metryka" || !w.zrodlo.filtr) continue;
-    w.zrodlo.filtr.grupy.forEach((gr, gi) =>
+  for (const { wezelId, miejsce, filtr } of filtryGrafu(g)) {
+    filtr.grupy.forEach((gr, gi) =>
       gr.warunki.forEach((war, wi) => {
         const tresc = trescNiedokonczonego(war);
-        if (tresc) wynik.push({ wezelId: w.id, grupa: gi, warunek: wi, tresc });
+        if (tresc) wynik.push({ wezelId, miejsce, grupa: gi, warunek: wi, tresc });
       }),
     );
   }
   return wynik;
 }
 
+function bezNiedokonczonych(f: Filtr): Filtr {
+  return {
+    grupy: f.grupy
+      .map((gr) => ({ warunki: gr.warunki.filter((war: Warunek) => trescNiedokonczonego(war) === null) }))
+      .filter((gr) => gr.warunki.length),
+  };
+}
+
 /**
  * Graf do autozapisu: bez niedokonczonych warunkow (grupa bez warunkow znika, filtr bez grup
- * znika). Czysta funkcja; gdy nic nie jest niedokonczone, zwraca TEN SAM obiekt (bez zmian
- * w JSON-ie, wiec porownanie "brudny" dziala jak dotad).
+ * znika; w warunku i splicie zostaje pusty filtr, ktory blokuje wlaczenie). Czysta funkcja;
+ * gdy nic nie jest niedokonczone, zwraca TEN SAM obiekt (bez zmian w JSON-ie, wiec
+ * porownanie "brudny" dziala jak dotad).
  */
 export function szkicDoZapisu(g: Graf): Graf {
   if (!niedokonczoneWarunki(g).length) return g;
+  const fp = g.ustawienia.filtrProfilu ? bezNiedokonczonych(g.ustawienia.filtrProfilu) : null;
+  const { filtrProfilu: _fp, ...ustawienia } = g.ustawienia;
   return {
     ...g,
+    ustawienia: fp && fp.grupy.length ? { ...ustawienia, filtrProfilu: fp } : ustawienia,
     wezly: g.wezly.map((w): Wezel => {
-      if (w.typ !== "wyzwalacz" || w.zrodlo.rodzaj !== "metryka" || !w.zrodlo.filtr) return w;
-      const grupy = w.zrodlo.filtr.grupy
-        .map((gr) => ({ warunki: gr.warunki.filter((war) => trescNiedokonczonego(war) === null) }))
-        .filter((gr) => gr.warunki.length);
-      const { filtr: _pominiety, ...bezFiltra } = w.zrodlo;
-      return { ...w, zrodlo: grupy.length ? { ...bezFiltra, filtr: { grupy } } : bezFiltra };
+      if (w.typ === "wyzwalacz" && w.zrodlo.rodzaj === "metryka" && w.zrodlo.filtr) {
+        const f = bezNiedokonczonych(w.zrodlo.filtr);
+        const { filtr: _pominiety, ...bezFiltra } = w.zrodlo;
+        return { ...w, zrodlo: f.grupy.length ? { ...bezFiltra, filtr: f } : bezFiltra };
+      }
+      if (w.typ === "email" && w.dodatkoweFiltry) {
+        const f = bezNiedokonczonych(w.dodatkoweFiltry);
+        const { dodatkoweFiltry: _d, ...reszta } = w;
+        return f.grupy.length ? { ...reszta, dodatkoweFiltry: f } : reszta;
+      }
+      if (w.typ === "warunek" && w.regula.rodzaj === "filtr") return { ...w, regula: { rodzaj: "filtr", filtr: bezNiedokonczonych(w.regula.filtr) } };
+      if (w.typ === "podzial_zdarzenia") return { ...w, filtr: bezNiedokonczonych(w.filtr) };
+      return w;
     }),
   };
 }
@@ -576,7 +743,12 @@ export function bledySchematuGrafu(surowy: unknown, issues: readonly { path: Pro
     const ostatni = sciezka[sciezka.length - 1];
     const nazwaKroku = typ && typ in NAZWY_WEZLOW ? `Krok „${NAZWY_WEZLOW[typ as TypWezla]}”` : "Ten krok";
     let tresc: string;
-    if (sciezka.includes("filtr")) tresc = "Filtr wyzwalacza ma niedokończony warunek. Uzupełnij nazwę właściwości i wartość albo usuń warunek.";
+    if (sciezka.includes("filtrProfilu")) tresc = "Filtr profilu ma niedokończony warunek. Uzupełnij go albo usuń.";
+    else if (sciezka.includes("dodatkoweFiltry")) tresc = `${nazwaKroku}: dodatkowy filtr ma niedokończony warunek. Uzupełnij go albo usuń.`;
+    else if (sciezka.includes("filtr") && typ === "wyzwalacz") tresc = "Filtr wyzwalacza ma niedokończony warunek. Uzupełnij nazwę właściwości i wartość albo usuń warunek.";
+    else if (sciezka.includes("filtr")) tresc = `${nazwaKroku}: filtr ma niedokończony warunek. Uzupełnij go albo usuń.`;
+    else if (ostatni === "klucz") tresc = `${nazwaKroku}: podaj nazwę właściwości (do 255 znaków).`;
+    else if (ostatni === "smartSendingGodzin") tresc = `${nazwaKroku}: okno smart sending to od 1 do 168 godzin.`;
     else if (ostatni === "ilosc") tresc = `${nazwaKroku}: podaj liczbę od 1 do 100 000.`;
     else if (ostatni === "godzina") tresc = `${nazwaKroku}: podaj godzinę w formacie GG:MM.`;
     else if (sciezka.includes("dni")) tresc = `${nazwaKroku}: wybierz co najmniej jeden dzień tygodnia.`;
@@ -631,11 +803,39 @@ export interface KontekstWalidacji {
  */
 export function funkcjeWymagajaceV2(g: Graf): string[] {
   const w = wyzwalaczGrafu(g);
-  if (!w || w.zrodlo.rodzaj !== "metryka") return [];
   const wynik: string[] = [];
-  if (!zdarzenieV1(w.zrodlo.metryka)) wynik.push(`metryka „${w.zrodlo.metryka.nazwa}”`);
-  if (w.zrodlo.filtr && w.zrodlo.filtr.grupy.length) wynik.push("filtr wyzwalacza");
-  return wynik;
+  if (w && w.zrodlo.rodzaj === "metryka") {
+    if (!zdarzenieV1(w.zrodlo.metryka)) wynik.push(`metryka „${w.zrodlo.metryka.nazwa}”`);
+    if (w.zrodlo.filtr && w.zrodlo.filtr.grupy.length) wynik.push("filtr wyzwalacza");
+  }
+  // funkcje E4b (zapis w v3) stoja za ta sama flaga co v2: nowe automatyzacje
+  return [...wynik, ...funkcjeV3(g)];
+}
+
+/**
+ * Metryki sklepu w nazewnictwie Klaviyo, ktore szablon moze wskazac, zanim sklep zostanie
+ * podlaczony (plan integracji: "porzucony checkout" z warunkiem "Placed Order = 0 od startu").
+ * Kazda inna metryka w warunku musi byc w katalogu konta: literowka w nazwie dalaby licznik
+ * zawsze 0, czyli "nie kupil" dla kazdego, a to mail do kogos, kto wlasnie kupil.
+ */
+export const ZNANE_METRYKI_SKLEPU: ReadonlySet<string> = new Set([
+  "Placed Order", "Ordered Product", "Started Checkout", "Added to Cart", "Viewed Product",
+  "Active on Site", "Fulfilled Order", "Cancelled Order", "Refunded Order",
+]);
+
+function sprawdzFiltr(f: Filtr, wezelId: string, ctx: KontekstWalidacji, bledy: BladGrafu[]) {
+  for (const gr of f.grupy) {
+    for (const w of gr.warunki) {
+      if (w.typ !== "metryka_profilu" || !ctx.metryki) continue;
+      const znana = [...ctx.metryki.keys()].some((k) => {
+        const [integracja, ...reszta] = k.split("|");
+        return reszta.join("|") === w.metryka.nazwa && (w.metryka.integracja === undefined || integracja === w.metryka.integracja);
+      });
+      if (!znana && !(w.metryka.integracja === undefined && ZNANE_METRYKI_SKLEPU.has(w.metryka.nazwa))) {
+        bledy.push({ wezelId, tresc: `Metryki „${w.metryka.nazwa}”${w.metryka.integracja ? ` (${w.metryka.integracja})` : ""} nie ma w tym koncie. Wybierz metrykę z listy: warunek na nieistniejącej metryce zawsze liczy 0.` });
+      }
+    }
+  }
 }
 
 export function zwalidujGraf(surowy: unknown, ctx: KontekstWalidacji = {}): { graf: Graf | null; bledy: BladGrafu[] } {
@@ -704,12 +904,20 @@ export function zwalidujGraf(surowy: unknown, ctx: KontekstWalidacji = {}): { gr
         if (w.regula.rodzaj === "w_segmencie" && ctx.segmenty && !ctx.segmenty.has(w.regula.segmentId)) {
           bledy.push({ wezelId: w.id, tresc: "Segment z warunku już nie istnieje." });
         }
+        if (w.regula.rodzaj === "filtr" && filtrPusty(w.regula.filtr)) bledy.push({ wezelId: w.id, tresc: "Warunek nie ma jeszcze żadnej reguły. Dodaj co najmniej jedną." });
         break;
+      case "podzial_zdarzenia": {
+        const s = wyzwalaczGrafu(g);
+        if (!s || s.zrodlo.rodzaj !== "metryka") bledy.push({ wezelId: w.id, tresc: "Podział po zdarzeniu działa tylko z wyzwalaczem metrycznym (zdarzeniem). Przy dołączeniu do listy użyj warunku." });
+        if (filtrPusty(w.filtr)) bledy.push({ wezelId: w.id, tresc: "Podział nie ma jeszcze żadnej reguły. Dodaj co najmniej jedną." });
+        break;
+      }
       case "profil":
-        if (ctx.listy && !ctx.listy.has(w.akcja.listId)) bledy.push({ wezelId: w.id, tresc: "Lista z tego kroku już nie istnieje." });
+        if ((w.akcja.rodzaj === "dodaj_do_listy" || w.akcja.rodzaj === "usun_z_listy") && ctx.listy && !ctx.listy.has(w.akcja.listId)) bledy.push({ wezelId: w.id, tresc: "Lista z tego kroku już nie istnieje." });
         break;
     }
   }
+  for (const f of filtryGrafu(g)) if (f.miejsce !== "wyzwalacz" && f.miejsce !== "podzial") sprawdzFiltr(f.filtr, f.wezelId, ctx, bledy);
 
   // osiagalnosc i cykle (DFS z kolorowaniem) - tylko gdy krawedzie sa poprawne
   if (start && start.typ === "wyzwalacz" && !bledy.some((b) => b.tresc.includes("którego nie ma"))) {
@@ -777,6 +985,7 @@ export const NAZWY_WEZLOW: Record<TypWezla, string> = {
   email: "Wyślij e-mail",
   profil: "Aktualizuj profil",
   koniec: "Koniec",
+  podzial_zdarzenia: "Podział po zdarzeniu",
 };
 
 export interface Slowniki {
@@ -803,6 +1012,21 @@ export function opiszRegule(r: RegulaWarunku, s: Slowniki = {}): string {
       return `jest w segmencie „${s.segmenty?.[r.segmentId] ?? "…"}”`;
     case "wartosc_zamowienia":
       return `zamówienie warte co najmniej ${zl(r.minMinor)}`;
+    case "filtr":
+      return opiszFiltr(r.filtr) || "…";
+  }
+}
+
+function opiszAkcjeProfilu(a: AkcjaProfilu, s: Slowniki): string {
+  switch (a.rodzaj) {
+    case "dodaj_do_listy":
+      return `Dodaj do listy „${s.listy?.[a.listId] ?? "…"}”`;
+    case "usun_z_listy":
+      return `Usuń z listy „${s.listy?.[a.listId] ?? "…"}”`;
+    case "ustaw_wlasciwosc":
+      return `Ustaw „${a.klucz}” = ${typeof a.wartosc === "string" ? `„${a.wartosc}”` : String(a.wartosc)}`;
+    case "usun_wlasciwosc":
+      return `Usuń właściwość „${a.klucz}”`;
   }
 }
 
@@ -865,7 +1089,9 @@ export function opiszWezel(w: Wezel, s: Slowniki = {}): string {
     case "email":
       return s.emaile?.[w.emailId]?.temat?.trim() || "Bez tematu";
     case "profil":
-      return `${w.akcja.rodzaj === "dodaj_do_listy" ? "Dodaj do listy" : "Usuń z listy"} „${s.listy?.[w.akcja.listId] ?? "…"}”`;
+      return opiszAkcjeProfilu(w.akcja, s);
+    case "podzial_zdarzenia":
+      return `Czy w zdarzeniu ${opiszFiltr(w.filtr) || "…"}?`;
     case "koniec":
       return "Koniec";
   }
@@ -873,7 +1099,7 @@ export function opiszWezel(w: Wezel, s: Slowniki = {}): string {
 
 export function tytulWezla(w: Wezel, s: Slowniki = {}): string {
   if (w.typ === "email") return s.emaile?.[w.emailId]?.nazwa || NAZWY_WEZLOW.email;
-  if (w.typ === "warunek" && w.etykieta?.trim()) return w.etykieta.trim();
+  if ((w.typ === "warunek" || w.typ === "podzial_zdarzenia") && w.etykieta?.trim()) return w.etykieta.trim();
   return NAZWY_WEZLOW[w.typ];
 }
 

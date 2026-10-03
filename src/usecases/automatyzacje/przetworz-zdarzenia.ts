@@ -4,6 +4,8 @@ import { getPool } from "../../adapters/db/pool";
 import type { DostawcaWysylki } from "../../domain/email/port";
 import {
   cel,
+  SMART_SENDING_GODZIN,
+  TYPY_AKCJI,
   minutNaStarcie,
   minutOpoznienia,
   schematGrafu,
@@ -14,8 +16,11 @@ import {
   type Graf,
   type PonowneWejscie,
   type Wezel,
+  type WezelTypu,
   type ZrodloWyzwalacza,
 } from "../../domain/automatyzacje/graf";
+import { filtrPusty, ocenFiltr, opiszFiltr } from "../../domain/filtry";
+import { emitujPominiecie, kontekstUczestnika, OPISY_POMINIEC, profilSpelnia, type PowodPominiecia } from "./bramka-filtrow";
 import {
   type ZdarzenieWyzwalajace,
   kluczWejscia,
@@ -140,6 +145,67 @@ interface KandydatWejscia {
   eventOccurredAt: string | null;
   context: Record<string, unknown>;
   entryKey: string;
+  /** tozsamosc proby wejscia niezalezna od trybu (`e:<zdarzenie>` / `l:<lista>:<epoka>`) */
+  ref: string;
+}
+
+/**
+ * Filtr profilu PRZY WEJSCIU (E4b, plan 3.3): kandydat, ktory go nie spelnia, nie wchodzi,
+ * a powod laduje w `flow_entry_skips` (sciezka osoby, podglad wyzwalacza). Odrzucenie NIE
+ * zajmuje klucza wejscia: osoba, ktora pozniej zacznie spelniac filtr, wejdzie przy kolejnym
+ * zdarzeniu. Decyzja zapada raz: proba juz odrzucona (zakladka skanu czyta to samo zdarzenie
+ * przez 15 min) nie jest liczona drugi raz. "Od startu flow" = od czasu tego zdarzenia.
+ */
+async function odsiejFiltremProfilu(
+  klient: Klient,
+  tenantId: string,
+  flowId: string,
+  g: Graf,
+  kandydaci: KandydatWejscia[],
+  tryb: PonowneWejscie,
+): Promise<KandydatWejscia[]> {
+  const filtr = g.ustawienia.filtrProfilu;
+  if (filtrPusty(filtr) || !kandydaci.length) return kandydaci;
+  const { rows: juzOdrzucone } = await klient.query(
+    "select entry_ref, profile_id from flow_entry_skips where tenant_id = $1 and flow_id = $2 and entry_ref = any($3::text[])",
+    [tenantId, flowId, kandydaci.map((k) => k.ref)],
+  );
+  const odrzucone = new Set(juzOdrzucone.map((r) => `${r.entry_ref}|${r.profile_id}`));
+  let wTrybieRaz = new Set<string>();
+  if (tryb.tryb === "raz") {
+    // osoby, ktore juz sa w tym flow, i tak nie wejda drugi raz: nie liczymy im filtra
+    const { rows } = await klient.query(
+      "select profile_id from flow_participants where tenant_id = $1 and flow_id = $2 and entry_key = 'raz' and profile_id = any($3::uuid[])",
+      [tenantId, flowId, [...new Set(kandydaci.map((k) => k.profileId))]],
+    );
+    wTrybieRaz = new Set(rows.map((r) => r.profile_id));
+  }
+  const posortowani = [...kandydaci].sort((x, y) => x.occurredAtMs - y.occurredAtMs || x.occurredAt.localeCompare(y.occurredAt));
+  const przepuszczeni: KandydatWejscia[] = [];
+  const nowoOdrzuceni: KandydatWejscia[] = [];
+  const wszedl = new Set<string>();
+  for (const k of posortowani) {
+    if (odrzucone.has(`${k.ref}|${k.profileId}`) || wTrybieRaz.has(k.profileId)) continue;
+    if (tryb.tryb === "raz" && wszedl.has(k.profileId)) continue;
+    const ok = await profilSpelnia(klient, tenantId, k.profileId, filtr, {
+      flowId, start: k.occurredAt, zdarzenieWyzwalajaceId: k.eventId, uczestnikId: null,
+    });
+    if (ok) {
+      przepuszczeni.push(k);
+      wszedl.add(k.profileId);
+    } else nowoOdrzuceni.push(k);
+  }
+  if (nowoOdrzuceni.length) {
+    await klient.query(
+      `insert into flow_entry_skips (tenant_id, flow_id, profile_id, entry_ref, reason, detail, occurred_at)
+       select $1, $2, k.profile_id, k.ref, 'filtr_profilu', $5::jsonb, k.occurred_at
+         from unnest($3::uuid[], $4::text[], $6::timestamptz[]) as k(profile_id, ref, occurred_at)
+         join profiles p on p.tenant_id = $1 and p.id = k.profile_id
+       on conflict do nothing`,
+      [tenantId, flowId, nowoOdrzuceni.map((k) => k.profileId), nowoOdrzuceni.map((k) => k.ref), JSON.stringify({ filtr: opiszFiltr(filtr) }), nowoOdrzuceni.map((k) => k.occurredAt)],
+    );
+  }
+  return przepuszczeni;
 }
 
 /**
@@ -337,6 +403,7 @@ async function kandydaciMetryczni(
       eventOccurredAt: e.occurredAt,
       context: e.context,
       entryKey: kluczWejscia(tryb.tryb, { id: e.id }),
+      ref: kluczWejscia("zawsze", { id: e.id }),
     });
   }
   const obciety = nowe.length >= limitSkanu;
@@ -422,6 +489,7 @@ async function wprowadzDoFlow(tenantId: string, flowId: string, limitSkanu: numb
         profileId: r.profile_id, occurredAt: r.occurred_at, occurredAtMs: Number(r.occurred_ms),
         eventId: null, eventOccurredAt: null, context: r.context,
         entryKey: kluczWejscia(tryb.tryb, { listId: z.listId!, addedAtEpoch: r.epoka }),
+        ref: kluczWejscia("zawsze", { listId: z.listId!, addedAtEpoch: r.epoka }),
       }));
     } else {
       const m = await kandydaciMetryczni(klient, tenantId, flowId, f.active_since, z, tryb, limitSkanu);
@@ -429,6 +497,7 @@ async function wprowadzDoFlow(tenantId: string, flowId: string, limitSkanu: numb
       alerty.push(...m.alerty);
       zapiszZnacznik = m.zapiszZnacznik;
     }
+    kandydaci = await odsiejFiltremProfilu(klient, tenantId, flowId, g, kandydaci, tryb);
     const n = await wstawWejscia(klient, tenantId, flowId, f.live_version, g.start, detail, kandydaci, tryb);
     if (zapiszZnacznik) await zapiszZnacznik();
     await klient.query("commit");
@@ -477,7 +546,12 @@ async function otoczenieTenanta(tenantId: string): Promise<Otoczenie> {
 type WynikWiadomosci =
   | { ok: true; messageId: string; nowa: true }
   | { ok: true; messageId: string; nowa: false }
-  | { ok: false; powod: string; wyjscie: boolean };
+  | { ok: false; powod: string; wyjscie: boolean }
+  /** mail pominiety (dodatkowy filtr, smart sending): osoba idzie dalej, bez przesuwania */
+  | { ok: false; pominiecie: PowodPominiecia };
+
+/** Stany wiadomosci, ktore NIE sa wysylka (smart sending ich nie liczy). */
+const STANY_NIEWYSLANE = ["suppressed", "failed", "dropped"];
 
 /**
  * Wezel e-mail: buduje wiadomosc `queued` dla uczestnika Z MIGAWKI jego wersji.
@@ -492,9 +566,10 @@ async function zbudujWiadomoscWezla(
   klient: Klient,
   tenantId: string,
   u: Uczestnik,
-  emailId: string,
+  w: WezelTypu<"email">,
   oto: Otoczenie,
 ): Promise<WynikWiadomosci> {
+  const emailId = w.emailId;
   const migawka = u.emails?.[emailId];
   if (!migawka) return { ok: false, powod: "brak migawki treści w tej wersji", wyjscie: false };
   const tematZrodlo = String(migawka.subject ?? "");
@@ -510,21 +585,37 @@ async function zbudujWiadomoscWezla(
   // Bramka zgod PRZED zbudowaniem wiadomosci: osoba bez zgody WYCHODZI z automatyzacji
   // z jawnym powodem w sciezce, zamiast zostawiac po sobie wiadomosc `suppressed`.
   // Wiazaca bramka i tak stoi w transakcji wysylki (AD-25); ta jest dodatkowa.
-  const bramka = await canSendTo(klient, tenantId, u.profile_id);
+  // Dodatkowe filtry tego maila (E4b 4.6): kto nie spelnia, pomija TEN mail i idzie dalej.
+  if (!(await profilSpelnia(klient, tenantId, u.profile_id, w.dodatkoweFiltry, kontekstUczestnika(u)))) {
+    return { ok: false, pominiecie: "dodatkowy_filtr" };
+  }
+  // Transakcyjny pomija wylacznie brak zgody marketingowej; supresje obowiazuja (plan 3.5).
+  const transakcyjny = w.transakcyjny === true;
+  const bramka = await canSendTo(klient, tenantId, u.profile_id, { transakcyjny });
   if (!bramka.wolno) return { ok: false, powod: bramka.powod ?? "brak_zgody", wyjscie: true };
+
+  // Jedna budowa wiadomosci na osobe naraz (blokada do konca transakcji przebiegu): dwa flow
+  // budujace mail tej samej osobie w tej samej chwili ida po kolei, wiec smart sending drugiego
+  // WIDZI wiadomosc pierwszego (read committed: kolejne polecenie po blokadzie ma nowy obraz).
+  await klient.query("select pg_advisory_xact_lock(hashtextextended($1, 7150416))", [`wiadomosc-osoby:${tenantId}:${u.profile_id}`]);
+  if (w.smartSending && !transakcyjny) {
+    const { rows: ss } = await klient.query(
+      `select exists (
+         select 1 from messages m
+          where m.tenant_id = $1 and m.profile_id = $2
+            and m.created_at > now() - make_interval(hours => $3::int)
+            and not (m.current_state = any($4::text[]))
+            and not (m.source_type = 'journey' and m.source_id = $5 and m.journey_run_id is not distinct from $6::uuid)
+       ) as niedawno`,
+      [tenantId, u.profile_id, w.smartSendingGodzin ?? SMART_SENDING_GODZIN, STANY_NIEWYSLANE, emailId, u.id],
+    );
+    if (ss[0].niedawno) return { ok: false, pominiecie: "smart_sending" };
+  }
 
   let temat: string;
   let tresc: string;
   if (migawka.szablon === "liquid") {
-    let wlasciwosci: Record<string, unknown> | null = null;
-    if (u.trigger_event_id) {
-      // (id, occurred_at) = pelna tozsamosc wiersza metric_events (klucz partycji)
-      const klucz = `${u.trigger_event_id}|${u.trigger_event_occurred_at ?? ""}`;
-      if (!oto.zdarzenia.has(klucz)) {
-        oto.zdarzenia.set(klucz, await wlasciwosciWyzwalacza(klient, tenantId, u.trigger_event_id, u.trigger_event_occurred_at));
-      }
-      wlasciwosci = oto.zdarzenia.get(klucz) ?? null;
-    }
+    const wlasciwosci = u.trigger_event_id ? await zdarzenieUczestnika(klient, tenantId, u, oto) : null;
     const ctx = zbudujKontekst({ zdarzenie: wlasciwosci, profil: prof[0], organizacja: oto.organizacja });
     try {
       temat = renderujTemat(tematZrodlo, ctx);
@@ -571,13 +662,13 @@ async function zbudujWiadomoscWezla(
   const wstaw = await klient.query(
     `insert into messages (tenant_id, profile_id, source_type, source_id, email, subject,
                            body_html, click_token, unsubscribe_token, links,
-                           sending_domain_id, open_tracking_allowed, click_tracking_allowed, journey_run_id)
-     values ($1, $2, 'journey', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                           sending_domain_id, open_tracking_allowed, click_tracking_allowed, journey_run_id, transactional)
+     values ($1, $2, 'journey', $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
      on conflict (tenant_id, source_id, profile_id, journey_run_id)
        where source_type = 'journey' and journey_run_id is not null do nothing
      returning id`,
     [tenantId, u.profile_id, emailId, prof[0].email, temat, html, clickToken, unsubToken,
-     JSON.stringify(linki), oto.sendingDomainId, zgody.otwarcia, zgody.klikniecia, u.id],
+     JSON.stringify(linki), oto.sendingDomainId, zgody.otwarcia, zgody.klikniecia, u.id, transakcyjny],
   );
   if (wstaw.rows[0]) return { ok: true, messageId: wstaw.rows[0].id, nowa: true };
   const { rows: istniejaca } = await klient.query(
@@ -586,6 +677,17 @@ async function zbudujWiadomoscWezla(
     [tenantId, emailId, u.profile_id, u.id],
   );
   return { ok: true, messageId: istniejaca[0].id, nowa: false };
+}
+
+/** Wlasciwosci zdarzenia, ktore wprowadzilo uczestnika (cache w tiku: zdarzenie jest niezmienne). */
+async function zdarzenieUczestnika(klient: Klient, tenantId: string, u: Uczestnik, oto: Otoczenie): Promise<Record<string, unknown> | null> {
+  if (!u.trigger_event_id) return null;
+  // (id, occurred_at) = pelna tozsamosc wiersza metric_events (klucz partycji)
+  const klucz = `${u.trigger_event_id}|${u.trigger_event_occurred_at ?? ""}`;
+  if (!oto.zdarzenia.has(klucz)) {
+    oto.zdarzenia.set(klucz, await wlasciwosciWyzwalacza(klient, tenantId, u.trigger_event_id, u.trigger_event_occurred_at));
+  }
+  return oto.zdarzenia.get(klucz) ?? null;
 }
 
 async function zajmijUczestnika(klient: Klient, tenantId: string, id: string): Promise<Uczestnik | null> {
@@ -701,6 +803,14 @@ async function przesunJednego(tenantId: string, id: string, oto: Otoczenie): Pro
         await zakoncz(klient, tenantId, u, "zakonczony", null, "koniec", {});
         break;
       }
+      // Filtr profilu flow (E4b 4.6) przed KAZDA akcja: kto przestal spelniac, wychodzi
+      // z powodem w sciezce (Klaviyo: "Skipped: Fails profile filters"). Nie przed opoznieniem
+      // i splitem: tam nic sie nie dzieje osobie, a decyzja zapada przy akcji.
+      if (TYPY_AKCJI.has(w.typ) && !filtrPusty(g.ustawienia.filtrProfilu)
+        && !(await profilSpelnia(klient, tenantId, u.profile_id, g.ustawienia.filtrProfilu, kontekstUczestnika(u)))) {
+        await zakoncz(klient, tenantId, u, "wyszedl", "filtr_profilu", "wyjscie", { wezel: w.typ, wezelId: w.id, filtr: opiszFiltr(g.ustawienia.filtrProfilu) });
+        break;
+      }
 
       let dalej: string | null = null;
       let odKiedy: string | "teraz" = "teraz";
@@ -752,7 +862,10 @@ async function przesunJednego(tenantId: string, id: string, oto: Otoczenie): Pro
           break;
         }
         case "warunek": {
-          const ocena = await ocenWarunek(klient, tenantId, w.regula, { profileId: u.profile_id, enteredAt: u.entered_at, context: u.context });
+          const ocena = await ocenWarunek(klient, tenantId, w.regula, {
+            profileId: u.profile_id, enteredAt: u.entered_at, context: u.context,
+            flowId: u.flow_id, uczestnikId: u.id, triggerEventId: u.trigger_event_id,
+          });
           if ("przerwij" in ocena) {
             await zakoncz(klient, tenantId, u, "przerwany", ocena.przerwij, "przerwanie", { regula: w.regula.rodzaj });
             alerty.push(`${ocena.alert} (automatyzacja ${u.flow_id})`);
@@ -763,6 +876,22 @@ async function przesunJednego(tenantId: string, id: string, oto: Otoczenie): Pro
           await przejscie(klient, tenantId, u, "warunek", w.id, dalej, { wynik: ocena.wynik, regula: w.regula.rodzaj, ...ocena.szczegol });
           break;
         }
+        case "podzial_zdarzenia": {
+          // Split po zdarzeniu wyzwalajacym (Klaviyo: trigger split): wlasciwosci zdarzenia sa
+          // niezmienne, wiec wynik nie zalezy od chwili. Brak zdarzenia = przerwanie z alertem,
+          // nigdy cicha galaz "Nie".
+          const wlasciwosci = u.trigger_event_id ? await zdarzenieUczestnika(klient, tenantId, u, oto) : null;
+          if (!wlasciwosci) {
+            await zakoncz(klient, tenantId, u, "przerwany", "brak zdarzenia wyzwalającego do podziału", "przerwanie", { wezelId: w.id });
+            alerty.push(`automatyzacja ${u.flow_id}: podział po zdarzeniu bez zdarzenia wyzwalającego (uczestnik ${u.id})`);
+            przerwano = true;
+            break;
+          }
+          const wynik = ocenFiltr(w.filtr, { zdarzenie: wlasciwosci, teraz: new Date() });
+          dalej = cel(w, wynik ? "next_if_true" : "next_if_false");
+          await przejscie(klient, tenantId, u, "warunek", w.id, dalej, { wynik, podzialZdarzenia: true, filtr: opiszFiltr(w.filtr) });
+          break;
+        }
         case "ab_split": {
           const { rows } = await klient.query("select (random() * 100 < $1::int) as a", [w.procentA]);
           const galaz = rows[0].a ? "a" : "b";
@@ -771,7 +900,14 @@ async function przesunJednego(tenantId: string, id: string, oto: Otoczenie): Pro
           break;
         }
         case "email": {
-          const wynik = await zbudujWiadomoscWezla(klient, tenantId, u, w.emailId, oto);
+          const wynik = await zbudujWiadomoscWezla(klient, tenantId, u, w, oto);
+          if (!wynik.ok && "pominiecie" in wynik) {
+            // mail pominiety, osoba idzie dalej bez przesuwania (Klaviyo: Skipped)
+            await przejscie(klient, tenantId, u, "pominieto", w.id, w.id, { emailId: w.emailId, powod: wynik.pominiecie, opis: OPISY_POMINIEC[wynik.pominiecie] });
+            await emitujPominiecie(klient, { tenantId, profileId: u.profile_id, flowId: u.flow_id, emailId: w.emailId, uczestnikId: u.id, powod: wynik.pominiecie });
+            dalej = cel(w, "next");
+            break;
+          }
           if (!wynik.ok) {
             if (wynik.wyjscie) await zakoncz(klient, tenantId, u, "wyszedl", wynik.powod, "wyjscie", { emailId: w.emailId });
             else {
@@ -793,6 +929,27 @@ async function przesunJednego(tenantId: string, id: string, oto: Otoczenie): Pro
           break;
         }
         case "profil": {
+          if (w.akcja.rodzaj === "ustaw_wlasciwosc" || w.akcja.rodzaj === "usun_wlasciwosc") {
+            // Profil po anonimizacji RODO (email = null) nie dostaje nowych danych.
+            const { rowCount } = w.akcja.rodzaj === "ustaw_wlasciwosc"
+              ? await klient.query(
+                `update profiles set properties = coalesce(properties, '{}'::jsonb) || jsonb_build_object($3::text, $4::jsonb), updated_at = now()
+                  where tenant_id = $1 and id = $2 and email is not null`,
+                [tenantId, u.profile_id, w.akcja.klucz, JSON.stringify(w.akcja.wartosc)],
+              )
+              : await klient.query(
+                `update profiles set properties = coalesce(properties, '{}'::jsonb) - $3::text, updated_at = now()
+                  where tenant_id = $1 and id = $2 and email is not null`,
+                [tenantId, u.profile_id, w.akcja.klucz],
+              );
+            await przejscie(klient, tenantId, u, "profil", w.id, w.id, {
+              akcja: w.akcja.rodzaj, klucz: w.akcja.klucz,
+              ...(w.akcja.rodzaj === "ustaw_wlasciwosc" ? { wartosc: w.akcja.wartosc } : {}),
+              ...(rowCount ? {} : { pominieto: "profil zanonimizowany" }),
+            });
+            dalej = cel(w, "next");
+            break;
+          }
           if (w.akcja.rodzaj === "dodaj_do_listy") {
             await klient.query(
               `insert into list_members (tenant_id, list_id, profile_id, source, added_at)

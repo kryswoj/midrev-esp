@@ -2,6 +2,8 @@ import type pg from "pg";
 import { skompiluj } from "../../adapters/db/segmenty";
 import type { Regula } from "../../domain/segmenty";
 import type { RegulaWarunku } from "../../domain/automatyzacje/graf";
+import { opiszFiltr } from "../../domain/filtry";
+import { profilSpelnia } from "./bramka-filtrow";
 
 type Klient = pg.PoolClient | pg.Pool;
 
@@ -22,6 +24,10 @@ export interface KontekstUczestnika {
   enteredAt: string;
   /** dane przebiegu (context jsonb uczestnika) */
   context: Record<string, unknown>;
+  /** E4b: warunek z filtrem ("od startu flow", "ta automatyzacja") */
+  flowId?: string;
+  uczestnikId?: string | null;
+  triggerEventId?: string | null;
 }
 
 /**
@@ -126,6 +132,13 @@ export async function ocenWarunek(
       );
       const kwota = rows[0] ? Number(rows[0].kwota) : null;
       return { wynik: kwota !== null && kwota >= regula.minMinor, szczegol: { kwotaMinor: kwota, minMinor: regula.minMinor } };
+    }
+    case "filtr": {
+      if (!u.flowId) return { przerwij: "warunek bez kontekstu automatyzacji", alert: "automatyzacja: warunek z filtrem liczony bez kontekstu przebiegu" };
+      const wynik = await profilSpelnia(klient, tenantId, u.profileId, regula.filtr, {
+        flowId: u.flowId, start: u.enteredAt, zdarzenieWyzwalajaceId: u.triggerEventId ?? null, uczestnikId: u.uczestnikId ?? null,
+      });
+      return { wynik, szczegol: { filtr: opiszFiltr(regula.filtr) } };
     }
   }
 }

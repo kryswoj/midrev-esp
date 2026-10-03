@@ -297,7 +297,7 @@ export const BIBLIOTEKA: SzablonBiblioteki[] = [
       { nazwa: "Mail 3: historia marki", temat: "Kim jesteśmy i dlaczego to robimy", akapity: ["Cześć!", "Kilka słów o tym, skąd się wzięliśmy i co jest dla nas ważne. Jeśli masz pytanie, po prostu odpisz na tego maila."], przycisk: { tekst: "Poznaj nas", sciezka: "" } },
     ],
     zbuduj: (email) => ({
-      wersja: 2,
+      wersja: 3,
       start: "wyzwalacz",
       ustawienia: { wyjsciePoZakupie: false, ponowneWejscie: { tryb: "raz" } },
       wezly: [
@@ -324,7 +324,7 @@ export const BIBLIOTEKA: SzablonBiblioteki[] = [
       { nazwa: "Polecane produkty", temat: "Do tego zamówienia klienci dobierają…", akapity: ["Cześć!", "Zobacz, co klienci najczęściej dobierają do takiego zamówienia jak Twoje."], przycisk: { tekst: "Zobacz polecane", sciezka: "/polecane" } },
     ],
     zbuduj: (email) => ({
-      wersja: 2,
+      wersja: 3,
       start: "wyzwalacz",
       ustawienia: { wyjsciePoZakupie: false, ponowneWejscie: { tryb: "raz" } },
       wezly: [
@@ -350,7 +350,7 @@ export const BIBLIOTEKA: SzablonBiblioteki[] = [
     ],
     wyjsciePoZakupie: true,
     zbuduj: (email) => ({
-      wersja: 2,
+      wersja: 3,
       start: "wyzwalacz",
       ustawienia: { wyjsciePoZakupie: true, ponowneWejscie: { tryb: "raz" } },
       wezly: [

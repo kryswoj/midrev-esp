@@ -27,10 +27,20 @@ export interface WynikBramki {
  * (migracja 0022): po anonimizacji RODO wpis traci adres, a blokada ma przeżyć powrót
  * tej samej osoby z nową zgodą - odbity adres odbije znowu, a skarżący zgłosi znowu.
  */
+export interface OpcjeBramki {
+  /**
+   * Wiadomosc TRANSAKCYJNA (krok automatyzacji oznaczony przez operatora, np. potwierdzenie
+   * zamowienia): pomija wylacznie brak zgody MARKETINGOWEJ. Supresje (wykluczenie globalne:
+   * odbicie, skarga; wykluczenie sklepu: wypis z linku) obowiazuja zawsze (plan 3.5).
+   */
+  transakcyjny?: boolean;
+}
+
 export async function canSendTo(
   klient: pg.PoolClient | pg.Pool,
   tenantId: string,
   profileId: string,
+  opcje: OpcjeBramki = {},
 ): Promise<WynikBramki> {
   // hasz liczy aplikacja (klucz pochodny od SECRETS_KEY nie ma czego szukać w SQL),
   // więc adres czytamy pierwszym zapytaniem; profil bez adresu kończy się od razu
@@ -69,6 +79,6 @@ export async function canSendTo(
   if (w.brak_adresu) return { wolno: false, powod: "brak_adresu" };
   if (w.globalne) return { wolno: false, powod: "wykluczenie_globalne" };
   if (w.sklepowe) return { wolno: false, powod: "wykluczenie_sklepu" };
-  if (w.bez_zgody) return { wolno: false, powod: "brak_zgody" };
+  if (w.bez_zgody && !opcje.transakcyjny) return { wolno: false, powod: "brak_zgody" };
   return { wolno: true };
 }

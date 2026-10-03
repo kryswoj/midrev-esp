@@ -5,6 +5,7 @@ import { adresSledzenia, config } from "../../config";
 import type { DostawcaWysylki } from "../../domain/email/port";
 import { klasyfikujOdpowiedzSmtp, type Klasyfikacja } from "../../domain/email/klasyfikacja";
 import { canSendTo } from "./can-send-to";
+import { bramkaFiltrowPrzedWysylka } from "../automatyzacje/bramka-filtrow";
 import { tokenOtwarcia, zlozWiadomosc } from "./renderuj";
 import { politykaSledzenia } from "./zgody";
 import { policzOdbiorcow } from "../policz-odbiorcow";
@@ -522,7 +523,8 @@ export async function wyslijPartie(
        from kandydaci k
       where messages.tenant_id = k.tenant_id and messages.id = k.id
      returning messages.id, messages.profile_id, messages.email, messages.subject, messages.body_html,
-               messages.unsubscribe_token, messages.claimed_at::text as claim_token`,
+               messages.unsubscribe_token, messages.claimed_at::text as claim_token,
+               messages.source_type, messages.source_id, messages.journey_run_id, messages.transactional`,
     [tenantId, Math.min(limitPartii, wolneMiejsce)],
   );
 
@@ -572,12 +574,24 @@ export async function wyslijPartie(
       } else {
         // wiążące sprawdzenie w tej samej transakcji co przejście stanu (AD-25)
         const bramka = wiadomosc.profile_id
-          ? await canSendTo(klient, tenantId, wiadomosc.profile_id)
+          ? await canSendTo(klient, tenantId, wiadomosc.profile_id, { transakcyjny: wiadomosc.transactional === true })
           : { wolno: true as const };
+        // E4b: filtr profilu flow i dodatkowe filtry maila jeszcze raz TUZ PRZED wysyłką.
+        // Wiadomość mogła czekać w kolejce (limit dobowy, blokada nadawcy), a w tym czasie
+        // osoba kupiła: porzucony koszyk nie może wyjść do kogoś, kto już zapłacił.
+        const filtry = bramka.wolno && wiadomosc.source_type === "journey" && wiadomosc.journey_run_id && wiadomosc.profile_id
+          ? await bramkaFiltrowPrzedWysylka(klient, tenantId, { journeyRunId: wiadomosc.journey_run_id, emailId: wiadomosc.source_id, messageId: wiadomosc.id })
+          : null;
         if (!bramka.wolno) {
           await zapiszZdarzenie(klient, tenantId, wiadomosc.id, "suppressed", {
             kiedy: "teraz",
             payload: { powod: (bramka as any).powod },
+          });
+          odmowy++;
+        } else if (filtry && !filtry.wolno) {
+          await zapiszZdarzenie(klient, tenantId, wiadomosc.id, "suppressed", {
+            kiedy: "teraz",
+            payload: { powod: filtry.powod, opis: filtry.opis },
           });
           odmowy++;
         } else {

@@ -4,6 +4,7 @@ import {
   opiszWezel,
   ostrzezeniaGrafu,
   podniesDoV2,
+  podniesDoV3,
   pustyGraf,
   schematGrafu,
   schematGrafuV1,
@@ -61,7 +62,7 @@ describe("Graf v2: upgrader v1 i zapis wstecznie zgodny", () => {
     for (const v1 of DEFINICJE_V1) {
       expect(schematGrafuV1.safeParse(v1).success).toBe(true);
       const g = schematGrafu.parse(v1);
-      expect(g.wersja).toBe(2);
+      expect(g.wersja).toBe(3); // w pamieci zawsze v3; zapis w najstarszej wersji
       expect(g.ustawienia.ponowneWejscie).toEqual({ tryb: "raz" });
       expect(kanonicznyJson(grafDoZapisu(g))).toBe(kanonicznyJson(v1));
     }
@@ -82,7 +83,7 @@ describe("Graf v2: upgrader v1 i zapis wstecznie zgodny", () => {
     expect(pop).toMatchObject({ zrodlo: { rodzaj: "metryka", metryka: { integracja: "midrev", nazwa: "Submitted Form" } } });
     const zam = podniesDoV2(DEFINICJE_V1[1]).wezly[0];
     expect(zam).toMatchObject({ zrodlo: { rodzaj: "metryka", metryka: { integracja: "woocommerce", nazwa: "Placed Order" } } });
-    expect(triggerEventGrafu(podniesDoV2(DEFINICJE_V1[2]))).toBe("list.joined");
+    expect(triggerEventGrafu(podniesDoV3(podniesDoV2(DEFINICJE_V1[2])))).toBe("list.joined");
   });
 
   it("walidacja v1 po upgradzie daje te same wyniki co przed (graf poprawny = poprawny)", () => {
@@ -101,7 +102,7 @@ describe("Graf v2: upgrader v1 i zapis wstecznie zgodny", () => {
   it("szablony biblioteki są v2 i zapisują się jako v1 (nic w nich nie wymaga v2)", () => {
     for (const s of BIBLIOTEKA) {
       const g = s.zbuduj((i) => [E1, E2, L1][i]);
-      expect(g.wersja).toBe(2);
+      expect(g.wersja).toBe(3); // w pamieci zawsze v3; zapis w najstarszej wersji
       expect(grafDoZapisu(g).wersja).toBe(1);
     }
   });

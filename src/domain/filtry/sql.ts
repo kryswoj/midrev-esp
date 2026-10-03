@@ -219,12 +219,15 @@ export function zapytanieFiltrowane(opcje: {
   teraz: Date;
   koniec?: string;
   kontekst?: KontekstFlowSql | null;
+  /** zawezenie do jednego wiersza (`alias.id = $n`), np. jednego profilu w silniku */
+  idWiersza?: string;
 }): { sql: string; parametry: unknown[] } {
   if (!/^[a-z_][a-z0-9_]*$/.test(opcje.alias)) throw new Error(`filtr: niedozwolony alias ${opcje.alias}`);
   const p = new Parametry([opcje.tenantId]);
+  const jeden = opcje.idWiersza !== undefined ? ` and ${opcje.alias}.id = ${p.dodaj(opcje.idWiersza, "uuid")}` : "";
   const filtr = kompilujFiltr(opcje.filtr, opcje.zrodlo, p, opcje.teraz, opcje.kontekst ?? null);
   return {
-    sql: `select ${opcje.kolumny} from ${opcje.zrodloSql} where ${opcje.alias}.tenant_id = $1::uuid and (${filtr})${opcje.koniec ? ` ${opcje.koniec}` : ""}`,
+    sql: `select ${opcje.kolumny} from ${opcje.zrodloSql} where ${opcje.alias}.tenant_id = $1::uuid${jeden} and (${filtr})${opcje.koniec ? ` ${opcje.koniec}` : ""}`,
     parametry: p.wartosci,
   };
 }
