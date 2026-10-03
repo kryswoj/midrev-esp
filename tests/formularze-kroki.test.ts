@@ -98,6 +98,9 @@ describe("Model formularza (czysta domena)", () => {
     // przycisk w kroku z e-mailem musi wysyłać
     const bezWyslij: DefinicjaFormularza = { ...d, kroki: d.kroki.map((k, i) => (i === 0 ? { ...k, bloki: k.bloki.map((b) => (b.typ === "przycisk" ? { ...b, akcja: "dalej" as const } : b)) } : k)) };
     expect(problemyPublikacji(bezWyslij).some((p) => p.wymagane && /Wyślij i przejdź dalej/.test(p.tekst))).toBe(true);
+    // „pomiń” w kroku z e-mailem przeprowadziłby osobę dalej bez zapisu i zgody (review Codeksa r2)
+    const zPominieciem = wstawBlok(d, k1.id, { ...(nowyBlok("przycisk") as BlokTypu<"przycisk">), akcja: "dalej", tekst: "Pomiń" });
+    expect(problemyPublikacji(zPominieciem).some((p) => p.wymagane && /bez zapisu/.test(p.tekst))).toBe(true);
   });
 
   it("stary popup = poprawny formularz jednokrokowy ze stałymi identyfikatorami", () => {

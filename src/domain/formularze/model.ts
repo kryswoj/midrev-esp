@@ -372,6 +372,7 @@ export function problemyPublikacji(d: DefinicjaFormularza): Problem[] {
     const przyciski = k.bloki.filter((b): b is BlokTypu<"przycisk"> => b.typ === "przycisk");
     const naprzod = przyciski.filter((b) => b.akcja === "wyslij" || b.akcja === "dalej");
     if (naprzod.length === 0) p.push({ tekst: `${nazwa}: dodaj przycisk, którym osoba przejdzie dalej.`, wymagane: true, krokId: k.id });
+    if (maEmail && przyciski.some((b) => b.akcja === "dalej")) p.push({ tekst: `${nazwa}: w kroku z e-mailem nie ma „Przejdź dalej bez zapisu”. Zamiast pomijania daj link „Nie, dziękuję”.`, wymagane: true, krokId: k.id });
     if (maEmail && !przyciski.some((b) => b.akcja === "wyslij")) p.push({ tekst: `${nazwa}: przycisk w kroku z e-mailem musi mieć akcję „Wyślij i przejdź dalej”.`, wymagane: true, krokId: k.id });
     if (k.bloki.length === 0) p.push({ tekst: `${nazwa} jest pusty.`, wymagane: true, krokId: k.id });
     for (const b of k.bloki) problemyBloku(b, k.id, nazwa, p, wlasciwosci);

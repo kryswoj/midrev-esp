@@ -179,6 +179,8 @@ export function uruchomFormularze(K: any, CSS: string, czyPokazac: (r: any, k: a
       rysuj();
     }
     function dalej(): void {
+      // sukces (z kodem) tylko po zapisie: bez tokenu kroku z e-mailem nie ma czego potwierdzać
+      if (stan.krok + 1 >= f.kroki.length && f.krokEmail >= 0 && !stan.token) { zamknij(false); return; }
       przejdz(stan.krok + 1);
     }
 
@@ -381,7 +383,8 @@ export function uruchomFormularze(K: any, CSS: string, czyPokazac: (r: any, k: a
         if (adresOk(b.url)) w.location.href = b.url;
         return;
       }
-      if (b.akcja === "dalej" || sukces) {
+      // „dalej” w kroku z e-mailem działa jak „wyślij”: tego kroku nie da się przejść bez zapisu
+      if ((b.akcja === "dalej" && stan.krok !== f.krokEmail) || sukces) {
         if (sukces) { zamknij(true); return; }
         dalej();
         return;
@@ -471,7 +474,8 @@ export function uruchomFormularze(K: any, CSS: string, czyPokazac: (r: any, k: a
       }, true);
     }
     if (!czyPokazac(r, kontekst(f))) {
-      if (czytaj(P + f.id + "_t") === "1" && czytaj(P + f.id + "_z") !== "1") pokazTeaser(f);
+      // teaser wraca tylko tam, gdzie formularz w ogóle mógłby się pokazać, i nie po zapisie
+      if (czytaj(P + f.id + "_t") === "1" && czytaj(P + f.id + "_z") !== "1" && czytaj(P + "zapisany") !== "1" && tylkoMiejsce(f)) pokazTeaser(f);
       return;
     }
     var odpalony = false;
