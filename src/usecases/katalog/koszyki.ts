@@ -159,10 +159,16 @@ export async function zapiszKoszykSklepu(
       powrot = null;
     }
   }
+  // adres produktu tylko na domenie sklepu (review r1: podpisany payload nie wstawi obcego linku
+  // do bloku „Produkty z koszyka”); obraz może być z CDN, ale wyłącznie http(s)
+  const naDomenieSklepu = (v: string | null) => {
+    const a = adresHttp(v);
+    return a && hostWDomenach(new URL(a).hostname, [w.hostSklepu]) ? a : null;
+  };
   const pozycje = k.pozycje.slice(0, MAKS_POZYCJI).map((p) => ({
     ...p,
     image_url: adresHttp(p.image_url),
-    url: adresHttp(p.url),
+    url: naDomenieSklepu(p.url),
   }));
   const { rows } = await klient.query<{ id: string }>(
     `insert into carts (tenant_id, store_id, platform_token, profile_id, email, stage, items, value_minor, currency,

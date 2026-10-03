@@ -10,7 +10,7 @@ export async function POST(zadanie: NextRequest, ctx: { params: Promise<{ storeI
   try {
     const w = await przyjmijZdarzeniaWtyczki(b.auth, b.cialo);
     if (w.status === "odrzucone") return json(400, { blad: "niepoprawne", opis: w.opis });
-    return json(202, { nowe: w.nowe, duplikaty: w.duplikaty, konfiguracja: w.konfiguracja });
+    return json(202, { nowe: w.nowe, duplikaty: w.duplikaty, odrzucone: w.odrzucone, konfiguracja: w.konfiguracja });
   } catch (e) {
     return bladWewnetrzny("zdarzenia", e);
   }

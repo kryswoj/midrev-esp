@@ -28,8 +28,8 @@ class Midrev_Esp_Carts {
 	 * @var bool
 	 */
 	public static $restoring = false;
-	const TTL           = 2592000; // 30 dni
-	const MAX_ITEMS     = 100;
+	const TTL                = 2592000; // 30 dni
+	const MAX_ITEMS          = 100;
 
 	/** Podpięcie akcji. */
 	public static function init(): void {
@@ -260,8 +260,10 @@ class Midrev_Esp_Carts {
 			}
 		}
 		self::$restoring = false;
-		// ten sam token: kolejne zmiany aktualizują ten sam koszyk w ESP (jeden porzucony koszyk, nie dwa)
-		WC()->session->set( self::SESSION_TOKEN, $token );
+		// NOWY token dla tej sesji (review PHP r1): link przekazany dalej nie współdzieli koszyka
+		// z nadawcą; stary koszyk w ESP zamknie zakup tej osoby (dopasowanie po osobie i czasie)
+		WC()->session->set( self::SESSION_TOKEN, null );
+		self::save_snapshot();
 		if ( $pominiete > 0 ) {
 			wc_add_notice( __( 'Some products from your cart are no longer available.', 'midrev-esp' ), 'notice' );
 		}

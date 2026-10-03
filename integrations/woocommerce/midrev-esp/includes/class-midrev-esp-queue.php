@@ -15,7 +15,7 @@ defined( 'ABSPATH' ) || exit;
  * Bez duplikatów: każde zdarzenie ma `event_id` (UUID) nadany przy zapisie; ESP traktuje go
  * jako klucz idempotencji, więc ponowienie po zgubionej odpowiedzi nie tworzy drugiego
  * zdarzenia. Wiersz znika dopiero po odpowiedzi 2xx. Błąd sieci / 5xx / 429 = ponowienie
- * z rosnącym odstępem (1, 2, 4… min, maks. 6 h), 4xx inne niż 401/429 = zdarzenie odrzucone
+ * z rosnącym odstępem (1, 2, 4… min, maks. 6 h), 400/413/415/422 = paczka odrzucona
  * (ponawianie niczego nie zmieni), po 48 h albo 25 próbach = porzucone.
  */
 class Midrev_Esp_Queue {
@@ -145,7 +145,7 @@ class Midrev_Esp_Queue {
 						$zdarzenia[] = $z;
 					}
 				}
-				$r = Midrev_Esp_Api::signed_request(
+				$r   = Midrev_Esp_Api::signed_request(
 					'zdarzenia',
 					array(
 						'zdarzenia' => $zdarzenia,
@@ -168,8 +168,9 @@ class Midrev_Esp_Queue {
 					);
 					continue;
 				}
-				if ( $kod >= 400 && $kod < 500 && 401 !== $kod && 429 !== $kod ) {
-					// paczka odrzucona jako niepoprawna: ponawianie nic nie da
+				if ( in_array( $kod, array( 400, 413, 415, 422 ), true ) ) {
+					// paczka odrzucona jako niepoprawna: ponawianie nic nie da (ESP waliduje każde
+					// zdarzenie osobno, więc 400 oznacza zepsutą całą paczkę); 401/408/429 itd. = ponowienie
 					self::delete_ids( $ids );
 					/* translators: %d: HTTP status code */
 					Midrev_Esp_Api::update_status( array( 'last_error' => sprintf( __( 'MidRev ESP rejected events (HTTP %d).', 'midrev-esp' ), $kod ) ) );
@@ -191,9 +192,10 @@ class Midrev_Esp_Queue {
 		if ( empty( $ids ) ) {
 			return;
 		}
-		$tabela = Midrev_Esp_Install::queue_table();
-		$ids    = array_map( 'absint', $ids );
-		$wpdb->query( "DELETE FROM {$tabela} WHERE id IN (" . implode( ',', $ids ) . ')' ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$tabela  = Midrev_Esp_Install::queue_table();
+		$ids     = array_map( 'absint', $ids );
+		$miejsca = implode( ',', array_fill( 0, count( $ids ), '%d' ) );
+		$wpdb->query( $wpdb->prepare( "DELETE FROM {$tabela} WHERE id IN ({$miejsca})", $ids ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery, WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare
 	}
 
 	/** Ponowienie z rosnącym odstępem; zbyt stare albo wyczerpane = porzucone. */

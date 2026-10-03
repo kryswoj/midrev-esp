@@ -177,3 +177,25 @@ msgstr "włączona (klauzula w wersji %d)"
 
 msgid "started checkout"
 msgstr "rozpoczęcie zamówienia"
+
+msgid "Try again with the same code."
+msgstr "Spróbuj ponownie tym samym kodem."
+
+msgid "The confirmation expired. Paste the pairing code again."
+msgstr "Potwierdzenie wygasło. Wklej kod parowania jeszcze raz."
+
+msgid "Confirm the connection"
+msgstr "Potwierdź połączenie"
+
+#, php-format
+msgid "The store %1$s will be connected to the MidRev account: %2$s."
+msgstr "Sklep %1$s zostanie połączony z kontem MidRev: %2$s."
+
+msgid "The plugin will create a WooCommerce REST API key (read/write) for MidRev ESP. Confirm only if you recognise this account."
+msgstr "Wtyczka utworzy dla MidRev ESP klucz REST API WooCommerce (odczyt i zapis). Potwierdź tylko wtedy, gdy znasz to konto."
+
+msgid "Confirm and connect"
+msgstr "Potwierdź i połącz"
+
+msgid "Cancel"
+msgstr "Anuluj"

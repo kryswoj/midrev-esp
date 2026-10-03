@@ -83,6 +83,12 @@ function hostBezWww(adres: string): string {
   return new URL(adres).hostname.toLowerCase().replace(/^www\./, "");
 }
 
+/** Tożsamość sklepu do przypięcia kodu: host bez www + ścieżka (multisite w podkatalogach). */
+function tozsamoscSklepu(adres: string): string {
+  const u = new URL(adres);
+  return `${hostBezWww(adres)}${u.port ? `:${u.port}` : ""}${u.pathname.replace(/\/+$/, "").toLowerCase()}`;
+}
+
 // ── 1. Parowanie ────────────────────────────────────────────────────────────────
 
 export interface KodParowania {
@@ -125,6 +131,32 @@ const schematParowania = z.object({
   wc_version: z.string().max(40).optional(),
 });
 
+/**
+ * Krok 1 parowania BEZ kluczy (review PHP r1): wtyczka pokazuje administratorowi, z jakim kontem
+ * MidRev połączy sklep, i dopiero po potwierdzeniu zakłada klucz REST. Kod dla innego sklepu
+ * odpada tutaj, zanim klucz w ogóle powstanie. Nic nie zapisuje.
+ */
+export async function sprawdzKodParowania(cialo: unknown): Promise<{ konto: string; sklep: string | null; wygasa: string }> {
+  const w = z.object({ kod: z.string().max(64), home_url: z.string().max(500) }).safeParse(cialo);
+  if (!w.success) throw new BladParowania("Niepoprawne dane.", "niepoprawne");
+  const kod = normalizujKod(w.data.kod);
+  const adres = normalizujAdresSklepu(w.data.home_url);
+  if (!kod) throw new BladParowania("Ten kod nie wygląda na kod parowania MidRev.", "zly_kod");
+  if (!adres) throw new BladParowania("Adres sklepu musi zaczynać się od https:// (albo http://).", "zly_adres");
+  const { rows } = await getPool().query<{ base_url: string | null; expires_at: Date; nazwa: string; uzyty: boolean }>(
+    `select t.base_url, t.expires_at, coalesce(nullif(btrim(tn.sender_company_name), ''), tn.name) as nazwa, t.used_at is not null as uzyty
+       from store_connect_tokens t join tenants tn on tn.id = t.tenant_id
+      where t.token_hash = $1 and t.purpose = 'wtyczka' and t.expires_at > now()`,
+    [sha256(kod)],
+  );
+  const t = rows[0];
+  if (!t || (t.uzyty && !t.base_url)) throw new BladParowania("Kod parowania jest nieważny, wygasł albo został już użyty. Wygeneruj nowy w panelu MidRev.", "zly_kod");
+  if (t.base_url && tozsamoscSklepu(t.base_url) !== tozsamoscSklepu(adres)) {
+    throw new BladParowania(`Ten kod wygenerowano dla innego sklepu (${new URL(t.base_url).host}). Wygeneruj kod dla ${new URL(adres).host}.`, "inny_sklep");
+  }
+  return { konto: t.nazwa.slice(0, 200), sklep: t.base_url, wygasa: t.expires_at.toISOString() };
+}
+
 export interface WynikParowania {
   store_id: string;
   site_key: string | null;
@@ -151,18 +183,23 @@ export async function sparujWtyczke(cialo: unknown): Promise<WynikParowania> {
   if (!adres) throw new BladParowania("Adres sklepu musi zaczynać się od https:// (albo http://).", "zly_adres");
 
   const pool = getPool();
-  const { rows } = await pool.query<{ id: string; tenant_id: string; base_url: string | null }>(
-    `update store_connect_tokens set used_at = now()
-      where token_hash = $1 and purpose = 'wtyczka' and used_at is null and expires_at > now()
-      returning id, tenant_id, base_url`,
-    [sha256(kod)],
+  // Kod zajmowany atomowo. Wyjątek (review r1, częściowy sukces): kod już użyty do połączenia
+  // TEGO samego sklepu (ta sama tożsamość adresu) w czasie ważności może sparować ponownie -
+  // gdy odpowiedź do wtyczki zginęła, administrator ponawia tym samym kodem zamiast utknąć.
+  const { rows } = await pool.query<{ id: string; tenant_id: string; base_url: string | null; store_id: string | null; ponowienie: boolean }>(
+    `update store_connect_tokens t set used_at = now()
+      where token_hash = $1 and purpose = 'wtyczka' and expires_at > now()
+        and (used_at is null
+             or (store_id is not null and exists (select 1 from stores s where s.tenant_id = t.tenant_id and s.id = t.store_id and s.base_url = $2)))
+      returning id, tenant_id, base_url, store_id, (store_id is not null) as ponowienie`,
+    [sha256(kod), adres],
   );
   const token = rows[0];
   if (!token) throw new BladParowania("Kod parowania jest nieważny, wygasł albo został już użyty. Wygeneruj nowy w panelu MidRev.", "zly_kod");
   const zwolnij = () => pool.query("update store_connect_tokens set used_at = null where id = $1 and store_id is null", [token.id]);
-  if (token.base_url && hostBezWww(token.base_url) !== hostBezWww(adres)) {
+  if (token.base_url && tozsamoscSklepu(token.base_url) !== tozsamoscSklepu(adres)) {
     await zwolnij();
-    throw new BladParowania(`Ten kod wygenerowano dla sklepu ${new URL(token.base_url).host}, a nie ${new URL(adres).host}.`, "inny_sklep");
+    throw new BladParowania(`Ten kod wygenerowano dla sklepu ${new URL(token.base_url).host}${new URL(token.base_url).pathname.replace(/\/$/, "")}, a nie ${new URL(adres).host}${new URL(adres).pathname.replace(/\/$/, "")}.`, "inny_sklep");
   }
 
   const pluginSecret = randomBytes(32).toString("hex");
@@ -183,7 +220,7 @@ export async function sparujWtyczke(cialo: unknown): Promise<WynikParowania> {
   }
   await pool.query("update store_connect_tokens set store_id = $2 where id = $1", [token.id, wynik.storeId]);
   await pool.query(
-    "update stores set plugin_version = $3, plugin_seen_at = now() where tenant_id = $1 and id = $2",
+    "update stores set plugin_version = coalesce($3, plugin_version), plugin_seen_at = now() where tenant_id = $1 and id = $2",
     [token.tenant_id, wynik.storeId, w.data.plugin_version ?? null],
   );
 
@@ -424,14 +461,15 @@ const schematZdarzeniaWtyczki = z.object({
 });
 
 const schematPaczki = z.object({
-  zdarzenia: z.array(schematZdarzeniaWtyczki).min(1).max(50),
+  // każde zdarzenie walidowane OSOBNO (review r1): jedno wadliwe nie zabiera reszty paczki
+  zdarzenia: z.array(z.unknown()).min(1).max(50),
   wtyczka: z.object({ wersja: tekst(40).nullish() }).nullish(),
 });
 
 export type ZdarzenieWtyczki = z.infer<typeof schematZdarzeniaWtyczki>;
 
 export type WynikPrzyjeciaWtyczki =
-  | { status: "przyjete"; nowe: number; duplikaty: number; konfiguracja: KonfiguracjaWtyczki }
+  | { status: "przyjete"; nowe: number; duplikaty: number; odrzucone: number; konfiguracja: KonfiguracjaWtyczki }
   | { status: "odrzucone"; opis: string };
 
 export async function przyjmijZdarzeniaWtyczki(auth: WtyczkaUwierzytelniona, cialo: unknown, przyjeto = new Date()): Promise<WynikPrzyjeciaWtyczki> {
@@ -444,9 +482,16 @@ export async function przyjmijZdarzeniaWtyczki(auth: WtyczkaUwierzytelniona, cia
   const klient = await pool.connect();
   let nowe = 0;
   let duplikaty = 0;
+  let odrzucone = 0;
   try {
     await klient.query("begin");
-    for (const z of w.data.zdarzenia) {
+    for (const surowe of w.data.zdarzenia) {
+      const jedno = schematZdarzeniaWtyczki.safeParse(surowe);
+      if (!jedno.success) {
+        odrzucone++;
+        continue;
+      }
+      const z = jedno.data;
       const { rows } = await klient.query<{ id: string }>(
         `insert into raw_events (tenant_id, store_id, source, idempotency_key, payload, received_at, channel)
          values ($1, $2, $3, $4, $5::jsonb, $6, 'plugin')
@@ -470,7 +515,8 @@ export async function przyjmijZdarzeniaWtyczki(auth: WtyczkaUwierzytelniona, cia
   } finally {
     klient.release();
   }
-  return { status: "przyjete", nowe, duplikaty, konfiguracja: await konfiguracjaWtyczki(auth.tenantId, auth.storeId) };
+  if (odrzucone) console.warn(`[wtyczka] sklep ${auth.storeId}: ${odrzucone} zdarzeń w paczce nie przeszło walidacji (pominięte)`);
+  return { status: "przyjete", nowe, duplikaty, odrzucone, konfiguracja: await konfiguracjaWtyczki(auth.tenantId, auth.storeId) };
 }
 
 /** Ping wtyczki (strona ustawień, cron co godzinę): zdrowie połączenia + konfiguracja. */

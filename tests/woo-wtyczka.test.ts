@@ -116,8 +116,13 @@ describe("Wtyczka WooCommerce po stronie ESP", () => {
     expect(w.script_url).toContain(`/js/v1/${w.site_key}.js`);
     expect(w.konfiguracja.checkbox).toBe(true);
     expect(w.konfiguracja.zgoda?.wersja).toBe(1);
-    // kod jednorazowy
-    await expect(sparujWtyczke({ kod: k.kod, home_url: adresSklepu, consumer_key: CK, consumer_secret: CS })).rejects.toThrow(/nieważny/);
+    // ponowienie TYM SAMYM kodem dla TEGO sklepu (zgubiona odpowiedź) = ponowne parowanie z nowym
+    // sekretem; dla innego sklepu kod jest już zużyty
+    const ponowne = await sparujWtyczke({ kod: k.kod, home_url: adresSklepu, consumer_key: CK, consumer_secret: CS });
+    expect(ponowne.store_id).toBe(storeId);
+    expect(ponowne.plugin_secret).not.toBe(sekret);
+    sekret = ponowne.plugin_secret;
+    await expect(sparujWtyczke({ kod: k.kod, home_url: "https://obcy-sklep.example", consumer_key: CK, consumer_secret: CS })).rejects.toThrow(/nieważny|innego sklepu|obcy/);
     // sklep zapisany z metodą, wersją wtyczki, sekretem w szyfrogramie; webhooki założone
     const { rows } = await getPool().query("select platform, base_url, connection_method, plugin_version, credentials_encrypted from stores where id = $1", [storeId]);
     expect(rows[0]).toMatchObject({ platform: "woocommerce", base_url: adresSklepu, connection_method: "wtyczka", plugin_version: "1.0.0" });
@@ -153,6 +158,13 @@ describe("Wtyczka WooCommerce po stronie ESP", () => {
     wartosc: "123.45",
     waluta: "PLN",
     link,
+  });
+
+  it("krok 1 bez kluczy: kod pokazuje konto, kod dla innego sklepu (także podkatalog) odpada", async () => {
+    const { sprawdzKodParowania } = await import("../src/usecases/integracja/woo-wtyczka");
+    const k = await utworzKodParowania(tenantId, { adresSklepu: `${adresSklepu}/sklep-a` });
+    expect(await sprawdzKodParowania({ kod: k.kod, home_url: `${adresSklepu}/sklep-a/` })).toMatchObject({ konto: "WOO WTYCZKA A" });
+    await expect(sprawdzKodParowania({ kod: k.kod, home_url: `${adresSklepu}/sklep-b` })).rejects.toThrow(/innego sklepu/);
   });
 
   it("podpis: zły sekret, stary znacznik czasu i odłączony sklep = brak dostępu", async () => {

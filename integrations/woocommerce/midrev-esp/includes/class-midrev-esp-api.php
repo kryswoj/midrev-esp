@@ -20,6 +20,7 @@ class Midrev_Esp_Api {
 	const OPT_SECRET     = 'midrev_esp_secret';
 	const OPT_CONFIG     = 'midrev_esp_config';
 	const OPT_STATUS     = 'midrev_esp_status';
+	const OPT_PENDING    = 'midrev_esp_pending_key';
 
 	/** Adres API (stała, nie dane od użytkownika). */
 	public static function api_url(): string {
@@ -101,7 +102,7 @@ class Midrev_Esp_Api {
 			array( '%d', '%s', '%s', '%s', '%s', '%s' )
 		);
 		if ( ! $ok ) {
-			throw new RuntimeException( __( 'Could not create a WooCommerce REST API key.', 'midrev-esp' ) );
+			throw new RuntimeException( esc_html__( 'Could not create a WooCommerce REST API key.', 'midrev-esp' ) );
 		}
 		return array(
 			'key_id'          => (int) $wpdb->insert_id,
@@ -118,6 +119,53 @@ class Midrev_Esp_Api {
 		}
 	}
 
+	/** Kod w postaci kanonicznej albo null. */
+	public static function normalize_code( string $kod ): ?string {
+		$kod = strtoupper( preg_replace( '/[^A-Za-z0-9-]/', '', $kod ) );
+		return preg_match( '/^MRV-?(?:[A-Z2-9]{5}-?){5}$/', $kod ) ? $kod : null;
+	}
+
+	/**
+	 * Krok 1 parowania BEZ kluczy: z jakim kontem MidRev połączy się sklep. Kod dla innego
+	 * sklepu odpada tutaj, zanim powstanie klucz REST (ochrona przed „wklej ten kod” od obcych).
+	 *
+	 * @param string $kod Kod parowania.
+	 * @return array{konto:string,sklep:?string}|WP_Error
+	 */
+	public static function check_code( string $kod ) {
+		$kod = self::normalize_code( $kod );
+		if ( ! $kod ) {
+			return new WP_Error( 'midrev_code', __( 'This does not look like a MidRev pairing code (MRV-XXXXX-…).', 'midrev-esp' ) );
+		}
+		$response = wp_remote_post(
+			self::api_url() . '/api/integracje/woocommerce/paruj/sprawdz',
+			array(
+				'timeout' => 20,
+				'headers' => array( 'Content-Type' => 'application/json' ),
+				'body'    => wp_json_encode(
+					array(
+						'kod'      => $kod,
+						'home_url' => home_url(),
+					)
+				),
+			)
+		);
+		if ( is_wp_error( $response ) ) {
+			/* translators: %s: error message */
+			return new WP_Error( 'midrev_http', sprintf( __( 'MidRev ESP did not respond: %s', 'midrev-esp' ), $response->get_error_message() ) );
+		}
+		$data = json_decode( (string) wp_remote_retrieve_body( $response ), true );
+		if ( 200 !== (int) wp_remote_retrieve_response_code( $response ) || ! is_array( $data ) || empty( $data['konto'] ) ) {
+			$msg = is_array( $data ) && ! empty( $data['komunikat'] ) ? sanitize_text_field( (string) $data['komunikat'] ) : sprintf( 'HTTP %d', (int) wp_remote_retrieve_response_code( $response ) );
+			/* translators: %s: error message from MidRev ESP */
+			return new WP_Error( 'midrev_pair', sprintf( __( 'Pairing failed: %s', 'midrev-esp' ), $msg ) );
+		}
+		return array(
+			'konto' => sanitize_text_field( (string) $data['konto'] ),
+			'sklep' => isset( $data['sklep'] ) ? esc_url_raw( (string) $data['sklep'] ) : null,
+		);
+	}
+
 	/**
 	 * Parowanie kodem z panelu MidRev.
 	 *
@@ -125,14 +173,26 @@ class Midrev_Esp_Api {
 	 * @return true|WP_Error
 	 */
 	public static function pair( string $kod ) {
-		$kod = strtoupper( preg_replace( '/[^A-Za-z0-9-]/', '', $kod ) );
-		if ( ! preg_match( '/^MRV-?(?:[A-Z2-9]{5}-?){5}$/', $kod ) ) {
+		$kod = self::normalize_code( $kod );
+		if ( ! $kod ) {
 			return new WP_Error( 'midrev_code', __( 'This does not look like a MidRev pairing code (MRV-XXXXX-…).', 'midrev-esp' ) );
 		}
-		try {
-			$klucz = self::create_api_key();
-		} catch ( RuntimeException $e ) {
-			return new WP_Error( 'midrev_key', $e->getMessage() );
+		// Klucz z poprzedniej próby, której wynik jest NIEZNANY (timeout, 5xx): ESP mógł go już
+		// zapisać, więc nie kasujemy go, tylko ponawiamy z nim (ESP przyjmie ponowienie tym samym
+		// kodem dla tego samego sklepu). Nowy klucz tylko, gdy poprzedniego nie ma.
+		$oczekujacy = get_option( self::OPT_PENDING );
+		if ( is_array( $oczekujacy ) && ! empty( $oczekujacy['key_id'] ) && ! empty( $oczekujacy['consumer_key'] ) ) {
+			$klucz = array(
+				'key_id'          => (int) $oczekujacy['key_id'],
+				'consumer_key'    => (string) $oczekujacy['consumer_key'],
+				'consumer_secret' => (string) $oczekujacy['consumer_secret'],
+			);
+		} else {
+			try {
+				$klucz = self::create_api_key();
+			} catch ( RuntimeException $e ) {
+				return new WP_Error( 'midrev_key', $e->getMessage() );
+			}
 		}
 		$body     = array(
 			'kod'             => $kod,
@@ -154,15 +214,19 @@ class Midrev_Esp_Api {
 		// Klucz w jawnej postaci nie jest nam już potrzebny (ESP ma go w szyfrogramie).
 		unset( $body['consumer_key'], $body['consumer_secret'] );
 
-		if ( is_wp_error( $response ) ) {
-			self::delete_api_key( $klucz['key_id'] );
+		$code = is_wp_error( $response ) ? 0 : (int) wp_remote_retrieve_response_code( $response );
+		if ( is_wp_error( $response ) || $code >= 500 || 0 === $code ) {
+			// wynik nieznany: klucz zostaje do ponowienia (sekret poza autoload, usuwany po sukcesie)
+			update_option( self::OPT_PENDING, $klucz, false );
+			$msg = is_wp_error( $response ) ? $response->get_error_message() : sprintf( 'HTTP %d', $code );
 			/* translators: %s: error message */
-			return new WP_Error( 'midrev_http', sprintf( __( 'MidRev ESP did not respond: %s', 'midrev-esp' ), $response->get_error_message() ) );
+			return new WP_Error( 'midrev_http', sprintf( __( 'MidRev ESP did not respond: %s', 'midrev-esp' ), $msg ) . ' ' . __( 'Try again with the same code.', 'midrev-esp' ) );
 		}
-		$code = (int) wp_remote_retrieve_response_code( $response );
 		$data = json_decode( (string) wp_remote_retrieve_body( $response ), true );
 		if ( 200 !== $code || ! is_array( $data ) || empty( $data['store_id'] ) || empty( $data['plugin_secret'] ) ) {
+			// odmowa (4xx) jest ostateczna: klucz nie jest nikomu potrzebny
 			self::delete_api_key( $klucz['key_id'] );
+			delete_option( self::OPT_PENDING );
 			$msg = is_array( $data ) && ! empty( $data['komunikat'] ) ? sanitize_text_field( (string) $data['komunikat'] ) : sprintf( 'HTTP %d', $code );
 			/* translators: %s: error message from MidRev ESP */
 			return new WP_Error( 'midrev_pair', sprintf( __( 'Pairing failed: %s', 'midrev-esp' ), $msg ) );
@@ -184,8 +248,14 @@ class Midrev_Esp_Api {
 			true
 		);
 		update_option( self::OPT_SECRET, preg_replace( '/[^a-f0-9]/', '', (string) $data['plugin_secret'] ), false );
+		delete_option( self::OPT_PENDING );
 		self::save_config( isset( $data['konfiguracja'] ) ? $data['konfiguracja'] : array() );
-		self::update_status( array( 'last_error' => '', 'last_ping' => time() ) );
+		self::update_status(
+			array(
+				'last_error' => '',
+				'last_ping'  => time(),
+			)
+		);
 		return true;
 	}
 
@@ -243,7 +313,12 @@ class Midrev_Esp_Api {
 		if ( is_array( $r['data'] ) && isset( $r['data']['konfiguracja'] ) ) {
 			self::save_config( $r['data']['konfiguracja'] );
 		}
-		self::update_status( array( 'last_error' => '', 'last_ping' => time() ) );
+		self::update_status(
+			array(
+				'last_error' => '',
+				'last_ping'  => time(),
+			)
+		);
 		return true;
 	}
 
@@ -262,7 +337,12 @@ class Midrev_Esp_Api {
 		delete_option( self::OPT_CONNECTION );
 		delete_option( self::OPT_SECRET );
 		delete_option( self::OPT_CONFIG );
-		self::update_status( array( 'last_error' => '', 'disconnected_at' => time() ) );
+		self::update_status(
+			array(
+				'last_error'      => '',
+				'disconnected_at' => time(),
+			)
+		);
 		Midrev_Esp_Queue::clear();
 	}
 

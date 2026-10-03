@@ -119,7 +119,7 @@ export async function kontekstSklepuMaila(
           qty: Number(p.qty) || 1,
           price: kwota(p.price_minor ?? k?.price_minor ?? null, c.currency ?? k?.currency ?? null),
           image_url: http(p.image_url) ?? http(k?.image_url),
-          url: http(p.url) ?? http(k?.url),
+          url: http(k?.url) ?? http(p.url),
         });
       }
       const sklep = c.base_url ? `${c.base_url.replace(/\/+$/, "")}/cart/` : null;

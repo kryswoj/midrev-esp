@@ -21,6 +21,8 @@ class Midrev_Esp_Admin {
 	public static function init(): void {
 		add_action( 'admin_menu', array( __CLASS__, 'menu' ), 60 );
 		add_action( 'admin_post_midrev_esp_connect', array( __CLASS__, 'handle_connect' ) );
+		add_action( 'admin_post_midrev_esp_confirm', array( __CLASS__, 'handle_confirm' ) );
+		add_action( 'admin_post_midrev_esp_cancel', array( __CLASS__, 'handle_cancel' ) );
 		add_action( 'admin_post_midrev_esp_disconnect', array( __CLASS__, 'handle_disconnect' ) );
 		add_action( 'admin_post_midrev_esp_ping', array( __CLASS__, 'handle_ping' ) );
 		add_action( 'admin_post_midrev_esp_flush', array( __CLASS__, 'handle_flush' ) );
@@ -71,21 +73,69 @@ class Midrev_Esp_Admin {
 	 * @param string $tresc Treść.
 	 */
 	private static function back( string $typ, string $tresc ): void {
-		set_transient( 'midrev_esp_notice_' . get_current_user_id(), array( 'typ' => $typ, 'tresc' => $tresc ), 120 );
+		set_transient(
+			'midrev_esp_notice_' . get_current_user_id(),
+			array(
+				'typ'   => $typ,
+				'tresc' => $tresc,
+			),
+			120
+		);
 		wp_safe_redirect( admin_url( 'admin.php?page=' . self::PAGE ) );
 		exit;
 	}
 
-	/** Parowanie. */
+	/** Klucz transientu z kodem czekającym na potwierdzenie (per administrator). */
+	private static function pending_key(): string {
+		return 'midrev_esp_confirm_' . get_current_user_id();
+	}
+
+	/**
+	 * Parowanie, krok 1: sprawdzenie kodu w ESP BEZ zakładania klucza REST. Administrator widzi,
+	 * z jakim kontem MidRev połączy sklep, i dopiero „Potwierdź” zakłada klucz (krok 2).
+	 */
 	public static function handle_connect(): void {
 		self::guard( 'midrev_esp_connect' );
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- nonce sprawdza guard() (check_admin_referer).
 		$kod   = isset( $_POST['midrev_esp_code'] ) ? sanitize_text_field( wp_unslash( $_POST['midrev_esp_code'] ) ) : '';
-		$wynik = Midrev_Esp_Api::pair( $kod );
+		$wynik = Midrev_Esp_Api::check_code( $kod );
 		if ( is_wp_error( $wynik ) ) {
 			self::back( 'error', $wynik->get_error_message() );
 		}
+		set_transient(
+			self::pending_key(),
+			array(
+				'kod'   => Midrev_Esp_Api::normalize_code( $kod ),
+				'konto' => $wynik['konto'],
+			),
+			10 * MINUTE_IN_SECONDS
+		);
+		wp_safe_redirect( admin_url( 'admin.php?page=' . self::PAGE ) );
+		exit;
+	}
+
+	/** Parowanie, krok 2: po potwierdzeniu konta klucz REST i połączenie. */
+	public static function handle_confirm(): void {
+		self::guard( 'midrev_esp_confirm' );
+		$oczekujace = get_transient( self::pending_key() );
+		if ( ! is_array( $oczekujace ) || empty( $oczekujace['kod'] ) ) {
+			self::back( 'error', __( 'The confirmation expired. Paste the pairing code again.', 'midrev-esp' ) );
+		}
+		$wynik = Midrev_Esp_Api::pair( (string) $oczekujace['kod'] );
+		if ( is_wp_error( $wynik ) ) {
+			self::back( 'error', $wynik->get_error_message() );
+		}
+		delete_transient( self::pending_key() );
 		Midrev_Esp_Queue::ensure_schedule();
 		self::back( 'success', __( 'Connected. Orders, products and cart events now flow to MidRev ESP.', 'midrev-esp' ) );
+	}
+
+	/** Rezygnacja z potwierdzenia. */
+	public static function handle_cancel(): void {
+		self::guard( 'midrev_esp_cancel' );
+		delete_transient( self::pending_key() );
+		wp_safe_redirect( admin_url( 'admin.php?page=' . self::PAGE ) );
+		exit;
 	}
 
 	/** Odłączenie. */
@@ -166,8 +216,21 @@ class Midrev_Esp_Admin {
 		echo '</div>';
 	}
 
-	/** Widok bez połączenia: kod parowania. */
+	/** Widok bez połączenia: kod parowania albo potwierdzenie konta. */
 	private static function render_pairing(): void {
+		$oczekujace = get_transient( self::pending_key() );
+		if ( is_array( $oczekujace ) && ! empty( $oczekujace['konto'] ) ) {
+			echo '<div class="card" style="max-width:640px">';
+			echo '<h2>' . esc_html__( 'Confirm the connection', 'midrev-esp' ) . '</h2>';
+			/* translators: 1: store address, 2: MidRev account name */
+			echo '<p>' . esc_html( sprintf( __( 'The store %1$s will be connected to the MidRev account: %2$s.', 'midrev-esp' ), wp_parse_url( home_url(), PHP_URL_HOST ), (string) $oczekujace['konto'] ) ) . '</p>';
+			echo '<p class="description">' . esc_html__( 'The plugin will create a WooCommerce REST API key (read/write) for MidRev ESP. Confirm only if you recognise this account.', 'midrev-esp' ) . '</p>';
+			echo '<p>';
+			self::action_button( 'midrev_esp_confirm', __( 'Confirm and connect', 'midrev-esp' ), 'button button-primary' );
+			self::action_button( 'midrev_esp_cancel', __( 'Cancel', 'midrev-esp' ) );
+			echo '</p></div>';
+			return;
+		}
 		// Kod z linku w panelu MidRev wypełnia pole, ale NIE paruje sam: potrzebne kliknięcie (nonce).
 		$kod = isset( $_GET['mrv_kod'] ) ? sanitize_text_field( wp_unslash( $_GET['mrv_kod'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		$kod = preg_replace( '/[^A-Za-z0-9-]/', '', $kod );
@@ -200,13 +263,13 @@ class Midrev_Esp_Admin {
 		echo esc_html( $zdrowy ? __( 'Connected to MidRev ESP', 'midrev-esp' ) : __( 'Connected, needs attention', 'midrev-esp' ) ) . '</h2>';
 		echo '<table class="widefat striped" style="margin:12px 0"><tbody>';
 		$wiersze = array(
-			__( 'Connected', 'midrev-esp' )         => self::ago( (int) ( $c['connected_at'] ?? 0 ) ),
-			__( 'Last event sent', 'midrev-esp' )   => self::ago( (int) ( $s['last_event_at'] ?? 0 ) ) . ( ! empty( $s['last_event_type'] ) ? ' (' . self::event_label( (string) $s['last_event_type'] ) . ')' : '' ),
-			__( 'Last check', 'midrev-esp' )        => self::ago( (int) ( $s['last_ping'] ?? 0 ) ),
-			__( 'Events waiting', 'midrev-esp' )    => (string) $kolej,
-			__( 'Tracking script', 'midrev-esp' )   => ! empty( $config['site_key'] ) ? __( 'on', 'midrev-esp' ) : __( 'off', 'midrev-esp' ),
+			__( 'Connected', 'midrev-esp' )           => self::ago( (int) ( $c['connected_at'] ?? 0 ) ),
+			__( 'Last event sent', 'midrev-esp' )     => self::ago( (int) ( $s['last_event_at'] ?? 0 ) ) . ( ! empty( $s['last_event_type'] ) ? ' (' . self::event_label( (string) $s['last_event_type'] ) . ')' : '' ),
+			__( 'Last check', 'midrev-esp' )          => self::ago( (int) ( $s['last_ping'] ?? 0 ) ),
+			__( 'Events waiting', 'midrev-esp' )      => (string) $kolej,
+			__( 'Tracking script', 'midrev-esp' )     => ! empty( $config['site_key'] ) ? __( 'on', 'midrev-esp' ) : __( 'off', 'midrev-esp' ),
 			__( 'Newsletter checkbox', 'midrev-esp' ) => ! empty( $config['checkbox'] ) ? sprintf( /* translators: %d: clause version */ __( 'on (clause version %d)', 'midrev-esp' ), (int) ( $config['zgoda']['wersja'] ?? 0 ) ) : __( 'off', 'midrev-esp' ),
-			__( 'Plugin version', 'midrev-esp' )    => MIDREV_ESP_VERSION,
+			__( 'Plugin version', 'midrev-esp' )      => MIDREV_ESP_VERSION,
 		);
 		foreach ( $wiersze as $etykieta => $wartosc ) {
 			echo '<tr><th style="width:220px">' . esc_html( $etykieta ) . '</th><td>' . esc_html( $wartosc ) . '</td></tr>';

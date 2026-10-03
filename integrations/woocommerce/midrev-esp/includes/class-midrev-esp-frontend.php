@@ -40,11 +40,22 @@ class Midrev_Esp_Frontend {
 		if ( empty( $c['script_url'] ) || ! wp_http_validate_url( $c['script_url'] ) ) {
 			return;
 		}
-		wp_register_script( 'midrev-esp', $c['script_url'], array(), null, array( 'strategy' => 'async', 'in_footer' => false ) ); // phpcs:ignore WordPress.WP.EnqueuedResourceParameters.MissingVersion -- wersję skryptu trzyma ESP (cache 5 min)
+		wp_register_script(
+			'midrev-esp',
+			$c['script_url'],
+			array(),
+			null,
+			array(
+				'strategy'  => 'async',
+				'in_footer' => false,
+			)
+		); // phpcs:ignore WordPress.WP.EnqueuedResourceParameters.MissingVersion -- wersję skryptu trzyma ESP (cache 5 min)
 		wp_enqueue_script( 'midrev-esp' );
 
 		$kolejka = array();
-		if ( is_user_logged_in() ) {
+		// e-mail zalogowanego w HTML tylko przy zgodzie (WP Consent API „marketing”, review PHP r1);
+		// sam midrev.js i tak wykona identify dopiero po zgodzie na cookies
+		if ( is_user_logged_in() && Midrev_Esp_Tracker::can_track() ) {
 			$email = sanitize_email( wp_get_current_user()->user_email );
 			if ( $email ) {
 				$kolejka[] = array( 'identify', array( 'email' => $email ) );
