@@ -31,6 +31,7 @@ import {
   UUID_ZERO,
   ZAKLADKA_SKANU_MIN,
 } from "../../domain/automatyzacje/wyzwalanie";
+import { kontekstSklepuMaila } from "../katalog/kontekst-maila";
 import { BladSzablonu, oczyscTemat, renderujHtml, renderujTemat, zbudujKontekst } from "../../domain/email/szablon";
 import { ponowneWejscieDostepne } from "./ponowne-wejscie";
 import { wlasciwosciWyzwalacza, zrodloZdarzen } from "./zrodlo-zdarzen";
@@ -607,6 +608,11 @@ async function zbudujWiadomoscWezla(
   if (migawka.szablon === "liquid") {
     const wlasciwosci = u.trigger_event_id ? await zdarzenieUczestnika(klient, tenantId, u, oto) : null;
     const ctx = zbudujKontekst({ zdarzenie: wlasciwosci, profil: prof[0], organizacja: oto.organizacja });
+    // blok „Produkty z koszyka”: koszyk osoby i produkty ze zdarzenia, aktualne w chwili budowy maila
+    const potrzebne = { cart: /\bcart\./.test(trescZrodlo), products: /\bproducts\./.test(trescZrodlo) };
+    if (potrzebne.cart || potrzebne.products) {
+      Object.assign(ctx, await kontekstSklepuMaila(klient, tenantId, u.profile_id, wlasciwosci, potrzebne));
+    }
     try {
       temat = renderujTemat(tematZrodlo, ctx);
       tresc = renderujHtml(trescZrodlo, ctx);

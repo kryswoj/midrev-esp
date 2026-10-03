@@ -12,6 +12,7 @@ import {
   PanelTop,
   Share2,
   ShoppingBag,
+  ShoppingCart,
   TicketPercent,
   Type,
   type LucideIcon,
@@ -27,6 +28,7 @@ export const NAZWY_BLOKOW: Record<TypBloku, string> = {
   odstep: "Odstęp",
   kolumny: "Dwie kolumny",
   produkt: "Produkt",
+  koszyk: "Produkty z koszyka",
   kod: "Kod rabatowy",
   social: "Social",
   stopka: "Stopka",
@@ -42,6 +44,7 @@ export const IKONY_BLOKOW: Record<TypBloku, LucideIcon> = {
   odstep: MoveVertical,
   kolumny: Columns2,
   produkt: ShoppingBag,
+  koszyk: ShoppingCart,
   kod: TicketPercent,
   social: Share2,
   stopka: PanelBottom,
@@ -50,7 +53,7 @@ export const IKONY_BLOKOW: Record<TypBloku, LucideIcon> = {
 
 const GRUPY: { tytul: string; typy: TypBloku[] }[] = [
   { tytul: "Podstawowe", typy: ["tekst", "obraz", "przycisk", "separator", "odstep", "kolumny"] },
-  { tytul: "Sklep", typy: ["produkt", "kod", "social"] },
+  { tytul: "Sklep", typy: ["koszyk", "produkt", "kod", "social"] },
   { tytul: "Ramy maila", typy: ["naglowek", "stopka", "html"] },
 ];
 
@@ -81,10 +84,12 @@ function Kafel({ typ, onDodaj, zablokowane }: { typ: TypBloku; onDodaj: (typ: Ty
   );
 }
 
-export function Biblioteka({ onDodaj, zablokowane }: { onDodaj: (typ: TypBloku) => void; zablokowane: boolean }) {
+/** `dynamiczne`: edytor maila automatyzacji (blok „Produkty z koszyka” wypełnia silnik flow). */
+export function Biblioteka({ onDodaj, zablokowane, dynamiczne = false }: { onDodaj: (typ: TypBloku) => void; zablokowane: boolean; dynamiczne?: boolean }) {
+  const grupy = GRUPY.map((g) => ({ ...g, typy: g.typy.filter((t) => dynamiczne || t !== "koszyk") }));
   return (
     <div className="space-y-5 p-4">
-      {GRUPY.map((g) => (
+      {grupy.map((g) => (
         <section key={g.tytul}>
           <h3 className="etykieta mb-2.5">{g.tytul}</h3>
           <div className="grid grid-cols-2 gap-2">

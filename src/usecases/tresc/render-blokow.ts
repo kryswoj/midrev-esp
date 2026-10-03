@@ -52,6 +52,8 @@ interface Kontekst {
   font: string;
   szerTresci: number;
   uwagi: string[];
+  /** treść automatyzacji: zmienne liquid (koszyk, produkt ze zdarzenia) podstawi silnik flow */
+  dynamiczne: boolean;
 }
 
 const PRZERWA = "&#847;&zwnj;&nbsp;".repeat(40);
@@ -224,6 +226,45 @@ function trescBloku(k: Kontekst, blok: Blok, tloBloku: string): string {
       }
       return czesci.join("");
     }
+    case "koszyk": {
+      // Lista wstawiana PRZY WYSYŁCE (liquid): `cart` = koszyk osoby z `carts` (porzucony koszyk
+      // i checkout), `products` = produkt(y) ze zdarzenia wyzwalającego (przeglądany produkt).
+      // Kontekst buduje silnik automatyzacji (przetworz-zdarzenia.ts); każda wartość jest
+      // escapowana przez liquid, adresy poza http(s) usuwa sanityzacja po renderze. Bez
+      // koszyka (kampania, koszyk po zakupie) blok znika w całości.
+      if (!k.dynamiczne) {
+        // kampania nie ma osoby ani zdarzenia, a jej treść nie przechodzi przez liquid:
+        // surowe znaczniki trafiłyby do odbiorców
+        k.uwagi.push("Blok „Produkty z koszyka” działa tylko w mailach automatyzacji, w kampanii go nie będzie.");
+        return "";
+      }
+      const zrodlo = blok.zrodlo === "koszyk" ? "cart" : "products";
+      const al = wyrownanieTabeli(blok.wyrownanie);
+      const lista = blok.zrodlo === "koszyk" ? "cart.items" : "products.items";
+      const wiersz =
+        `<tr>` +
+        `<td width="88" valign="top" style="padding:0 16px 16px 0">{% if p.image_url %}<a href="{{ p.url }}" target="_blank"><img src="{{ p.image_url }}" alt="{{ p.title }}" width="80" style="display:block;width:80px;height:auto;border:0;border-radius:8px"></a>{% endif %}</td>` +
+        `<td valign="top" style="padding:0 0 16px;font-family:${k.font};font-size:15px;line-height:22px;color:${kolorNaTle};text-align:left">` +
+        `<a href="{{ p.url }}" target="_blank" style="color:${kolorNaTle};font-weight:600;text-decoration:none">{{ p.title }}</a>` +
+        (blok.pokazCeny ? `<div style="opacity:0.8">{% if p.qty > 1 %}{{ p.qty }} × {% endif %}{{ p.price }}</div>` : "") +
+        `</td></tr>`;
+      const tytul = blok.tytul.trim()
+        ? `<div style="margin:0 0 14px;font-family:${k.font};font-size:18px;line-height:26px;font-weight:600;color:${kolorNaTle};text-align:${al}">${escapuj(blok.tytul)}</div>`
+        : "";
+      // przycisk: link z koszyka (link powrotu) albo z produktu; wstawiany liquidem, więc
+      // poza `bezpiecznyUrl` panelu - sanityzacja po renderze zostawia tylko http(s)
+      const cel = blok.zrodlo === "koszyk" ? "{{ cart.url }}" : "{{ products.url }}";
+      const guzik = blok.przyciskTekst.trim()
+        ? `{% if ${zrodlo}.url %}<table role="presentation" border="0" cellspacing="0" cellpadding="0" align="${al}" style="border-collapse:separate"><tr><td align="center" bgcolor="${k.s.kolorMarki}" style="border-radius:8px;background-color:${k.s.kolorMarki}">` +
+          `<a href="${cel}" target="_blank" style="display:inline-block;padding:12px 24px;font-family:${k.font};font-size:16px;line-height:20px;font-weight:600;color:${tekstNaTle(k.s.kolorMarki)};text-decoration:none;border-radius:8px;background-color:${k.s.kolorMarki}">${escapuj(blok.przyciskTekst)}</a>` +
+          `</td></tr></table>{% endif %}`
+        : "";
+      return (
+        `{% if ${zrodlo} and ${lista}.size > 0 %}${tytul}` +
+        `<table role="presentation" border="0" cellspacing="0" cellpadding="0" width="100%" style="border-collapse:collapse">` +
+        `{% for p in ${lista} limit:${blok.maks} %}${wiersz}{% endfor %}</table>${guzik}{% endif %}`
+      );
+    }
     case "kod": {
       const ramka = bezpiecznyKolor(blok.kolorRamki, k.s.kolorMarki);
       const tlo = bezpiecznyKolor(blok.tloKodu, "#f4eefc");
@@ -302,7 +343,7 @@ function arkusz(s: StyleMaila): string {
  * `preheader` ląduje jako ukryta pierwsza linijka: silnik wysyłki go nie wstawia,
  * a bez niej skrzynka pokazuje w podglądzie pierwsze słowa treści albo alt logo.
  */
-export function renderujDokument(dokument: DokumentMaila, opcje: { preheader?: string | null } = {}): WynikRenderu {
+export function renderujDokument(dokument: DokumentMaila, opcje: { preheader?: string | null; dynamiczne?: boolean } = {}): WynikRenderu {
   const s: StyleMaila = {
     ...STYLE_DOMYSLNE,
     ...dokument.style,
@@ -314,7 +355,7 @@ export function renderujDokument(dokument: DokumentMaila, opcje: { preheader?: s
   };
   const k: Kontekst = { s, font: (KROJE[s.kroj] ?? KROJE.systemowy).stos, // wymiary w pikselach (atrybut width obrazów, szerokość VML) liczone od REALNEJ
     // szerokości treści w karcie silnika, a nie od deklarowanej szerokości maila
-    szerTresci: Math.min(s.szerokosc, SZEROKOSC_TRESCI), uwagi: [] };
+    szerTresci: Math.min(s.szerokosc, SZEROKOSC_TRESCI), uwagi: [], dynamiczne: opcje.dynamiczne === true };
   const wiersze = dokument.bloki.map((b) => wiersz(k, b)).join("");
   for (const p of przykladoweDane(dokument)) k.uwagi.push(`W treści zostały przykładowe dane: ${p}. Zastąp je swoimi albo usuń.`);
   const preheader = (opcje.preheader ?? "").trim();

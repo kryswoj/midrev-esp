@@ -396,7 +396,7 @@ export async function utworzZBiblioteki(tenantId: string, klucz: string, opcje: 
         e.akapity,
         e.przycisk ? { tekst: e.przycisk.tekst, link: `${opcje.sklepUrl.replace(/\/$/, "")}${e.przycisk.sciezka}` } : undefined,
       );
-      const render = renderujDokument(dokument);
+      const render = renderujDokument(dokument, { dynamiczne: true });
       const { rows } = await klient.query(
         `insert into journeys (tenant_id, name, subject, content, flow_id, node_id)
          values ($1, $2, $3, $4, $5, '') returning id`,
@@ -727,7 +727,7 @@ export async function zapiszWiadomosc(
     let uwagi: string[] = [];
     let html = String((rows[0].content as any)?.html ?? "");
     if (dokument) {
-      const render = renderujDokument(dokument);
+      const render = renderujDokument(dokument, { dynamiczne: true });
       uwagi = render.uwagi;
       html = render.html;
       nowaTresc = { html, wersjaSchematu: dokument.wersjaSchematu, style: dokument.style, bloki: dokument.bloki };

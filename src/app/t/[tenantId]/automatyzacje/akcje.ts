@@ -206,7 +206,7 @@ export async function podgladWiadomosciFlowAkcja(
     "select name, sender_company_name, sender_postal_address, sender_tax_id from tenants where id = $1",
     [tenantId],
   );
-  const render = renderujDokument(przygotowany.dokument);
+  const render = renderujDokument(przygotowany.dokument, { dynamiczne: true });
   const { html } = zlozWiadomosc({
     trescHtml: render.html,
     clickToken: "podglad",

@@ -313,9 +313,9 @@ export function EdytorWiadomosci({ tenantId, flowId, emailId, flowName, nazwaSta
   const widocznyWskaznik = wskaznik !== null && !(indeksPrzeciaganego !== -1 && (wskaznik === indeksPrzeciaganego || wskaznik === indeksPrzeciaganego + 1)) ? wskaznik : null;
   const nazwaPrzeciaganego = przeciagany ? `Upuść tutaj: ${NAZWY_BLOKOW[przeciagany.typ]}` : "";
 
-  const uwagiDokumentu = useMemo(() => renderujDokument(dok).uwagi, [dok]);
+  const uwagiDokumentu = useMemo(() => renderujDokument(dok, { dynamiczne: true }).uwagi, [dok]);
   const blokZaznaczony = dok.bloki.find((b) => b.id === zaznaczony) ?? null;
-  const uwagiBloku = useMemo(() => (blokZaznaczony ? renderujDokument({ ...dok, bloki: [blokZaznaczony] }).uwagi : []), [blokZaznaczony, dok]);
+  const uwagiBloku = useMemo(() => (blokZaznaczony ? renderujDokument({ ...dok, bloki: [blokZaznaczony] }, { dynamiczne: true }).uwagi : []), [blokZaznaczony, dok]);
 
   const stanZapisu = zapis.trwa ? <span className="flex items-center gap-1.5 text-[var(--color-tekst-2)]"><Loader2 size={14} className="animate-spin" /> Zapisuję…</span>
     : zapis.blad ? <button type="button" onClick={() => void zapisz()} className="flex items-center gap-1.5 font-medium text-[var(--color-blad)]" role="alert"><AlertTriangle size={14} /> Nie zapisano. Ponów</button>
@@ -381,7 +381,7 @@ export function EdytorWiadomosci({ tenantId, flowId, emailId, flowName, nazwaSta
       ) : null}
 
       <div className="flex min-h-0 flex-1">
-        {tryb === "edycja" ? <aside className="w-[248px] shrink-0 overflow-y-auto border-r border-[var(--color-linia)] bg-[var(--color-panel)]" aria-label="Biblioteka bloków"><Biblioteka onDodaj={(t) => dodaj(t)} zablokowane={false} /></aside> : null}
+        {tryb === "edycja" ? <aside className="w-[248px] shrink-0 overflow-y-auto border-r border-[var(--color-linia)] bg-[var(--color-panel)]" aria-label="Biblioteka bloków"><Biblioteka onDodaj={(t) => dodaj(t)} zablokowane={false} dynamiczne /></aside> : null}
         <main ref={plotnoRef} className="min-w-0 flex-1 overflow-y-auto bg-[#e9ecf0]" aria-label="Płótno maila">
           {tryb === "podglad" ? (
             <div className="flex min-h-full justify-center px-6 py-8">
