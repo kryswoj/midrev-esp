@@ -1,7 +1,7 @@
 import { getPool } from "../../adapters/db/pool";
 import { pobierzWynikBulk, stanBulk, uruchomBulk, zapytanieBulk, zlozJsonl, type EtapBulk } from "../../adapters/store/shopify/bulk";
 import { BladDostepuShopify, BladShopify } from "../../adapters/store/shopify/graphql";
-import { klientZBulk, produktZBulk, zamowienieZBulk } from "../../adapters/store/shopify/mapowanie";
+import { klientZBulk, produktZBulk, stanZgody, zamowienieZBulk } from "../../adapters/store/shopify/mapowanie";
 import { dodajZadanie } from "../../jobs/kolejka";
 import { wyslijAlert } from "../../jobs/alerty";
 import { profilPoEmailu, upsertProfilKlienta, upsertZamowienie } from "../przetworz-zdarzenie";
@@ -256,6 +256,23 @@ async function zapiszEtap(
           const z = zamowienieZBulk(x.wezel, x.dzieci);
           if (od && z.occurredAt.getTime() < od.getTime()) continue;
           const w = await upsertZamowienie(klient, tenantId, storeId, z, { kanal: "import", ...OPCJE_UPSERTU_SHOPIFY });
+          // wypis kupującego, którego na etapie „klienci” jeszcze nie znaliśmy (profil powstał
+          // dopiero z zamówienia): zapisujemy wycofanie, żeby spóźniona starsza zgoda z webhooka
+          // nie wróciła (review integracji, P1). Z zamówienia NIGDY nie nadajemy zgody (FR27).
+          const e = x.wezel?.customer?.defaultEmailAddress;
+          const emailKlienta = typeof e?.emailAddress === "string" ? e.emailAddress.trim().toLowerCase() : null;
+          // tylko gdy profil zamówienia to TEN SAM adres co konto klienta (inny e-mail w zamówieniu = inna osoba w rejestrze)
+          if (w.profileId && emailKlienta && z.email?.trim().toLowerCase() === emailKlienta && stanZgody(e?.marketingState) === "withdrawn") {
+            const kiedyWypisu = typeof e.marketingUpdatedAt === "string" && !Number.isNaN(new Date(e.marketingUpdatedAt).getTime()) ? new Date(e.marketingUpdatedAt) : z.zmodyfikowaneAt;
+            const wz = await zapiszZgodeSklepu(klient, tenantId, w.profileId, {
+              email: emailKlienta,
+              stan: "withdrawn",
+              zrodlo: "shopify",
+              kiedy: kiedyWypisu,
+              szczegol: `import Shopify: emailMarketingConsent unsubscribed (z zamówienia ${z.externalId})`,
+            });
+            if (wz === "zapisana") l.wypisy = (l.wypisy ?? 0) + 1;
+          }
           if (w.nowe) l.noweZamowienia = (l.noweZamowienia ?? 0) + 1;
           else if (w.zaktualizowane) l.zaktualizowaneZamowienia = (l.zaktualizowaneZamowienia ?? 0) + 1;
           else l.duplikaty = (l.duplikaty ?? 0) + 1;

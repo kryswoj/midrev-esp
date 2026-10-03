@@ -71,10 +71,16 @@ export async function utworzSzablonSklepuAkcja(formularz: FormData) {
   if (!(KLUCZE_SZABLONOW_KREATORA as readonly string[]).includes(klucz)) wrocDo(powrot, { blad: "Nieznany szablon." });
   const { sklepyTenanta } = await import("../../../../adapters/db/repozytoria");
   const { kluczStronyTenanta } = await import("../../../../usecases/integracja/klucz-strony");
-  const sklep = (await sklepyTenanta(tenantId)).find((s) => s.status === "connected");
+  // sklep platformy kreatora, z którego przyszła karta (review integracji: przy Woo + Shopify
+  // w jednym tenancie pierwszy połączony sklep dawał maile z linkiem do innego sklepu)
+  const platforma = powrot.endsWith("/sklepy/shopify") ? "shopify" : powrot.endsWith("/sklepy/woocommerce") ? "woocommerce" : null;
+  const polaczone = (await sklepyTenanta(tenantId)).filter((s) => s.status === "connected");
+  const sklep = platforma ? polaczone.find((s) => s.platform === platforma) : polaczone[0];
   const strona = await kluczStronyTenanta(tenantId);
-  const adres = sklep?.base_url ?? (strona?.domeny[0] ? `https://${strona.domeny[0]}` : null);
-  if (!adres) wrocDo(powrot, { blad: "Najpierw połącz sklep albo stronę: maile mają link do Twojego sklepu." });
+  // Shopify: domena główna sklepu (primaryDomain z instalacji), nie *.myshopify.com
+  const domenaShopify = sklep?.platform === "shopify" ? ((sklep.capabilities as { shopify?: { domenaPubliczna?: string | null } } | null)?.shopify?.domenaPubliczna ?? null) : null;
+  const adres = domenaShopify ?? sklep?.base_url ?? (!platforma && strona?.domeny[0] ? `https://${strona.domeny[0]}` : null);
+  if (!adres) wrocDo(powrot, { blad: platforma ? "Najpierw połącz ten sklep: maile mają link do niego." : "Najpierw połącz sklep albo stronę: maile mają link do Twojego sklepu." });
   const w = await utworzZBiblioteki(tenantId, klucz, { sklepUrl: adres });
   if (!w.ok) wrocDo(powrot, { blad: w.blad });
   revalidatePath(powrot);

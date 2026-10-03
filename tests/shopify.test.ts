@@ -498,6 +498,14 @@ describe("Shopify: instalacja, webhooki, RODO, import (baza testowa + atrapa)", 
     await koszyk(drugi, "INNY-SKLEP-1", przed);
     await koszyk(storeA, "cart:PO-ZAKUPIE-1", po);
     await koszyk(storeA, "cart:PRZED-ZAKUPEM-1", przed);
+    // koszyk piksela (bez sklepu) z tym samym tokenem co zamówienie, ale zmieniony PO zamówieniu
+    const piksel = (
+      await pool.query(
+        `insert into carts (tenant_id, store_id, platform_token, profile_id, stage, items, source_updated_at)
+         values ($1, null, 'Z2NwLWV1cm9wZS13ZXN0', $2, 'cart', '[]', $3) returning id`,
+        [tenantA, profileId, po],
+      )
+    ).rows[0].id;
     // spóźniony orders/updated tego samego zamówienia (created_at = zamowione)
     const tekst = FX("zamowienie.json").replace(/2026-10-03T10:20:00\+02:00/g, zamowione.toISOString()).replace("2026-10-03T10:20:05+02:00", new Date().toISOString());
     expect((await postWebhook(webhook("orders/updated", tekst))).status).toBe(200);
@@ -506,6 +514,8 @@ describe("Shopify: instalacja, webhooki, RODO, import (baza testowa + atrapa)", 
     expect(await etap("INNY-SKLEP-1")).toBe("cart");
     expect(await etap("cart:PO-ZAKUPIE-1")).toBe("cart");
     expect(await etap("cart:PRZED-ZAKUPEM-1")).toBe("ordered");
+    expect((await pool.query("select stage from carts where id = $1", [piksel])).rows[0].stage).toBe("cart");
+    await pool.query("delete from carts where id = $1", [piksel]);
     await pool.query("delete from carts where tenant_id = $1 and platform_token = any($2::text[])", [tenantA, ["INNY-SKLEP-1", "cart:PO-ZAKUPIE-1", "cart:PRZED-ZAKUPEM-1"]]);
     await pool.query("delete from stores where id = $1", [drugi]);
   });
@@ -548,6 +558,18 @@ describe("Shopify: instalacja, webhooki, RODO, import (baza testowa + atrapa)", 
     expect((await postWebhook(webhook("customers_email_marketing_consent/update", zgoda("subscribed", "2026-10-03T09:35:00Z")))).status).toBe(200);
     await przetworzSurowe(tenantA);
     expect((await zgody()).map((z) => z.state)).toEqual(["granted", "withdrawn", "withdrawn"]);
+    // wypis osoby, której jeszcze nie znamy: profil bez zgody z zapisanym wycofaniem, a spóźniona
+    // starsza zgoda go nie przebija (review integracji P1)
+    const nowa = (stan: string, kiedy: string) => zgoda(stan, kiedy).replace("jan.kowalski@example.test", "nieznana.wypis@example.test");
+    expect((await postWebhook(webhook("customers_email_marketing_consent/update", nowa("unsubscribed", "2026-10-03T09:40:00Z")))).status).toBe(200);
+    await przetworzSurowe(tenantA);
+    expect((await postWebhook(webhook("customers_email_marketing_consent/update", nowa("subscribed", "2026-10-03T09:35:00Z")))).status).toBe(200);
+    await przetworzSurowe(tenantA);
+    const { rows: n } = await getPool().query(
+      "select c.state from consents c join profiles p on p.tenant_id = c.tenant_id and p.id = c.profile_id where c.tenant_id = $1 and lower(p.email) = 'nieznana.wypis@example.test' order by c.occurred_at",
+      [tenantA],
+    );
+    expect(n.map((x) => x.state)).toEqual(["withdrawn"]);
   });
 
   it("katalog: produkt z webhooka (warianty, cena od, przekreślona), usunięcie = active=false", async () => {
@@ -600,6 +622,15 @@ describe("Shopify: instalacja, webhooki, RODO, import (baza testowa + atrapa)", 
       [tenantA],
     );
     expect(new Date(zg[0].occurred_at).toISOString()).toBe("2025-03-14T08:29:30.000Z");
+    // kupujący z wypisem w Shopify, którego profil powstał dopiero z zamówienia: wycofanie zapisane
+    // z datą ze Shopify (spóźniona starsza zgoda go nie przebije); z zamówienia nigdy zgoda (Anna: jedna)
+    expect(run[0].counters).toMatchObject({ wypisy: 1 });
+    const { rows: wyp } = await getPool().query(
+      "select c.state, c.occurred_at from consents c join profiles p on p.tenant_id = c.tenant_id and p.id = c.profile_id where c.tenant_id = $1 and lower(p.email) = 'piotr@example.test'",
+      [tenantA],
+    );
+    expect(wyp.map((x) => [x.state, new Date(x.occurred_at).toISOString()])).toEqual([["withdrawn", "2025-11-05T12:00:00.000Z"]]);
+    expect(zg).toHaveLength(1);
     // produkt zarchiwizowany w Shopify = nieaktywny
     const { rows: prod } = await getPool().query("select external_id, active from products where tenant_id = $1 and store_id = $2 order by external_id", [tenantA, storeA]);
     expect(prod).toEqual([{ external_id: "632910392", active: true }, { external_id: "632910393", active: false }]);

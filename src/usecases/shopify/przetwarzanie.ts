@@ -216,7 +216,7 @@ async function zamknijKoszyki(k: Kontekst, z: ZamowienieSklepu, profileId: strin
     `update carts set stage = 'ordered', order_external_id = $4, updated_at = now()
       where tenant_id = $1 and stage <> 'ordered' and (
             (store_id = $2 and platform_token = any($3::text[]))
-         or (store_id is null and $5::text is not null and platform_token = $5)
+         or (store_id is null and $5::text is not null and platform_token = $5 and source_updated_at <= $7::timestamptz)
          or ($6::uuid is not null and store_id = $2 and profile_id = $6 and source_updated_at <= $7::timestamptz))`,
     [k.tenantId, k.storeId, tokeny, z.externalId, tokenKoszyka, profileId, z.occurredAt],
   );
@@ -391,13 +391,11 @@ async function zgoda(k: Kontekst, p: any): Promise<boolean> {
   if (!z.email || !z.stan) return false;
   const email = z.email.trim().toLowerCase();
   if (await nagrobek(k.klient, k.tenantId, { email, storeId: k.storeId, externalCustomerId: z.customerId })) return true;
-  let profileId: string | null = null;
-  if (z.stan === "granted") {
-    profileId = (await profilPoEmailu(k.klient, k.tenantId, email, { imie: null, nazwisko: null }))?.profileId ?? null;
-  } else {
-    const { rows } = await k.klient.query<{ id: string }>("select id from profiles where tenant_id = $1 and lower(btrim(email)) = $2", [k.tenantId, email]);
-    profileId = rows[0]?.id ?? null;
-  }
+  // także przy wypisie: osoba nieznana dziś (np. klient bez zamówień) dostaje profil BEZ zgody
+  // z zapisanym wypisem; inaczej spóźniony, starszy „subscribed” przywróciłby zgodę, bo w
+  // rejestrze nie byłoby nowszego wycofania (review integracji, P1). Klient sklepu i tak dostaje
+  // profil z customers/create, więc to nie jest nowa kategoria osób.
+  const profileId = (await profilPoEmailu(k.klient, k.tenantId, email, { imie: null, nazwisko: null }))?.profileId ?? null;
   if (profileId) await zgodaDlaProfilu(k, profileId, z);
   return false;
 }

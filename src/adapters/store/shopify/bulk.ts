@@ -35,7 +35,7 @@ export function zapytanieBulk(etap: EtapBulk, od?: Date): string {
     displayFinancialStatus displayFulfillmentStatus currencyCode
     currentTotalPriceSet { shopMoney { amount currencyCode } }
     totalPriceSet { shopMoney { amount currencyCode } }
-    customer { legacyResourceId firstName lastName defaultEmailAddress { emailAddress } }
+    customer { legacyResourceId firstName lastName defaultEmailAddress { emailAddress marketingState marketingUpdatedAt } }
     billingAddress { firstName lastName }
     lineItems { edges { node {
       id sku name title quantity
