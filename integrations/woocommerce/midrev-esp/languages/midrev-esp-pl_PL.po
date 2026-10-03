@@ -202,3 +202,7 @@ msgstr "Anuluj"
 
 msgid "Pairing is already in progress. Wait a moment and refresh the page."
 msgstr "Parowanie już trwa. Poczekaj chwilę i odśwież stronę."
+
+#, php-format
+msgid "Data goes to: %s (orders, customers, products, carts and newsletter consents)."
+msgstr "Dane trafią do: %s (zamówienia, klienci, produkty, koszyki i zgody na newsletter)."

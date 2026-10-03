@@ -548,6 +548,8 @@ export async function utworzZBiblioteki(tenantId: string, klucz: string, opcje: 
       zrodlo = { rodzaj: "metryka", metryka: { integracja: m.integracja, nazwa: m.nazwa } };
     }
     const reentry = await ponowneWejscieDostepne(klient);
+    const { rows: konto } = await klient.query<{ nazwa: string }>("select coalesce(nullif(btrim(sender_company_name), ''), name) as nazwa from tenants where id = $1", [tenantId]);
+    const nazwaKonta = konto[0]?.nazwa ?? "";
     // nazwa: przy powtorce dopisujemy numer, zamiast odmawiac (drugi sklep tej samej agencji)
     const { rows: nazwy } = await klient.query("select name from flows where tenant_id = $1 and name like $2", [tenantId, `${szablon.name}%`]);
     const zajete = new Set(nazwy.map((r) => r.name));
@@ -574,6 +576,8 @@ export async function utworzZBiblioteki(tenantId: string, klucz: string, opcje: 
         e.przycisk ? { tekst: e.przycisk.tekst, link: `${opcje.sklepUrl.replace(/\/$/, "")}${e.przycisk.sciezka}` } : undefined,
       );
       if (e.produkty) {
+        // maile sklepu zaczynają się nazwą sklepu (logo operator wstawi w edytorze); bez anonimowego szablonu
+        dokument.bloki.unshift({ ...nowyBlok("naglowek", { nazwaSklepu: nazwaKonta }), gora: 16, dol: 8 });
         dokument.bloki.push({ ...nowyBlok("koszyk"), zrodlo: e.produkty.zrodlo, tytul: e.produkty.tytul, przyciskTekst: e.produkty.przycisk, maks: e.produkty.maks });
       }
       const render = renderujDokument(dokument, { dynamiczne: true });

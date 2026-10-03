@@ -262,7 +262,11 @@ function trescBloku(k: Kontekst, blok: Blok, tloBloku: string): string {
       return (
         `{% if ${zrodlo} and ${lista}.size > 0 %}${tytul}` +
         `<table role="presentation" border="0" cellspacing="0" cellpadding="0" width="100%" style="border-collapse:collapse">` +
-        `{% for p in ${lista} limit:${blok.maks} %}${wiersz}{% endfor %}</table>${guzik}{% endif %}`
+        `{% for p in ${lista} limit:${blok.maks} %}${wiersz}{% endfor %}</table>` +
+        (blok.zrodlo === "koszyk" && blok.pokazCeny
+          ? `{% if cart.total != "" %}<div style="margin:0 0 16px;font-family:${k.font};font-size:15px;line-height:22px;font-weight:600;color:${kolorNaTle};text-align:${al}">Razem: {{ cart.total }}</div>{% endif %}`
+          : "") +
+        `${guzik}{% endif %}`
       );
     }
     case "kod": {

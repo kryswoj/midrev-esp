@@ -71,6 +71,31 @@ export default async function PolaczWoo({ params, searchParams }: { params: Prom
               description="Zalecane. Wszystko, co daje Klaviyo na WooCommerce."
               action={polaczony ? <Badge ton="ok">{zWtyczka ? "połączony wtyczką" : sklep?.connection_method === "wc_auth" ? "wersja podstawowa" : "połączony kluczami"}</Badge> : undefined}
             />
+            {zWtyczka ? (
+              <details className="border-b border-[var(--color-linia-0)] px-6 py-3 max-md:px-4">
+                <summary className="cursor-pointer text-[14px] font-medium">
+                  ✓ Wtyczka zainstalowana i połączona z {sklep!.base_url.replace(/^https?:\/\//, "")} <span className="font-normal text-[var(--color-tekst-2)]">· pobierz ponownie albo połącz inny sklep</span>
+                </summary>
+                <div className="-mx-6 max-md:-mx-4">
+            <Krok numer={1} id="pobierz" gotowy={zWtyczka} tytul="Pobierz wtyczkę" opis="Plik zip, który wgrasz do WordPressa. Wymaga WooCommerce 8 lub nowszego.">
+                <a className="przycisk" href="/integracja/midrev-esp-woocommerce.zip" download>
+                  Pobierz wtyczkę{wersja ? ` (wersja ${wersja})` : ""}
+                </a>
+              </Krok>
+              <Krok numer={2} id="zainstaluj" gotowy={zWtyczka} tytul="Zainstaluj w sklepie" opis="W panelu WordPressa sklepu.">
+                <ol className="list-decimal space-y-1 pl-5 text-[14px] leading-[21px] text-[var(--color-tekst-2)]">
+                  <li>Wtyczki → Dodaj nową → <b>Wyślij wtyczkę na serwer</b>.</li>
+                  <li>Wybierz pobrany plik i kliknij <b>Zainstaluj</b>, potem <b>Włącz</b>.</li>
+                  <li>W menu WooCommerce pojawi się pozycja <b>MidRev ESP</b>.</li>
+                </ol>
+              </Krok>
+              <Krok numer={3} id="kod" gotowy={zWtyczka} tytul="Połącz kodem" opis="Wtyczka sama utworzy klucz REST i powiadomienia o zamówieniach.">
+                <KodParowania tenantId={tenantId} adresDomyslny={sklep?.base_url ?? ""} />
+              </Krok>
+                  </div>
+              </details>
+            ) : (
+              <>
             <Krok numer={1} id="pobierz" gotowy={zWtyczka} tytul="Pobierz wtyczkę" opis="Plik zip, który wgrasz do WordPressa. Wymaga WooCommerce 8 lub nowszego.">
               <a className="przycisk" href="/integracja/midrev-esp-woocommerce.zip" download>
                 Pobierz wtyczkę{wersja ? ` (wersja ${wersja})` : ""}
@@ -86,6 +111,8 @@ export default async function PolaczWoo({ params, searchParams }: { params: Prom
             <Krok numer={3} id="kod" gotowy={zWtyczka} tytul="Połącz kodem" opis="Wtyczka sama utworzy klucz REST i powiadomienia o zamówieniach.">
               <KodParowania tenantId={tenantId} adresDomyslny={sklep?.base_url ?? ""} />
             </Krok>
+              </>
+            )}
             <Krok numer={4} id="sprawdz" tytul="Sprawdź połączenie" opis="Otwórz sklep, obejrzyj produkt, dodaj go do koszyka. Kropki zapalą się same.">
               <SprawdzPolaczenie tenantId={tenantId} />
             </Krok>
@@ -111,9 +138,9 @@ export default async function PolaczWoo({ params, searchParams }: { params: Prom
             </Card>
           ) : null}
 
-          <GotoweAutomatyzacje tenantId={tenantId} powrot={`/t/${tenantId}/sklepy/woocommerce`} uwaga={polaczony && !zWtyczka ? "Bez wtyczki porzucony koszyk i zamówienie nie mają zdarzeń, więc te automatyzacje nie ruszą." : undefined} />
+          {polaczony ? <GotoweAutomatyzacje tenantId={tenantId} powrot={`/t/${tenantId}/sklepy/woocommerce`} uwaga={!zWtyczka ? "Bez wtyczki porzucony koszyk i zamówienie nie mają zdarzeń, więc te automatyzacje nie ruszą." : undefined} /> : null}
 
-          <Card id="bez-wtyczki" className="scroll-mt-24">
+          <Card id="bez-wtyczki" className={`scroll-mt-24 ${zWtyczka ? "hidden" : ""}`}>
             <CardHeader title="Bez wtyczki: wersja podstawowa" description="Gdy nie możesz instalować wtyczek. Jedno kliknięcie „Zatwierdź” w sklepie daje zamówienia, klientów i katalog." />
             <div className="space-y-4 p-6 max-md:p-4">
               <ul className="grid gap-1 text-[13px] leading-5 text-[var(--color-tekst-2)] sm:grid-cols-2">

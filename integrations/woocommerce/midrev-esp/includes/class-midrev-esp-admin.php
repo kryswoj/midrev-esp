@@ -235,6 +235,8 @@ class Midrev_Esp_Admin {
 			echo '<h2>' . esc_html__( 'Confirm the connection', 'midrev-esp' ) . '</h2>';
 			/* translators: 1: store address, 2: MidRev account name */
 			echo '<p>' . esc_html( sprintf( __( 'The store %1$s will be connected to the MidRev account: %2$s.', 'midrev-esp' ), wp_parse_url( home_url(), PHP_URL_HOST ), (string) $oczekujace['konto'] ) ) . '</p>';
+			/* translators: %s: MidRev ESP host */
+			echo '<p>' . esc_html( sprintf( __( 'Data goes to: %s (orders, customers, products, carts and newsletter consents).', 'midrev-esp' ), (string) wp_parse_url( Midrev_Esp_Api::api_url(), PHP_URL_HOST ) ) ) . '</p>';
 			echo '<p class="description">' . esc_html__( 'The plugin will create a WooCommerce REST API key (read/write) for MidRev ESP. Confirm only if you recognise this account.', 'midrev-esp' ) . '</p>';
 			echo '<p>';
 			self::action_button( 'midrev_esp_confirm', __( 'Confirm and connect', 'midrev-esp' ), 'button button-primary' );
@@ -297,6 +299,8 @@ class Midrev_Esp_Admin {
 		if ( $kolej > 0 ) {
 			self::action_button( 'midrev_esp_flush', __( 'Send waiting events now', 'midrev-esp' ) );
 		}
+		echo '</p>';
+		echo '<hr style="margin:16px 0" /><p class="description">';
 		self::action_button( 'midrev_esp_disconnect', __( 'Disconnect', 'midrev-esp' ), 'button button-link-delete', __( 'Disconnect the store from MidRev ESP? Orders and cart events will stop flowing.', 'midrev-esp' ) );
 		echo '</p></div>';
 	}
