@@ -1331,3 +1331,16 @@ export async function nazwyWiadomosci(tenantId: string, flowId: string): Promise
 }
 
 export { noweIdWezla, wstawWezel };
+
+/** Stan szablonów kreatora: automatyzacja z szablonu (po nazwie) i jej status; null = nieutworzona. */
+export async function stanSzablonowKreatora(tenantId: string): Promise<{ klucz: string; nazwa: string; opis: string; kroki: string[]; flow: { id: string; status: StatusAutomatyzacji } | null }[]> {
+  const { rows } = await getPool().query<{ id: string; name: string; status: StatusAutomatyzacji }>(
+    "select id, name, status from flows where tenant_id = $1 order by created_at",
+    [tenantId],
+  );
+  return KLUCZE_SZABLONOW_KREATORA.map((k) => {
+    const s = szablonBiblioteki(k)!;
+    const f = rows.find((r) => r.name === s.name || r.name.startsWith(`${s.name} (`));
+    return { klucz: k, nazwa: s.name, opis: s.opis, kroki: s.kroki, flow: f ? { id: f.id, status: f.status } : null };
+  });
+}

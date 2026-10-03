@@ -9,6 +9,8 @@ import { importujAkcja } from "../../../akcje";
 import { Alert, Badge, Button, Card, PrzyciskFormularza, CardBody, CardHeader, EmptyState, Icon, MobileList, MobileListItem, Table, TBody, Td, Th, THead } from "../../../ui";
 import { Komunikat, Naglowek } from "../naglowek";
 import { odswiezWebhokiAkcja } from "./akcje";
+import { KafleSklepow } from "./kafle";
+import { getPool } from "../../../../adapters/db/pool";
 import { FormularzPodlaczenia } from "./formularz-podlaczenia";
 
 export const dynamic = "force-dynamic";
@@ -55,6 +57,11 @@ export default async function Sklepy({
   await wymaganyTenant(tenantId);
   const { ok, blad } = await searchParams;
   const [sklepy, kluczStrony] = await Promise.all([sklepyZeStanemWebhookow(tenantId), kluczStronyTenanta(tenantId)]);
+  const { rows: metody } = await getPool().query<{ connection_method: string | null }>(
+    "select connection_method from stores where tenant_id = $1 and platform = 'woocommerce' and status = 'connected' order by created_at desc limit 1",
+    [tenantId],
+  );
+  const woo = metody[0] ?? null;
 
   return (
     <>
@@ -66,29 +73,17 @@ export default async function Sklepy({
 
       <div className="tresc-strony">
         <div className="flex w-full max-w-[900px] flex-col gap-6">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <a href="#woocommerce" className="karta flex items-start gap-3 p-4 transition-colors hover:border-[var(--color-akcent)]">
-              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-[9px] bg-[var(--color-akcent-tlo)] text-[var(--color-akcent)]"><Icon name="sklep" size={18} /></span>
-              <span className="min-w-0">
-                <span className="block text-[14px] font-semibold text-[var(--color-tekst)]">WooCommerce</span>
-                <span className="block text-[13px] leading-[19px] text-[var(--color-tekst-2)]">Zamówienia, klienci i webhooki przez klucze REST.</span>
-              </span>
-            </a>
-            <a href={`/t/${tenantId}/sklepy/wlasna-strona`} className="karta flex items-start gap-3 p-4 transition-colors hover:border-[var(--color-akcent)]">
-              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-[9px] bg-[var(--color-akcent-tlo)] text-[var(--color-akcent)]"><Icon name="formularz" size={18} /></span>
-              <span className="min-w-0">
-                <span className="flex items-center gap-2 text-[14px] font-semibold text-[var(--color-tekst)]">
-                  Własna strona / inny sklep
-                  {kluczStrony?.domeny.length ? <Badge ton="ok">podłączona</Badge> : null}
-                </span>
-                <span className="block text-[13px] leading-[19px] text-[var(--color-tekst-2)]">Jeden kod jak w Klaviyo: Magento, PrestaShop, IdoSell, własny sklep, landing.</span>
-              </span>
-            </a>
-          </div>
+          <KafleSklepow
+            tenantId={tenantId}
+            stany={{
+              woocommerce: woo ? (woo.connection_method === "wc_auth" ? "podstawowa" : "polaczony") : null,
+              wlasna: kluczStrony?.domeny.length ? "polaczony" : null,
+            }}
+          />
           {sklepy.length === 0 ? (
             <Card>
               <CardHeader title="Podłączony sklep" description="Źródło zamówień, profili i zdarzeń dla tego konta." />
-              <EmptyState icon="sklep" title="Sklep nie jest jeszcze podłączony" description="Panel nie ma jeszcze skąd pobierać zamówień ani profili. Użyj formularza poniżej, aby połączyć WooCommerce." />
+              <EmptyState icon="sklep" title="Sklep nie jest jeszcze podłączony" description="Panel nie ma jeszcze skąd pobierać zamówień ani profili. Wybierz platformę wyżej." />
             </Card>
           ) : (
             <div className="space-y-6">
@@ -165,7 +160,7 @@ export default async function Sklepy({
           )}
 
           <Card id="woocommerce">
-            <CardHeader title={sklepy.length === 0 ? "Podłącz sklep WooCommerce" : "Dodaj kolejny sklep WooCommerce"} description="Klucze są sprawdzane przed zapisaniem, a po połączeniu panel zakłada wymagane webhooki." />
+            <CardHeader title="WooCommerce: klucze REST ręcznie" description="Dla programisty. Prościej: kafel WooCommerce wyżej (wtyczka, bez kopiowania kluczy)." />
             <CardBody className="p-0 max-md:p-0">
               <FormularzPodlaczenia tenantId={tenantId} />
             </CardBody>
