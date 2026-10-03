@@ -537,6 +537,30 @@ export function WidokBloku({ blok, styl, mobile, tylkoDoOdczytu, onZmiana, edycj
           style={{ fontFamily: font, fontSize: 12, lineHeight: "19px", color: bezpiecznyKolor(blok.kolor, "#868d97"), textAlign: WYROWNANIE[blok.wyrownanie] }}
         />
       );
+    case "koszyk": {
+      // płótno pokazuje KSZTAŁT: prawdziwe produkty wstawi silnik automatyzacji przy wysyłce
+      const przyklad = [{ n: "Produkt z koszyka", c: "129,00 zł" }, { n: "Drugi produkt", c: "2 × 49,00 zł" }].slice(0, Math.min(2, blok.maks));
+      return (
+        <div style={{ fontFamily: font, color: kolorNaTle }}>
+          {blok.tytul.trim() ? <div style={{ fontSize: 18, lineHeight: "26px", fontWeight: 600, marginBottom: 14, textAlign: WYROWNANIE[blok.wyrownanie] }}>{blok.tytul}</div> : null}
+          {przyklad.map((p) => (
+            <div key={p.n} className="mb-4 flex items-start gap-4">
+              <div className="grid h-20 w-20 shrink-0 place-items-center rounded-lg bg-[#eef0f3] text-[#868d97]"><ShoppingBag size={22} /></div>
+              <div style={{ fontSize: 15, lineHeight: "22px" }}>
+                <div style={{ fontWeight: 600 }}>{p.n}</div>
+                {blok.pokazCeny ? <div style={{ opacity: 0.8 }}>{p.c}</div> : null}
+              </div>
+            </div>
+          ))}
+          {blok.przyciskTekst.trim() ? (
+            <div className="flex" style={{ justifyContent: FLEX[blok.wyrownanie] }}>
+              <span style={{ display: "inline-block", padding: "12px 24px", borderRadius: 8, background: styl.kolorMarki, color: tekstNaTle(styl.kolorMarki), fontWeight: 600, fontSize: 16 }}>{blok.przyciskTekst}</span>
+            </div>
+          ) : null}
+          <p className="mt-3 text-[12px] text-[#868d97]">{blok.zrodlo === "koszyk" ? "Przykład. W mailu: produkty z koszyka tej osoby i link, który odtwarza koszyk." : "Przykład. W mailu: produkt, który osoba oglądała."}</p>
+        </div>
+      );
+    }
     case "html":
       return <PodgladHtml html={blok.html} />;
   }

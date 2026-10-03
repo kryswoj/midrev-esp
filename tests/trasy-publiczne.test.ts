@@ -47,6 +47,13 @@ const OCZEKIWANE_PUBLICZNE = new Set([
   "/client/events",
   "/client/profiles",
   "/client/subscriptions",
+  // wtyczka WooCommerce (0046): parowanie kodem, zdarzenia/ping/rozłączenie z podpisem HMAC, /wc-auth
+  "/api/integracje/woocommerce/paruj",
+  "/api/integracje/woocommerce/paruj/sprawdz",
+  "/api/integracje/woocommerce/wc-auth",
+  "/api/integracje/woocommerce/[storeId]/zdarzenia",
+  "/api/integracje/woocommerce/[storeId]/ping",
+  "/api/integracje/woocommerce/[storeId]/rozlacz",
 ]);
 
 /** Wzorce tras wymagające sesji panelu. */

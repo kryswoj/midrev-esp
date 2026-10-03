@@ -3,7 +3,9 @@ import { przetworzZdarzenieApi, RODZAJ_JOBA } from "../usecases/api/przyjmij-zda
 import { dosynchronizujOknoDeployu, dosynchronizujStareZdarzenia } from "../usecases/zdarzenia/lustro";
 import { utrzymajPartycjeMetryk } from "../usecases/zdarzenia/partycje";
 import { przetworzZadanieKlienta, RODZAJ_JOBA_KLIENTA } from "../usecases/integracja/klient-api";
+import { przetworzZdarzenieWtyczki, RODZAJ_JOBA_WTYCZKI } from "../usecases/integracja/woo-wtyczka";
 import { tikFeedow } from "../usecases/katalog/katalog";
+import { zaplanujKatalogiSklepow } from "../usecases/sklep/kreator-sklepu";
 import type { OpcjeAlertu } from "./alerty";
 import type { Zadanie } from "./kolejka";
 
@@ -27,12 +29,17 @@ export const HANDLERY_ZDARZEN: Record<string, (z: Zadanie) => Promise<void>> = {
   async [RODZAJ_JOBA_KLIENTA](z) {
     await przetworzZadanieKlienta(z.tenant_id, String(z.payload.rawEventId));
   },
+  // wtyczka WooCommerce (0046): Added to Cart, Started Checkout, identify, zgoda z checkoutu
+  async [RODZAJ_JOBA_WTYCZKI](z) {
+    await przetworzZdarzenieWtyczki(z.tenant_id, String(z.payload.rawEventId));
+  },
 };
 
 /** Kanał surowych żądań → rodzaj joba, który je przetwarza (ponawianie zaległych). */
 const KANALY_PONAWIANIA: [string, string][] = [
   ["api", RODZAJ_JOBA],
   ["client", RODZAJ_JOBA_KLIENTA],
+  ["plugin", RODZAJ_JOBA_WTYCZKI],
 ];
 
 const MAKS_PONOWIEN = 3;
@@ -132,6 +139,10 @@ export function zaplanujZdarzenia(opcje: {
     const w = await tikFeedow();
     if (w.sprawdzone) console.log(`[${workerId}] feedy produktów: sprawdzone ${w.sprawdzone}, z błędem ${w.bledy}`);
   }
+  async function katalogiSklepow() {
+    const n = await zaplanujKatalogiSklepow();
+    if (n) console.log(`[${workerId}] katalogi sklepów: zaplanowane synchronizacje ${n}`);
+  }
   const start = opcje.teraz?.() ?? Date.now();
   async function oknoDeployu() {
     // tylko przez pierwsze 30 min pracy workera: potem stary kod już nie działa, a przebieg
@@ -150,6 +161,8 @@ export function zaplanujZdarzenia(opcje: {
       { nazwa: "partycje metryk", ms: 24 * 3600_000, praca: partycje },
       // feedy produktów (0044): każdy wg własnego interwału (domyślnie 6 h), sprawdzane co 15 min
       { nazwa: "feedy produktów", ms: 15 * 60_000, praca: feedy },
+      // katalogi podłączonych sklepów (0046): co 6 h przyrostowo, sprawdzane co 30 min
+      { nazwa: "katalogi sklepów", ms: 30 * 60_000, praca: katalogiSklepow },
       { nazwa: "zaległe zdarzenia API", ms: 15 * 60_000, praca: zalegle },
       { nazwa: "strumień: okno deployu", ms: 60_000, praca: oknoDeployu },
     ],

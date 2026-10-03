@@ -126,6 +126,17 @@ export function WlasciwosciBloku({ blok, zmien, uwagi, styl }: { blok: Blok; zmi
             <Wyrownanie wartosc={blok.wyrownanie} onZmiana={(wyrownanie) => zmien({ wyrownanie })} />
           </Sekcja>
         );
+      case "koszyk":
+        return (
+          <Sekcja tytul="Produkty z koszyka" opis="Produkty wstawiamy przy wysyłce. Pozycje kupione albo niedostępne nie trafią do maila.">
+            <Segmenty etykieta="Skąd produkty" wartosc={blok.zrodlo} onZmiana={(zrodlo) => zmien({ zrodlo })} opcje={[{ wartosc: "koszyk", etykieta: "z koszyka", opis: "Porzucony koszyk i porzucone zamówienie" }, { wartosc: "zdarzenie", etykieta: "oglądany produkt", opis: "Produkt ze zdarzenia, które uruchomiło automatyzację" }]} />
+            <PoleTekstu etykieta="Tytuł nad produktami" wartosc={blok.tytul} onZmiana={(tytul) => zmien({ tytul }, "tytul")} placeholder="puste = bez tytułu" maks={300} />
+            <Suwak etykieta="Najwyżej produktów" wartosc={blok.maks} onZmiana={(maks) => zmien({ maks })} min={1} maks={10} jednostka="" />
+            <Przelacznik etykieta="Pokaż ceny" wartosc={blok.pokazCeny} onZmiana={(pokazCeny) => zmien({ pokazCeny })} />
+            <PoleTekstu etykieta="Napis na przycisku" wartosc={blok.przyciskTekst} onZmiana={(przyciskTekst) => zmien({ przyciskTekst }, "przyciskTekst")} placeholder="puste = bez przycisku" podpowiedz={blok.zrodlo === "koszyk" ? "Prowadzi do koszyka. Ze sklepu z wtyczką MidRev koszyk otworzy się z produktami na każdym urządzeniu." : "Prowadzi do strony produktu."} maks={300} />
+            <Wyrownanie wartosc={blok.wyrownanie} onZmiana={(wyrownanie) => zmien({ wyrownanie })} />
+          </Sekcja>
+        );
       case "kod":
         return (
           <Sekcja tytul="Kod rabatowy" opis="Kod musi istnieć w sklepie — edytor go nie tworzy.">

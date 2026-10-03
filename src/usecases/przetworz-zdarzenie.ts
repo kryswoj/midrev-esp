@@ -1,11 +1,14 @@
 import type { PoolClient } from "pg";
 import { getPool } from "../adapters/db/pool";
 import { hashAdresu } from "../adapters/hash-adresu";
-import { mapujKlientaWoo, mapujZamowienieWoo } from "../adapters/store/woo/adapter";
+import { definicjaPlatformy, definicjaPoZrodle } from "../adapters/store/rejestr";
+import { DEFINICJA_WOO } from "../adapters/store/woo/definicja";
 import { bytZKlucza } from "../adapters/store/webhooki";
-import type { KlientSklepu, ZamowienieSklepu } from "../domain/store/contract";
+import type { KlientSklepu, PlatformaSklepu, ZamowienieSklepu } from "../domain/store/contract";
 import { wyslijAlert } from "../jobs/alerty";
-import { emitujKlienta, emitujZamowienie } from "./zdarzenia/emisja-sklepu";
+import { zapiszProduktySklepu } from "./katalog/katalog-sklepu";
+import { zamknijKoszykiZamowieniem } from "./katalog/koszyki";
+import { emitujKlienta, emitujStatusZamowienia, emitujZamowienie } from "./zdarzenia/emisja-sklepu";
 
 /**
  * Faza 2 ingestu webhooków (AD-4): surowe zdarzenie z raw_events zamienia się
@@ -41,7 +44,7 @@ export async function przetworzZdarzenie(tenantId: string, rawEventId: string): 
   try {
     await klient.query("begin");
     const { rows } = await klient.query(
-      `select store_id, payload, processed_at, idempotency_key
+      `select store_id, source, payload, processed_at, idempotency_key
          from raw_events where tenant_id = $1 and id = $2
          for update`,
       [tenantId, rawEventId],
@@ -52,6 +55,8 @@ export async function przetworzZdarzenie(tenantId: string, rawEventId: string): 
       return;
     }
 
+    // platforma z `raw_events.source` (port „Sklep”); surowe zdarzenia sprzed portu to Woo
+    const definicja = definicjaPoZrodle(String(zdarzenie.source ?? "")) ?? DEFINICJA_WOO;
     const byt = bytZKlucza(String(zdarzenie.idempotency_key));
     if (byt === null) {
       throw new Error(`raw_event ${rawEventId}: klucz idempotencji bez rozpoznawalnego bytu`);
@@ -64,7 +69,7 @@ export async function przetworzZdarzenie(tenantId: string, rawEventId: string): 
       blad = "anonimizowano";
     } else if (byt === "customer") {
       try {
-        const dane = mapujAlboOdloz(() => mapujKlientaWoo(zdarzenie.payload));
+        const dane = mapujAlboOdloz(() => definicja.mapujKlienta(zdarzenie.payload));
         zaslep = await przetworzKlienta(klient, tenantId, zdarzenie.store_id, dane);
       } catch (b) {
         if (!(b instanceof BladMapowania)) throw b;
@@ -72,14 +77,23 @@ export async function przetworzZdarzenie(tenantId: string, rawEventId: string): 
       }
     } else if (byt === "order") {
       try {
-        const zamowienie = mapujAlboOdloz(() => mapujZamowienieWoo(zdarzenie.payload));
-        zaslep = await przetworzZamowienie(klient, tenantId, zdarzenie.store_id, zamowienie);
+        const zamowienie = mapujAlboOdloz(() => definicja.mapujZamowienie(zdarzenie.payload));
+        zaslep = await przetworzZamowienie(klient, tenantId, zdarzenie.store_id, zamowienie, definicja.platforma);
+      } catch (b) {
+        if (!(b instanceof BladMapowania)) throw b;
+        blad = b.message;
+      }
+    } else if (byt === "product" && definicja.mapujProdukt) {
+      // product.*: katalog (E.4). Produkt usunięty/wycofany = active=false, nigdy kasowanie.
+      try {
+        const produkt = mapujAlboOdloz(() => definicja.mapujProdukt!(zdarzenie.payload));
+        await zapiszProduktySklepu(klient, tenantId, zdarzenie.store_id, [produkt], "webhook");
       } catch (b) {
         if (!(b instanceof BladMapowania)) throw b;
         blad = b.message;
       }
     } else {
-      // product.*: nie subskrybujemy, ale klucz jest poprawny - zdarzenie oznaczamy
+      // byt bez mapowania na tej platformie: klucz jest poprawny - zdarzenie oznaczamy
       // jako przetworzone, żeby nie krążyło w kolejce do wyczerpania prób
     }
 
@@ -200,8 +214,10 @@ export async function upsertZamowienie(
   tenantId: string,
   storeId: string,
   zamowienie: ZamowienieSklepu,
-  opcje: { kanal?: "webhook" | "import" } = {},
+  opcje: { kanal?: "webhook" | "import"; platforma?: Exclude<PlatformaSklepu, "custom"> } = {},
 ): Promise<WynikUpsertuZamowienia> {
+  const platforma = opcje.platforma ?? "woocommerce";
+  const definicja = definicjaPlatformy(platforma);
   const email = zamowienie.email ? zamowienie.email.trim().toLowerCase() : null;
   let profileId: string | null = null;
   let trafionyNagrobek = false;
@@ -211,6 +227,12 @@ export async function upsertZamowienie(
     else trafionyNagrobek = true;
   }
   const surowe = trafionyNagrobek ? { zanonimizowane: true } : zamowienie.surowe;
+
+  // status sprzed zapisu: metryka statusu (Fulfilled/Cancelled/Refunded) tylko przy ZMIANIE roli
+  const { rows: poprzedni } = await klient.query<{ status: string }>(
+    "select status from orders where tenant_id = $1 and store_id = $2 and external_id = $3 for update",
+    [tenantId, storeId, zamowienie.externalId],
+  );
 
   // osłona `>` (nie `>=`): ta sama wersja ze źródła nie jest aktualizacją, tylko powtórką
   // (ponowny import po webhooku) i liczy się jako duplikat, nie "zaktualizowane"
@@ -259,6 +281,27 @@ export async function upsertZamowienie(
       profileId,
       zamowienie,
       kanal: opcje.kanal ?? "webhook",
+      platforma,
+    });
+    // zakup zamyka koszyk (E.5): po tokenie koszyka z zamówienia i koszyki tej osoby sprzed zakupu
+    await zamknijKoszykiZamowieniem(klient, tenantId, {
+      storeId,
+      profileId,
+      token: zamowienie.tokenKoszyka ?? null,
+      orderExternalId: zamowienie.externalId,
+      kiedy: zamowienie.occurredAt,
+    });
+  }
+  const rolaNowa = definicja?.rolaStatusu(zamowienie.status) ?? null;
+  const rolaStara = poprzedni[0] ? (definicja?.rolaStatusu(poprzedni[0].status) ?? null) : null;
+  if (rolaNowa && rolaNowa !== rolaStara) {
+    await emitujStatusZamowienia(klient, tenantId, {
+      orderId: wiersz.id,
+      profileId,
+      zamowienie,
+      rola: rolaNowa,
+      kanal: opcje.kanal ?? "webhook",
+      platforma,
     });
   }
   return {
@@ -276,8 +319,9 @@ async function przetworzZamowienie(
   tenantId: string,
   storeId: string,
   zamowienie: ZamowienieSklepu,
+  platforma: Exclude<PlatformaSklepu, "custom">,
 ): Promise<boolean> {
-  const wynik = await upsertZamowienie(klient, tenantId, storeId, zamowienie, { kanal: "webhook" });
+  const wynik = await upsertZamowienie(klient, tenantId, storeId, zamowienie, { kanal: "webhook", platforma });
   return wynik.nagrobek;
 }
 

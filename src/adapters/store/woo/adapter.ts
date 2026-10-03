@@ -1,14 +1,16 @@
 import type {
+  BytSklepu,
   KlientSklepu,
   MozliwosciPlatformy,
-  PortPlatformy,
+  PortSklepu,
   ProduktSklepu,
   StronaWynikow,
+  WariantSklepu,
+  WebhookSklepu,
   WynikWeryfikacji,
   ZamowienieSklepu,
 } from "../../../domain/store/contract";
 import { naGrosze } from "../../../domain/kwoty";
-import type { WebhookSklepu } from "../webhooki";
 
 export interface PoswiadczeniaWoo {
   baseUrl: string;
@@ -57,8 +59,91 @@ export function mapujZamowienieWoo(z: any): ZamowienieSklepu {
       lineId: p.id !== undefined && p.id !== null ? String(p.id) : null,
       productId: p.product_id ? String(p.product_id) : null,
       sumaMinor: groszeAlboNull(p.total),
+      variantId: p.variation_id ? String(p.variation_id) : null,
     })),
+    tokenKoszyka: tokenKoszykaZMeta(z.meta_data),
     surowe: z,
+  };
+}
+
+/**
+ * Token koszyka zapisany przez wtyczkę MidRev w meta zamówienia (`_mrv_cart_token`). REST v3
+ * pokazuje meta z podkreślnikiem tylko, gdy wtyczka zarejestruje ją jako widoczną; brak = null
+ * (koszyk zamknie wtedy dopasowanie po osobie i czasie).
+ */
+function tokenKoszykaZMeta(meta: unknown): string | null {
+  if (!Array.isArray(meta)) return null;
+  for (const m of meta) {
+    if (m && typeof m === "object" && (m as any).key === "_mrv_cart_token" && typeof (m as any).value === "string") {
+      const v = (m as any).value.trim();
+      if (/^[A-Za-z0-9]{16,64}$/.test(v)) return v;
+    }
+  }
+  return null;
+}
+
+/** Tekst bez HTML i białych znaków na brzegach (opis krótki, nazwa wariantu). */
+function bezHtml(v: unknown, maks: number): string | null {
+  if (typeof v !== "string") return null;
+  const t = v.replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
+  return t ? t.slice(0, maks) : null;
+}
+
+function adres(v: unknown): string | null {
+  if (typeof v !== "string" || !/^https?:\/\//i.test(v) || v.length > 2000) return null;
+  return v;
+}
+
+function liczbaAlboNull(v: unknown): number | null {
+  const n = typeof v === "string" ? Number(v) : typeof v === "number" ? v : NaN;
+  return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Wariant Woo (`/products/{id}/variations`) na wspólny kształt katalogu (E.4). Cena
+ * przekreślona tylko przy promocji (regular > price), inaczej null.
+ */
+export function mapujWariantWoo(v: any): WariantSklepu {
+  const cena = groszeAlboNull(v?.price);
+  const regularna = groszeAlboNull(v?.regular_price);
+  const atrybuty = Array.isArray(v?.attributes) ? v.attributes.map((a: any) => a?.option).filter(Boolean).join(" / ") : "";
+  return {
+    externalId: String(v.id),
+    sku: v.sku || null,
+    tytul: atrybuty ? atrybuty.slice(0, 500) : null,
+    url: adres(v.permalink),
+    obrazUrl: adres(v.image?.src),
+    cenaMinor: cena,
+    cenaPrzedMinor: regularna !== null && cena !== null && regularna > cena ? regularna : null,
+    wMagazynie: v.stock_status ? v.stock_status !== "outofstock" : null,
+    stan: liczbaAlboNull(v.stock_quantity),
+    aktywny: (v.status ?? "publish") === "publish",
+  };
+}
+
+/** Produkt Woo (REST v3 i webhook `product.*`) na wspólny kształt katalogu (E.4). */
+export function mapujProduktWoo(p: any, warianty?: WariantSklepu[]): ProduktSklepu {
+  const cena = groszeAlboNull(p?.price) ?? 0;
+  const regularna = groszeAlboNull(p?.regular_price);
+  return {
+    externalId: String(p.id),
+    nazwa: bezHtml(p.name, 500) ?? `Produkt ${String(p.id)}`,
+    sku: p.sku || null,
+    cenaMinor: cena,
+    waluta: "PLN",
+    kategorie: (p.categories ?? []).map((k: any) => k.name).filter((x: unknown) => typeof x === "string").slice(0, 20),
+    url: adres(p.permalink),
+    obrazUrl: adres(p.images?.[0]?.src),
+    opisKrotki: bezHtml(p.short_description, 5000),
+    cenaPrzedMinor: regularna !== null && regularna > cena ? regularna : null,
+    marka: Array.isArray(p.brands) && p.brands[0]?.name ? String(p.brands[0].name).slice(0, 255) : null,
+    wMagazynie: p.stock_status ? p.stock_status !== "outofstock" : null,
+    stan: liczbaAlboNull(p.stock_quantity),
+    aktywny: (p.status ?? "publish") === "publish" && p.catalog_visibility !== "hidden",
+    // produkt zmienny bez pobranej listy wariantów (webhook product.*): warianty NIEZNANE, nie
+    // puste - pusta lista wyłączyłaby w katalogu wszystkie warianty (review r1)
+    warianty: warianty ?? (p.type === "variable" ? undefined : []),
+    zmodyfikowaneAt: typeof p.date_modified_gmt === "string" && p.date_modified_gmt ? new Date(p.date_modified_gmt + "Z") : null,
   };
 }
 
@@ -92,7 +177,7 @@ const POLA_ZAMOWIENIA_LEKKO = "id,number,status,billing,total,currency,date_crea
  * w prawdziwym sklepie klienta. Lokalny sandbox udaje HTTPS dla ścieżek REST po swojej
  * stronie, więc adapter nie ma tu żadnego wyjątku "na testy".
  */
-export class AdapterWoo implements PortPlatformy {
+export class AdapterWoo implements PortSklepu {
   readonly platforma = "woocommerce" as const;
   #p: PoswiadczeniaWoo;
   #tenantId: string;
@@ -210,10 +295,11 @@ export class AdapterWoo implements PortPlatformy {
       // żeby interfejs nie oferował operatorowi automatyzacji, która tu nie zadziała.
       porzuconyKoszyk: false,
       webhooki: true,
+      katalog: true,
     };
   }
 
-  kluczIdempotencji(byt: "order" | "customer" | "product", externalId: string, wersja: string): string {
+  kluczIdempotencji(byt: BytSklepu, externalId: string, wersja: string): string {
     return `woocommerce:${this.#tenantId}:${byt}:${externalId}:${wersja}`;
   }
 
@@ -250,23 +336,56 @@ export class AdapterWoo implements PortPlatformy {
     return { lacznie, stron, pozycje: dane.map(mapujZamowienieWoo) };
   }
 
-  async pobierzProdukty(strona: number, naStrone: number): Promise<StronaWynikow<ProduktSklepu>> {
-    const { dane, lacznie, stron } = await this.#pobierzStrone("products", {
-      page: strona,
-      per_page: naStrone,
-    });
-    return {
-      lacznie,
-      stron,
-      pozycje: dane.map((p) => ({
-        externalId: String(p.id),
-        nazwa: p.name,
-        sku: p.sku || null,
-        cenaMinor: naGrosze(p.price || "0"),
-        waluta: "PLN",
-        kategorie: (p.categories ?? []).map((k: any) => k.name),
-      })),
-    };
+  /**
+   * Katalog (E.4): produkty z wariantami. Warianty produktu zmiennego to osobne zapytanie
+   * na produkt (`/products/{id}/variations`), więc strona 100 produktów zmiennych = 101 żądań;
+   * przy synchronizacji przyrostowej (`zmienioneOd`, Woo `modified_after`) to kilka produktów.
+   * Wszystkie statusy (`status=any`): wycofany produkt ma trafić do katalogu jako nieaktywny,
+   * a nie zniknąć bez śladu.
+   */
+  async pobierzProdukty(
+    strona: number,
+    naStrone: number,
+    opcje: { zmienioneOd?: Date } = {},
+  ): Promise<StronaWynikow<ProduktSklepu>> {
+    const parametry: Record<string, string | number> = { page: strona, per_page: naStrone, orderby: "id", order: "asc", status: "any" };
+    if (opcje.zmienioneOd) {
+      parametry.modified_after = opcje.zmienioneOd.toISOString();
+      parametry.dates_are_gmt = "true";
+    }
+    const { dane, lacznie, stron } = await this.#pobierzStrone("products", parametry);
+    const pozycje: ProduktSklepu[] = [];
+    for (const p of dane) {
+      let warianty: WariantSklepu[] | undefined;
+      if (p.type === "variable") {
+        warianty = Array.isArray(p.variations) && p.variations.length ? await this.pobierzWarianty(String(p.id)) : [];
+      }
+      pozycje.push(mapujProduktWoo(p, warianty));
+    }
+    return { lacznie, stron, pozycje };
+  }
+
+  /** Wszystkie warianty produktu (do 100 stron po 100; więcej wariantów niż 10 tys. to nie sklep). */
+  async pobierzWarianty(productId: string): Promise<WariantSklepu[]> {
+    const wynik: WariantSklepu[] = [];
+    for (let strona = 1; strona <= 100; strona++) {
+      const { dane, stron } = await this.#pobierzStrone(`products/${encodeURIComponent(productId)}/variations`, {
+        page: strona,
+        per_page: 100,
+        status: "any",
+      });
+      wynik.push(...dane.map(mapujWariantWoo));
+      if (strona >= stron || dane.length === 0) break;
+    }
+    return wynik;
+  }
+
+  /** Jedno zamówienie po id (dociąganie po webhooku). 404 = null. */
+  async pobierzZamowienie(externalId: string): Promise<ZamowienieSklepu | null> {
+    const odpowiedz = await this.#pobierz(`orders/${encodeURIComponent(externalId)}`);
+    if (odpowiedz.status === 404) return null;
+    if (!odpowiedz.ok) throw new Error(`Sklep odrzucił GET orders/${externalId}: HTTP ${odpowiedz.status}`);
+    return mapujZamowienieWoo(await odpowiedz.json());
   }
 
   // ── Webhooki po stronie sklepu (B3) ──────────────────────────────────────────
@@ -336,7 +455,7 @@ export class AdapterWoo implements PortPlatformy {
     return wszystkie;
   }
 
-  async pobierzWebhook(id: number): Promise<WebhookSklepu | null> {
+  async pobierzWebhook(id: number | string): Promise<WebhookSklepu | null> {
     const odpowiedz = await this.#pobierz(`webhooks/${id}`);
     if (odpowiedz.status === 404) return null;
     if (!odpowiedz.ok) throw new Error(`GET webhooks/${id}: HTTP ${odpowiedz.status}`);
@@ -372,7 +491,7 @@ export class AdapterWoo implements PortPlatformy {
    * odrzucałby wszystko jako zły podpis. Cisza zamiast błędu, znowu.
    */
   async zaktualizujWebhook(
-    id: number,
+    id: number | string,
     dane: { sekret?: string; status?: "active" | "paused" | "disabled"; adresDostawy?: string },
   ): Promise<WebhookSklepu> {
     const cialo: Record<string, unknown> = {};
@@ -383,7 +502,7 @@ export class AdapterWoo implements PortPlatformy {
   }
 
   /** Kasowanie tylko przez `force`: Woo bez tego wrzuca webhooka do kosza i nadal go listuje. */
-  async usunWebhook(id: number): Promise<void> {
+  async usunWebhook(id: number | string): Promise<void> {
     await this.#zapis("DELETE", `webhooks/${id}?force=true`);
   }
 

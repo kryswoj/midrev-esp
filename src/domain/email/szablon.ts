@@ -234,6 +234,9 @@ export interface KontekstSzablonu {
   event: Record<string, unknown>;
   person: Record<string, unknown>;
   organization: { name: string };
+  /** blok „Produkty z koszyka” (usecases/katalog/kontekst-maila.ts); brak = blok znika */
+  cart?: unknown;
+  products?: unknown;
   /** skroty Klaviyo na najwyzszym poziomie */
   first_name?: unknown;
   last_name?: unknown;

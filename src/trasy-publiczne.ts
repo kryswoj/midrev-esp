@@ -47,6 +47,9 @@ export const TRASY_PUBLICZNE = [
   "/client/events",
   "/client/profiles",
   "/client/subscriptions",
+  // wtyczka WooCommerce (0046): parowanie kodem jednorazowym, zdarzenia serwer-serwer
+  // z podpisem HMAC sekretu wtyczki, callback /wc-auth (stan jednorazowy); limity per IP
+  "/api/integracje",
 ] as const;
 
 /**

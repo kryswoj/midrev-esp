@@ -15,12 +15,14 @@
     "migrate": "node --env-file=.env --import tsx scripts/migrate.ts",
     "dev": "next dev -p 3005",
     "build": "next build",
+    "build:woo-plugin": "node scripts/build-woo-plugin.mjs",
     "start": "next start -p 3005",
     "worker": "node --env-file=.env --import tsx src/jobs/worker.ts",
     "worker:prod": "NODE_ENV=production node --import tsx src/jobs/worker.ts",
     "migrate:prod": "NODE_ENV=production node --import tsx scripts/migrate.ts",
     "ses:zdarzenia": "node --env-file=.env --import tsx scripts/ses-zdarzenia.ts",
-    "ses:zdarzenia:prod": "NODE_ENV=production node --import tsx scripts/ses-zdarzenia.ts"
+    "ses:zdarzenia:prod": "NODE_ENV=production node --import tsx scripts/ses-zdarzenia.ts",
+    "prebuild": "node scripts/build-woo-plugin.mjs"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.3.3",

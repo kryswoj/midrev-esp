@@ -78,15 +78,8 @@ export function bytZKlucza(klucz: string): BytWebhooka | null {
   return czesc === "order" || czesc === "customer" || czesc === "product" ? czesc : null;
 }
 
-/** Webhook tak, jak opisuje go sklep. `status` surowy: active | paused | disabled. */
-export interface WebhookSklepu {
-  id: number;
-  nazwa: string;
-  status: string;
-  temat: string;
-  adresDostawy: string;
-  zmodyfikowanyAt: string | null;
-}
+/** Webhook tak, jak opisuje go sklep (typ portu „Sklep”, domain/store/contract.ts). */
+export type { WebhookSklepu } from "../../domain/store/contract";
 
 /**
  * Stan jednego tematu po odczycie zwrotnym ze sklepu. "aktywny" wolno ustawić
@@ -98,7 +91,7 @@ export type StanTematu = "aktywny" | "wstrzymany" | "wylaczony" | "brak" | "blad
 
 export interface WpisWebhooka {
   temat: string;
-  webhookId: number | null;
+  webhookId: number | string | null;
   stan: StanTematu;
   /** Surowy status ze sklepu - do diagnostyki, nie na ekran (DESIGN: zero enumów platformy). */
   statusZrodla: string | null;
@@ -134,14 +127,22 @@ export function normalizujStatus(status: string | null | undefined): StanTematu 
   }
 }
 
-/** Czy sklep realnie dosyła dane: każdy potrzebny temat potwierdzony jako aktywny. */
-export function wszystkieAktywne(stan: StanWebhookow | null | undefined): boolean {
+/**
+ * Czy sklep realnie dosyła dane: każdy potrzebny temat potwierdzony jako aktywny.
+ * `tematy` = lista platformy (port „Sklep”); domyślnie tematy Woo.
+ */
+export function wszystkieAktywne(stan: StanWebhookow | null | undefined, tematy: readonly string[] = TEMATY_WEBHOOKOW): boolean {
   if (!stan || stan.blad) return false;
-  if (stan.wpisy.length < TEMATY_WEBHOOKOW.length) return false;
+  if (tematy.some((t) => !stan.wpisy.some((w) => w.temat === t))) return false;
   return stan.wpisy.every((w) => w.stan === "aktywny" && w.potwierdzonyAt !== null);
 }
 
-/** Adres dostawy dla sklepu. Jeden kształt w kodzie i w bazie - inaczej dedup nie ma czego porównać. */
+/** Adres dostawy dla sklepu Woo. Jeden kształt w kodzie i w bazie - inaczej dedup nie ma czego porównać. */
 export function adresDostawy(appUrl: string, storeId: string): string {
-  return `${appUrl.replace(/\/+$/, "")}/api/webhooks/woo/${storeId}`;
+  return adresDostawySklepu(appUrl, `/api/webhooks/woo/${storeId}`);
+}
+
+/** Adres dostawy dowolnej platformy: APP_URL + ścieżka z definicji platformy (port „Sklep”). */
+export function adresDostawySklepu(appUrl: string, sciezka: string): string {
+  return `${appUrl.replace(/\/+$/, "")}${sciezka.startsWith("/") ? "" : "/"}${sciezka}`;
 }

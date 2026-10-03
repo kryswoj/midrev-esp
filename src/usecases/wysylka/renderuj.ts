@@ -52,6 +52,20 @@ export function escapujHtml(tekst: string): string {
  * łapany był tylko podwójny cudzysłów, więc link w pojedynczym wychodził bez śledzenia
  * i lista kontrolna pokazywała „brak linku" w mailu, który link miał.
  */
+const ENCJE_ADRESU: Record<string, string> = { amp: "&", quot: '"', apos: "'", lt: "<", gt: ">" };
+
+/** Encje HTML w wartości atrybutu href (nazwane podstawowe i numeryczne) -> znaki. */
+export function dekodujEncjeAdresu(url: string): string {
+  return url.replace(/&(#x[0-9a-f]{1,6}|#[0-9]{1,7}|amp|quot|apos|lt|gt);/gi, (calosc, e: string) => {
+    const k = e.toLowerCase();
+    if (k[0] === "#") {
+      const n = k[1] === "x" ? parseInt(k.slice(2), 16) : parseInt(k.slice(1), 10);
+      return Number.isFinite(n) && n > 31 && n < 0x110000 ? String.fromCodePoint(n) : calosc;
+    }
+    return ENCJE_ADRESU[k] ?? calosc;
+  });
+}
+
 export function przepiszLinki(html: string, clickToken: string): Zlinkowany {
   const linki: string[] = [];
   // domena ŚLEDZENIA (TRACKING_URL, bez niej APP_URL): adres panelu nie leci w mailach
@@ -63,7 +77,10 @@ export function przepiszLinki(html: string, clickToken: string): Zlinkowany {
   const przepisany = sanityzujAdresy(html, { scisle: false }).replace(
     /href\s*=\s*(?:"(https?:\/\/[^"]*)"|'(https?:\/\/[^']*)'|(https?:\/\/[^\s>"']+))/gi,
     (_pelny, wDwoch: string | undefined, wJednym: string | undefined, bez: string | undefined) => {
-      const url = wDwoch ?? wJednym ?? bez ?? "";
+      // Cel zapisujemy tak, jak zobaczy go przeglądarka: atrybut HTML dekoduje encje. Zmienne
+      // liquid w adresie są escapowane (`=` -> `&#61;`, `&` -> `&amp;`), a link z koszyka
+      // (`?mrv_cart=…`) zapisany dosłownie prowadziłby z /r na zepsuty adres (E2E Woo).
+      const url = dekodujEncjeAdresu(wDwoch ?? wJednym ?? bez ?? "");
       const indeks = linki.push(url) - 1;
       return `href="${baza}/r/${clickToken}?l=${indeks}"`;
     },

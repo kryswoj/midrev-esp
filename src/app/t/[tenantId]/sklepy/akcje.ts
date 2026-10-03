@@ -46,3 +46,50 @@ export async function odswiezWebhokiAkcja(formularz: FormData) {
     )}`,
   );
 }
+
+// ── Kreator „Połącz sklep”: gotowe automatyzacje (wspólne dla Woo, Shopify i custom) ────────
+
+function wrocDo(sciezka: string, q: { ok?: string; blad?: string }): never {
+  const p = new URLSearchParams();
+  if (q.ok) p.set("ok", q.ok);
+  if (q.blad) p.set("blad", q.blad);
+  redirect(`${sciezka}?${p.toString()}#automatyzacje`);
+}
+
+/** Bezpieczny powrót: tylko ścieżki kreatora tego tenanta. */
+function sciezkaPowrotu(tenantId: string, surowa: FormDataEntryValue | null): string {
+  const s = String(surowa ?? "");
+  return /^\/t\/[0-9a-f-]{36}\/sklepy(\/[a-z-]+)?$/.test(s) && s.startsWith(`/t/${tenantId}/`) ? s : `/t/${tenantId}/sklepy`;
+}
+
+/** „Utwórz” na karcie szablonu: automatyzacja z mailami jako szkic (jedno kliknięcie). */
+export async function utworzSzablonSklepuAkcja(formularz: FormData) {
+  const { tenantId } = await wymaganyTenant(formularz.get("tenantId"));
+  const powrot = sciezkaPowrotu(tenantId, formularz.get("powrot"));
+  const klucz = String(formularz.get("szablon") ?? "");
+  const { KLUCZE_SZABLONOW_KREATORA, utworzZBiblioteki } = await import("../../../../usecases/automatyzacje/journeye");
+  if (!(KLUCZE_SZABLONOW_KREATORA as readonly string[]).includes(klucz)) wrocDo(powrot, { blad: "Nieznany szablon." });
+  const { sklepyTenanta } = await import("../../../../adapters/db/repozytoria");
+  const { kluczStronyTenanta } = await import("../../../../usecases/integracja/klucz-strony");
+  const sklep = (await sklepyTenanta(tenantId)).find((s) => s.status === "connected");
+  const strona = await kluczStronyTenanta(tenantId);
+  const adres = sklep?.base_url ?? (strona?.domeny[0] ? `https://${strona.domeny[0]}` : null);
+  if (!adres) wrocDo(powrot, { blad: "Najpierw połącz sklep albo stronę: maile mają link do Twojego sklepu." });
+  const w = await utworzZBiblioteki(tenantId, klucz, { sklepUrl: adres });
+  if (!w.ok) wrocDo(powrot, { blad: w.blad });
+  revalidatePath(powrot);
+  wrocDo(powrot, { ok: "Automatyzacja gotowa jako szkic. Przejrzyj maile i włącz ją jednym kliknięciem." });
+}
+
+/** „Włącz”: publikacja szkicu z bramką (ta sama co w edytorze), bez wchodzenia w kanwę. */
+export async function wlaczSzablonSklepuAkcja(formularz: FormData) {
+  const { tenantId } = await wymaganyTenant(formularz.get("tenantId"));
+  const powrot = sciezkaPowrotu(tenantId, formularz.get("powrot"));
+  const flowId = String(formularz.get("flowId") ?? "");
+  if (!UUID.test(flowId)) notFound();
+  const { zmienStatus } = await import("../../../../usecases/automatyzacje/journeye");
+  const w = await zmienStatus(tenantId, flowId, "wlaczony");
+  if (!w.ok) wrocDo(powrot, { blad: w.blad });
+  revalidatePath(powrot);
+  wrocDo(powrot, { ok: "Automatyzacja włączona. Wejdą do niej osoby od teraz (bez historii)." });
+}

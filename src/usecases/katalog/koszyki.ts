@@ -125,3 +125,102 @@ export async function zapiszKoszykZPrzegladarki(
   );
   return true;
 }
+
+// ── Koszyki sklepu (port „Sklep”, E.5): wtyczka Woo, webhook Shopify `checkouts/*` ────────
+
+/**
+ * Stan koszyka zgłoszony przez SERWER sklepu (nie przeglądarkę). Klucz `(tenant, store, token)`.
+ * Zapis tylko nowszym stanem (`source_updated_at`), więc spóźniona dostawa nie cofa koszyka.
+ * Koszyk zamknięty zakupem (`ordered`) nie wraca do `cart` tym samym tokenem: sklep po zakupie
+ * zakłada nowy token, a zaległe zdarzenie sprzed zakupu nie może „odkupić” koszyka.
+ * `linkPowrotu` tylko na domenie sklepu (`hostSklepu`): obcy link w mailu „wróć do koszyka” to
+ * phishing nawet przy podpisanym źródle (błąd w sklepie, przejęta wtyczka).
+ */
+export async function zapiszKoszykSklepu(
+  klient: PoolClient,
+  w: {
+    tenantId: string;
+    storeId: string;
+    profileId: string | null;
+    email: string | null;
+    koszyk: import("../../domain/store/contract").KoszykSklepu;
+    hostSklepu: string;
+  },
+): Promise<{ zapisany: boolean; cartId: string | null }> {
+  const k = w.koszyk;
+  let powrot: string | null = null;
+  if (k.linkPowrotu) {
+    try {
+      const u = new URL(k.linkPowrotu);
+      if ((u.protocol === "https:" || u.protocol === "http:") && hostWDomenach(u.hostname, [w.hostSklepu]) && k.linkPowrotu.length <= 2000) {
+        powrot = u.toString();
+      }
+    } catch {
+      powrot = null;
+    }
+  }
+  // adres produktu tylko na domenie sklepu (review r1: podpisany payload nie wstawi obcego linku
+  // do bloku „Produkty z koszyka”); obraz może być z CDN, ale wyłącznie http(s)
+  const naDomenieSklepu = (v: string | null) => {
+    const a = adresHttp(v);
+    return a && hostWDomenach(new URL(a).hostname, [w.hostSklepu]) ? a : null;
+  };
+  const pozycje = k.pozycje.slice(0, MAKS_POZYCJI).map((p) => ({
+    ...p,
+    image_url: adresHttp(p.image_url),
+    url: naDomenieSklepu(p.url),
+  }));
+  const { rows } = await klient.query<{ id: string }>(
+    `insert into carts (tenant_id, store_id, platform_token, profile_id, email, stage, items, value_minor, currency,
+                        recovery_url, source_updated_at, updated_at)
+     values ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, now())
+     on conflict (tenant_id, store_id, platform_token) do update set
+       profile_id = coalesce(excluded.profile_id, carts.profile_id),
+       email = coalesce(excluded.email, carts.email),
+       stage = case when carts.stage = 'checkout' and excluded.stage = 'cart' then 'checkout' else excluded.stage end,
+       items = excluded.items, value_minor = excluded.value_minor, currency = coalesce(excluded.currency, carts.currency),
+       recovery_url = coalesce(excluded.recovery_url, carts.recovery_url),
+       source_updated_at = excluded.source_updated_at, updated_at = now()
+     where carts.stage not in ('ordered', 'expired') and excluded.source_updated_at >= carts.source_updated_at
+     returning id`,
+    [
+      w.tenantId,
+      w.storeId,
+      k.token,
+      w.profileId,
+      w.email,
+      k.etap,
+      JSON.stringify(pozycje),
+      k.wartoscMinor !== null && k.wartoscMinor >= 0 ? String(k.wartoscMinor) : null,
+      k.waluta,
+      powrot,
+      k.zmodyfikowaneAt,
+    ],
+  );
+  return { zapisany: Boolean(rows[0]), cartId: rows[0]?.id ?? null };
+}
+
+/**
+ * Zakup zamyka koszyk (E.5): dokładnie ten, którego token przyszedł z zamówieniem, oraz
+ * otwarte koszyki tej osoby W TYM SAMYM SKLEPIE zmienione NIE PÓŹNIEJ niż złożenie zamówienia
+ * (zakup z innego urządzenia albo bez tokenu). Koszyk w innym sklepie tenanta zostaje (review
+ * r1), koszyk zmieniony po zamówieniu też (E2E: webhook spóźniony o kilka minut zamykał nowy
+ * koszyk założony zaraz po zakupie, więc mail o nim by nie wyszedł). To dodatkowe, szybkie wyjście obok filtra E4b
+ * „Placed Order od startu flow”: koszyk `ordered` nie trafi do bloku w mailu.
+ */
+export async function zamknijKoszykiZamowieniem(
+  klient: PoolClient,
+  tenantId: string,
+  w: { storeId: string | null; profileId: string | null; token: string | null; orderExternalId: string; kiedy: Date },
+): Promise<number> {
+  if (!w.token && !w.profileId) return 0;
+  const { rowCount } = await klient.query(
+    `update carts set stage = 'ordered', order_external_id = $5, updated_at = now()
+      where tenant_id = $1 and stage in ('cart', 'checkout')
+        and (($3::text is not null and store_id is not distinct from $2::uuid and platform_token = $3)
+             or ($4::uuid is not null and profile_id = $4 and store_id is not distinct from $2::uuid
+                 and source_updated_at <= $6::timestamptz))`,
+    [tenantId, w.storeId, w.token, w.profileId, w.orderExternalId, w.kiedy],
+  );
+  return rowCount ?? 0;
+}

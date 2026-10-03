@@ -1,5 +1,8 @@
+import type { Pool, PoolClient } from "pg";
 import { getPool } from "../../adapters/db/pool";
 import { METRYKI_STRONY } from "../../domain/integracja/metryki-strony";
+import { ROLE_ZAMOWIEN, type PlatformaSklepu, type RolaMetryki } from "../../domain/store/contract";
+import { metrykaZamowienia } from "../../domain/zdarzenia/kontrakt";
 import { metrykaPoKluczu } from "../zdarzenia/metryki";
 
 /**
@@ -30,6 +33,40 @@ export async function ustawRoleMetrykStrony(tenantId: string): Promise<number> {
     ustawione += rowCount ?? 0;
   }
   return ustawione;
+}
+
+/**
+ * Role zamówień przy podłączeniu sklepu (port „Sklep”): placed_order, ordered_product,
+ * fulfilled/cancelled/refunded wskazują metryki platformy. Sklep jest źródłem prawdy o
+ * zamówieniach, więc NADPISUJE rolę ustawioną wcześniej (np. przez API); drugi sklep tego
+ * samego tenanta przejmuje role (ostatnio podłączony wygrywa, jak w Klaviyo „primary store”).
+ */
+export async function ustawRoleSklepu(db: Pool | PoolClient, tenantId: string, platforma: Exclude<PlatformaSklepu, "custom"> | "custom"): Promise<number> {
+  let ustawione = 0;
+  for (const rola of ROLE_ZAMOWIEN) {
+    const def = metrykaZamowienia(platforma, rola);
+    const m = await metrykaPoKluczu(db, tenantId, def, { utworz: true, wbudowana: true, mozeWyzwalac: true, ukryta: false });
+    if (!m) continue;
+    const { rowCount } = await db.query(
+      `insert into metric_mappings (tenant_id, role, metric_id) values ($1, $2, $3)
+       on conflict (tenant_id, role) do update set metric_id = excluded.metric_id, updated_at = now()
+       where metric_mappings.metric_id is distinct from excluded.metric_id`,
+      [tenantId, rola, m.id],
+    );
+    ustawione += rowCount ?? 0;
+  }
+  return ustawione;
+}
+
+/** Metryka pełniąca rolę: klucz naturalny (integracja, nazwa) albo null, gdy rola nieustawiona. */
+export async function metrykaRoli(db: Pool | PoolClient, tenantId: string, rola: RolaMetryki): Promise<{ id: string; integracja: string; nazwa: string } | null> {
+  const { rows } = await db.query<{ id: string; integration_key: string; name: string }>(
+    `select m.id, m.integration_key, m.name from metric_mappings mm
+       join metrics m on m.tenant_id = mm.tenant_id and m.id = mm.metric_id
+      where mm.tenant_id = $1 and mm.role = $2`,
+    [tenantId, rola],
+  );
+  return rows[0] ? { id: rows[0].id, integracja: rows[0].integration_key, nazwa: rows[0].name } : null;
 }
 
 export async function rolaMetryki(tenantId: string, rola: string): Promise<string | null> {
