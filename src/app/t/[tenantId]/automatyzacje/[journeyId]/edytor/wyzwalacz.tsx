@@ -1,6 +1,5 @@
 "use client";
 
-import { Plus, Trash2 } from "lucide-react";
 import {
   kluczMetryki,
   etykietaMetryki,
@@ -8,22 +7,11 @@ import {
   type PonowneWejscie,
   type ZrodloWyzwalacza,
 } from "../../../../../../domain/automatyzacje/graf";
-import {
-  BEZ_WARTOSCI,
-  ETYKIETY_OPERATOROW,
-  ETYKIETY_TYPOW,
-  OPERATORY,
-  TYPY_POL,
-  bladWartosci,
-  type Filtr,
-  type TypPola,
-  type Warunek,
-} from "../../../../../../domain/filtry";
+import { EdytorFiltra, type KatalogFiltra } from "../../../../../ui/edytor-filtra";
 
 /**
- * Minimalny UI wyzwalacza (E4a): metryka albo lista, prosty edytor filtra wyzwalacza
- * (grupy laczone "i", warunki w grupie "lub", jak w Klaviyo) i wybor ponownego wejscia.
- * Pelny EdytorFiltra (katalog wlasciwosci, filtr profilu, splity) to E4b (4.11).
+ * UI wyzwalacza: metryka albo lista, filtr wyzwalacza (wspolny EdytorFiltra, E4b 4.11:
+ * pola z katalogu wlasciwosci metryki) i wybor ponownego wejscia.
  */
 
 export interface MetrykaDoWyboru {
@@ -33,120 +21,18 @@ export interface MetrykaDoWyboru {
   etykieta: string;
 }
 
-type WarunekZdarzenia = Extract<Warunek, { typ: "wlasciwosc_zdarzenia" }>;
-
-function domyslnaWartosc(typ: TypPola, operator: string): WarunekZdarzenia["wartosc"] {
-  if (BEZ_WARTOSCI.has(operator)) return undefined;
-  if (typ === "number") return operator === "miedzy" ? [0, 100] : 0;
-  if (typ === "date") return operator === "w_ostatnich_dniach" ? 30 : operator === "miedzy" ? ["2026-01-01", "2026-12-31"] : "2026-01-01";
-  if (typ === "string" && (operator === "jest_w" || operator === "nie_jest_w")) return [""];
-  return "";
-}
-
-function nowyWarunek(): WarunekZdarzenia {
-  return { typ: "wlasciwosc_zdarzenia", pole: "", typPola: "string", operator: "rowna", wartosc: "" };
-}
-
-function PoleWartosci({ w, onZmiana }: { w: WarunekZdarzenia; onZmiana: (x: WarunekZdarzenia["wartosc"]) => void }) {
-  if (BEZ_WARTOSCI.has(w.operator)) return null;
-  const x = w.wartosc;
-  if (w.operator === "miedzy") {
-    const [a, b] = (Array.isArray(x) ? x : ["", ""]) as (string | number)[];
-    const typ = w.typPola === "number" ? "number" : "text";
-    const konw = (v: string) => (w.typPola === "number" ? Number(v) : v);
-    return (
-      <div className="grid grid-cols-2 gap-1.5">
-        <input className="pole" type={typ} aria-label="od" value={String(a ?? "")} onChange={(e) => onZmiana([konw(e.target.value), b] as WarunekZdarzenia["wartosc"])} />
-        <input className="pole" type={typ} aria-label="do" value={String(b ?? "")} onChange={(e) => onZmiana([a, konw(e.target.value)] as WarunekZdarzenia["wartosc"])} />
-      </div>
-    );
-  }
-  if (w.operator === "jest_w" || w.operator === "nie_jest_w") {
-    return (
-      <input
-        className="pole"
-        aria-label="wartości po przecinku"
-        placeholder="wartości po przecinku"
-        value={Array.isArray(x) ? x.join(", ") : ""}
-        onChange={(e) => onZmiana(e.target.value.split(",").map((v) => v.trim()).filter((v, i, t) => v || t.length === 1))}
-      />
-    );
-  }
-  if (w.typPola === "number" || w.operator === "w_ostatnich_dniach") {
-    return <input className="pole" type="number" aria-label="wartość" value={typeof x === "number" ? x : 0} onChange={(e) => onZmiana(Number(e.target.value))} />;
-  }
-  if (w.typPola === "list") {
-    return <input className="pole" aria-label="element listy" placeholder="element listy" value={typeof x === "string" || typeof x === "number" ? String(x) : ""} onChange={(e) => onZmiana(e.target.value)} />;
-  }
-  return <input className="pole" aria-label="wartość" placeholder={w.typPola === "date" ? "RRRR-MM-DD" : "wartość (wielkość liter ma znaczenie)"} value={typeof x === "string" ? x : ""} onChange={(e) => onZmiana(e.target.value)} />;
-}
-
-export function EdytorFiltraWyzwalacza({ filtr, onZmiana }: { filtr: Filtr | undefined; onZmiana: (f: Filtr | undefined) => void }) {
-  const grupy = filtr?.grupy ?? [];
-  const ustaw = (nowe: Filtr["grupy"]) => onZmiana(nowe.length ? { grupy: nowe } : undefined);
-  const zmienWarunek = (gi: number, wi: number, zmiany: Partial<WarunekZdarzenia>) =>
-    ustaw(grupy.map((g, i) => (i !== gi ? g : { warunki: g.warunki.map((w, j) => (j !== wi ? w : ({ ...w, ...zmiany } as Warunek))) })));
-  const usunWarunek = (gi: number, wi: number) =>
-    ustaw(grupy.map((g, i) => (i !== gi ? g : { warunki: g.warunki.filter((_, j) => j !== wi) })).filter((g) => g.warunki.length));
-
-  return (
-    <div className="space-y-2">
-      {grupy.map((g, gi) => (
-        <div key={gi}>
-          {gi > 0 ? <div className="my-1.5 text-center text-[11px] font-semibold uppercase tracking-wide text-[var(--color-tekst-3)]">i</div> : null}
-          <div className="space-y-2 rounded-md border border-[var(--color-linia)] p-2">
-            {g.warunki.map((w0, wi) => {
-              const w = w0 as WarunekZdarzenia;
-              const bezPola = !w.pole.trim();
-              const blad = bezPola ? "Wpisz nazwę właściwości zdarzenia albo usuń pusty warunek." : bladWartosci(w.typPola, w.operator, w.wartosc);
-              const idBledu = `blad-warunku-${gi}-${wi}`;
-              return (
-                <div key={wi}>
-                  {wi > 0 ? <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-tekst-3)]">lub</div> : null}
-                  <div className="grid grid-cols-[1fr_auto] gap-1.5">
-                    <input className={`pole ${bezPola ? "!border-[var(--color-blad-ramka)]" : ""}`} aria-label="nazwa właściwości zdarzenia" aria-invalid={bezPola || undefined} data-niepoprawne={bezPola || undefined} aria-describedby={blad ? idBledu : undefined} placeholder="właściwość, np. ProductID" maxLength={255} value={w.pole} onChange={(e) => zmienWarunek(gi, wi, { pole: e.target.value })} />
-                    <button type="button" aria-label="Usuń warunek" title="Usuń warunek" onClick={() => usunWarunek(gi, wi)} className="grid h-9 w-9 place-items-center rounded-md text-[var(--color-tekst-3)] hover:bg-[var(--color-blad-tlo)] hover:text-[var(--color-blad)]"><Trash2 size={14} /></button>
-                  </div>
-                  <div className="mt-1.5 grid grid-cols-2 gap-1.5">
-                    <select className="pole" aria-label="typ pola" value={w.typPola} onChange={(e) => {
-                      const typPola = e.target.value as TypPola;
-                      const operator = OPERATORY[typPola][0];
-                      zmienWarunek(gi, wi, { typPola, operator, wartosc: domyslnaWartosc(typPola, operator) });
-                    }}>
-                      {TYPY_POL.map((t) => <option key={t} value={t}>{ETYKIETY_TYPOW[t]}</option>)}
-                    </select>
-                    <select className="pole" aria-label="operator" value={w.operator} onChange={(e) => zmienWarunek(gi, wi, { operator: e.target.value, wartosc: domyslnaWartosc(w.typPola, e.target.value) })}>
-                      {OPERATORY[w.typPola].map((o) => <option key={o} value={o}>{ETYKIETY_OPERATOROW[o]}</option>)}
-                    </select>
-                  </div>
-                  <div className="mt-1.5" data-niepoprawne={(!bezPola && Boolean(blad)) || undefined}><PoleWartosci w={w} onZmiana={(wartosc) => zmienWarunek(gi, wi, { wartosc })} /></div>
-                  {blad ? <p id={idBledu} className="mt-1 text-[12px] leading-4 text-[var(--color-blad)]">{blad}{" "}<span className="text-[var(--color-tekst-3)]">Do tego czasu warunek nie jest zapisywany, a automatyzacji nie da się włączyć.</span></p> : null}
-                </div>
-              );
-            })}
-            <button type="button" className="przycisk przycisk-wtorny przycisk-maly" onClick={() => ustaw(grupy.map((x, i) => (i === gi ? { warunki: [...x.warunki, nowyWarunek()] } : x)))}>
-              <Plus size={13} /> lub
-            </button>
-          </div>
-        </div>
-      ))}
-      <button type="button" className="przycisk przycisk-wtorny przycisk-maly" onClick={() => ustaw([...grupy, { warunki: [nowyWarunek()] }])}>
-        <Plus size={13} /> {grupy.length ? "i (kolejny warunek)" : "Dodaj filtr wyzwalacza"}
-      </button>
-    </div>
-  );
-}
-
 export function PanelZrodla({
   zrodlo,
   metryki,
   listy,
   grafV2Dostepny = false,
+  katalog = null,
   onZmiana,
 }: {
   zrodlo: ZrodloWyzwalacza;
   metryki: MetrykaDoWyboru[];
   listy: { id: string; name: string }[];
+  katalog?: KatalogFiltra | null;
   /** false: tylko metryki wbudowane v1 i bez filtra (zapis w v1, bezpieczny rollback kodu) */
   grafV2Dostepny?: boolean;
   onZmiana: (z: ZrodloWyzwalacza) => void;
@@ -192,7 +78,7 @@ export function PanelZrodla({
             {!grafV2Dostepny && !zrodlo.filtr ? (
               <p className="text-[12px] leading-4 text-[var(--color-tekst-3)]">Filtr wyzwalacza będzie dostępny po włączeniu nowych automatyzacji.</p>
             ) : (
-            <EdytorFiltraWyzwalacza filtr={zrodlo.filtr} onZmiana={(filtr) => onZmiana(filtr ? { ...zrodlo, filtr } : { rodzaj: "metryka", metryka: zrodlo.metryka })} />
+            <EdytorFiltra rodzaje={["zdarzenie"]} katalog={katalog} filtr={zrodlo.filtr} etykietaDodaj="Dodaj filtr wyzwalacza" onZmiana={(filtr) => onZmiana(filtr ? { ...zrodlo, filtr } : { rodzaj: "metryka", metryka: zrodlo.metryka })} />
             )}
             {grafV2Dostepny || zrodlo.filtr ? <p className="mt-1.5 text-[12px] leading-4 text-[var(--color-tekst-3)]">Tylko zdarzenia spełniające filtr uruchamiają automatyzację. Tekst porównujemy dokładnie, z wielkością liter.</p> : null}
           </div>

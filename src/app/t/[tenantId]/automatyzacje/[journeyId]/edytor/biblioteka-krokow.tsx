@@ -1,7 +1,7 @@
 "use client";
 
 import { useDraggable } from "@dnd-kit/core";
-import { CalendarClock, CircleStop, Clock, FlaskConical, GitFork, GripVertical, Mail, UserCog, Zap, type LucideIcon } from "lucide-react";
+import { CalendarClock, CircleStop, Clock, FlaskConical, GitFork, GitBranch, GripVertical, Mail, UserCog, Zap, type LucideIcon } from "lucide-react";
 import { NAZWY_WEZLOW, type TypWezla } from "../../../../../../domain/automatyzacje/graf";
 
 /** Kroki, ktore operator moze dolozyc na kanwe (wyzwalacz i koniec powstaja same). */
@@ -16,6 +16,7 @@ export const IKONY_WEZLOW: Record<TypWezla, LucideIcon> = {
   email: Mail,
   profil: UserCog,
   koniec: CircleStop,
+  podzial_zdarzenia: GitBranch,
 };
 
 /** Kolor kafelka ikony wg kategorii (jak w Klaviyo: wiadomosci, logika, dane). */
@@ -28,6 +29,7 @@ export const KAFELEK: Record<TypWezla, string> = {
   ab_split: "bg-[var(--color-powierzchnia-2)] text-[var(--color-tekst-2)]",
   profil: "bg-[var(--color-info-tlo)] text-[var(--color-info)]",
   koniec: "bg-[var(--color-powierzchnia-2)] text-[var(--color-tekst-3)]",
+  podzial_zdarzenia: "bg-[var(--color-powierzchnia-2)] text-[var(--color-tekst-2)]",
 };
 
 export const KATEGORIE: { tytul: string; kroki: { typ: TypDoDodania; opis: string }[] }[] = [
@@ -37,11 +39,12 @@ export const KATEGORIE: { tytul: string; kroki: { typ: TypDoDodania; opis: strin
     kroki: [
       { typ: "opoznienie", opis: "Odczekaj minuty, godziny, dni" },
       { typ: "czekaj_do", opis: "Do dnia tygodnia i godziny" },
-      { typ: "warunek", opis: "Rozgałęzienie Tak / Nie" },
+      { typ: "warunek", opis: "Tak / Nie po profilu i historii osoby" },
+      { typ: "podzial_zdarzenia", opis: "Tak / Nie po danych zdarzenia z wyzwalacza" },
       { typ: "ab_split", opis: "Losowy podział na dwie gałęzie" },
     ],
   },
-  { tytul: "Dane", kroki: [{ typ: "profil", opis: "Dodaj do listy lub usuń z listy" }] },
+  { tytul: "Dane", kroki: [{ typ: "profil", opis: "Lista albo właściwość profilu" }] },
 ];
 
 function Krok({ typ, opis, onDodaj, powodBlokady }: { typ: TypDoDodania; opis: string; onDodaj: () => void; powodBlokady?: string }) {

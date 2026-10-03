@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { formatujDateICzas } from "../../../../domain/daty";
-import { sciezkaOsobyWeFlow } from "../../../../usecases/automatyzacje/sciezka-osoby";
+import { pominieteWejscia, sciezkaOsobyWeFlow } from "../../../../usecases/automatyzacje/sciezka-osoby";
 import { STATUSY } from "../../../../usecases/automatyzacje/journeye";
 import { Badge, Card, CardHeader, Icon, type NazwaIkony } from "../../../ui";
 import { wymaganyTenant } from "../../../autoryzacja";
@@ -40,7 +40,7 @@ export async function SciezkaOsoby({ tenantId: surowy, profileId }: { tenantId: 
   // a ten komponent czyta sciezki osob. wymaganyTenant jest deduplikowany cache() w renderze.
   const { tenantId } = await wymaganyTenant(surowy);
   if (!UUID.test(profileId)) return null;
-  const sciezki = await sciezkaOsobyWeFlow(tenantId, profileId);
+  const [sciezki, pominiete] = await Promise.all([sciezkaOsobyWeFlow(tenantId, profileId), pominieteWejscia(tenantId, profileId)]);
   return (
     <Card>
       <CardHeader
@@ -48,6 +48,19 @@ export async function SciezkaOsoby({ tenantId: surowy, profileId }: { tenantId: 
         description="Krok po kroku: kiedy weszła, którą gałąź wybrał warunek, co dostała i dlaczego wyszła."
         action={<span className="text-[13px] text-[var(--color-tekst-3)]">{sciezki.length ? `${sciezki.length} automatyzacji` : ""}</span>}
       />
+      {pominiete.length ? (
+        <div className="border-b border-[var(--color-linia-0)] px-6 py-4 max-md:px-4">
+          <h3 className="mb-1.5 text-[13px] font-semibold">Nie weszła (filtr profilu przy wejściu)</h3>
+          <ul className="space-y-1 text-[12px] leading-4 text-[var(--color-tekst-2)]">
+            {pominiete.map((p, i) => (
+              <li key={i}>
+                <Link href={`/t/${tenantId}/automatyzacje/${p.flowId}/edytor`} className="font-medium text-[var(--color-akcent)] hover:underline">{p.nazwa}</Link>
+                {" · "}{formatujDateICzas(p.kiedy)}{" · "}{p.powod}{p.filtr ? `: ${p.filtr}` : ""}
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
       {sciezki.length === 0 ? (
         <p className="px-6 py-5 text-[13px] text-[var(--color-tekst-2)] max-md:px-4">Ta osoba nie weszła jeszcze do żadnej automatyzacji.</p>
       ) : (

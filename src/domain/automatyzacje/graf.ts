@@ -643,9 +643,16 @@ function nazwaPola(w: unknown): string | null {
 
 function trescNiedokonczonego(w: unknown): string | null {
   const r = schematWarunku.safeParse(w);
-  if (r.success) return null;
   const typ = (w as { typ?: unknown })?.typ;
   const pole = nazwaPola(w);
+  // pole ze spacji przechodzi schemat (min 1 znak), ale to wciaz pusty warunek z edytora
+  if (r.success && pole === null && (typ === "wlasciwosc_zdarzenia" || typ === "wlasciwosc_profilu")) {
+    return typ === "wlasciwosc_profilu" ? "Wybierz właściwość profilu albo usuń pusty warunek." : "Wpisz nazwę właściwości zdarzenia albo usuń pusty warunek.";
+  }
+  if (r.success && typ === "metryka_profilu" && ((w as { gdzie?: { pole?: string }[] }).gdzie ?? []).some((g) => !String(g.pole ?? "").trim())) {
+    return `Warunek „${pole}”: uzupełnij właściwość zdarzenia w „gdzie” albo ją usuń.`;
+  }
+  if (r.success) return null;
   if (!pole) {
     if (typ === "metryka_profilu") return "Wybierz metrykę albo usuń pusty warunek.";
     if (typ === "wlasciwosc_profilu") return "Wybierz właściwość profilu albo usuń pusty warunek.";

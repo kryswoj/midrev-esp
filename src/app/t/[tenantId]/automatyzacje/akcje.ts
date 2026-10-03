@@ -19,6 +19,8 @@ import {
   type StatystykiAutomatyzacji,
 } from "../../../../usecases/automatyzacje/journeye";
 import type { BladGrafu } from "../../../../domain/automatyzacje/graf";
+import { katalogWlasciwosci, type KatalogWlasciwosci } from "../../../../usecases/automatyzacje/katalog-wlasciwosci";
+import { podgladWyzwalacza, type WynikPodgladu } from "../../../../usecases/automatyzacje/podglad-wyzwalacza";
 import { sklepyTenanta } from "../../../../adapters/db/repozytoria";
 import { wymaganyTenant } from "../../../autoryzacja";
 import type { StanFormularza } from "../../../formularze";
@@ -223,4 +225,21 @@ export async function podgladWiadomosciFlowAkcja(
     uwagi.push(blad ? `Błąd w zmiennych: ${blad}` : "Zmienne ({{ … }}) podstawią się przy wysyłce danymi osoby i zdarzenia.");
   }
   return { ok: true, html, uwagi };
+}
+
+// ── E4b: katalog wlasciwosci (EdytorFiltra) i podglad wyzwalacza ──────────────
+
+export async function katalogWlasciwosciAkcja(tenantIdSurowy: string, metryka: unknown): Promise<KatalogWlasciwosci> {
+  const { tenantId } = await wymaganyTenant(tenantIdSurowy);
+  const m = metryka && typeof metryka === "object" ? (metryka as { integracja?: unknown; nazwa?: unknown }) : null;
+  const ref = m && typeof m.nazwa === "string" && m.nazwa.length <= 127
+    ? { nazwa: m.nazwa, ...(typeof m.integracja === "string" && /^[a-z0-9_.-]{1,64}$/.test(m.integracja) ? { integracja: m.integracja } : {}) }
+    : null;
+  return katalogWlasciwosci(tenantId, ref);
+}
+
+export async function podgladWyzwalaczaAkcja(tenantIdSurowy: string, flowId: unknown, grafJson: unknown): Promise<WynikPodgladu> {
+  const { tenantId } = await wymaganyTenant(tenantIdSurowy);
+  if (typeof grafJson !== "string") return { ok: false, blad: "Brak szkicu." };
+  return podgladWyzwalacza(tenantId, String(flowId ?? ""), grafJson);
 }

@@ -16,6 +16,9 @@ import {
 import type { StatystykiEmaila } from "../../../../../../usecases/automatyzacje/journeye";
 import { IKONY_WEZLOW, KAFELEK } from "./biblioteka-krokow";
 import { PanelZrodla, type MetrykaDoWyboru } from "./wyzwalacz";
+import { EdytorFiltra, type KatalogFiltra, type MetrykaFiltra } from "../../../../../ui/edytor-filtra";
+import { SMART_SENDING_GODZIN, type AkcjaProfilu } from "../../../../../../domain/automatyzacje/graf";
+import type { Filtr } from "../../../../../../domain/filtry";
 
 export type Tryb = "edycja" | "analityka";
 
@@ -145,6 +148,7 @@ export function KartaWezla({
 // ── Panel wlasciwosci ────────────────────────────────────────────────────────
 
 const RODZAJE_REGUL: { rodzaj: RegulaWarunku["rodzaj"]; etykieta: string }[] = [
+  { rodzaj: "filtr", etykieta: "spełnia warunki (profil, historia, automatyzacje)" },
   { rodzaj: "kupil_od_wejscia", etykieta: "kupił od wejścia do automatyzacji" },
   { rodzaj: "kupil_w_dniach", etykieta: "kupił w ostatnich N dniach" },
   { rodzaj: "kliknal_poprzedni", etykieta: "kliknął w poprzedni e-mail" },
@@ -158,6 +162,7 @@ function domyslnaRegula(rodzaj: RegulaWarunku["rodzaj"], segmenty: { id: string 
     case "kupil_w_dniach": return { rodzaj, dni: 30 };
     case "w_segmencie": return { rodzaj, segmentId: segmenty[0]?.id ?? "" };
     case "wartosc_zamowienia": return { rodzaj, minMinor: 20000 };
+    case "filtr": return { rodzaj, filtr: { grupy: [] } };
     default: return { rodzaj } as RegulaWarunku;
   }
 }
@@ -188,6 +193,11 @@ export function PanelWezla({
   segmenty,
   metryki = [],
   grafV2Dostepny = false,
+  katalog = null,
+  metrykiFiltra = [],
+  filtrProfilu,
+  onFiltrProfilu,
+  podglad,
   emaile,
   bledy,
   ostrzezenia = [],
@@ -204,6 +214,15 @@ export function PanelWezla({
   segmenty: { id: string; name: string }[];
   metryki?: MetrykaDoWyboru[];
   grafV2Dostepny?: boolean;
+  /** katalog wlasciwosci (metryka wyzwalacza, profile) dla EdytorFiltra */
+  katalog?: KatalogFiltra | null;
+  /** wszystkie metryki konta (warunek "co osoba zrobila") */
+  metrykiFiltra?: MetrykaFiltra[];
+  /** filtr profilu flow (ustawienie calej sciezki, edytowane w karcie wyzwalacza) */
+  filtrProfilu?: Filtr;
+  onFiltrProfilu?: (f: Filtr | undefined) => void;
+  /** podglad wyzwalacza (E4b 4.10), renderowany pod filtrami */
+  podglad?: React.ReactNode;
   emaile: Record<string, { nazwa: string; temat: string; maTresc: boolean }>;
   bledy: string[];
   ostrzezenia?: string[];
@@ -241,7 +260,39 @@ export function PanelWezla({
       ) : null}
       {wezel.typ === "wyzwalacz" ? (
         <Sekcja tytul="Kiedy osoba wchodzi">
-          <PanelZrodla zrodlo={wezel.zrodlo} metryki={metryki} listy={listy} grafV2Dostepny={grafV2Dostepny} onZmiana={(zrodlo) => onZmiana({ zrodlo } as Partial<Wezel>)} />
+          <PanelZrodla zrodlo={wezel.zrodlo} metryki={metryki} listy={listy} grafV2Dostepny={grafV2Dostepny} katalog={katalog} onZmiana={(zrodlo) => onZmiana({ zrodlo } as Partial<Wezel>)} />
+        </Sekcja>
+      ) : null}
+      {wezel.typ === "wyzwalacz" && onFiltrProfilu ? (
+        <Sekcja tytul="Filtr profilu">
+          {grafV2Dostepny || filtrProfilu ? (
+            <>
+              <EdytorFiltra
+                rodzaje={["metryka", "profil", "flow"]}
+                katalog={katalog}
+                metryki={metrykiFiltra}
+                filtr={filtrProfilu}
+                onZmiana={onFiltrProfilu}
+                etykietaDodaj="Dodaj filtr profilu"
+                pusty="Każda osoba z wyzwalacza wchodzi do automatyzacji."
+              />
+              <p className="text-[12px] leading-4 text-[var(--color-tekst-3)]">Sprawdzany przy wejściu i przed każdym mailem albo zmianą profilu. Kto przestanie go spełniać, wychodzi z automatyzacji, a powód widać w jego ścieżce.</p>
+            </>
+          ) : <p className="text-[12px] leading-4 text-[var(--color-tekst-3)]">Filtr profilu będzie dostępny po włączeniu nowych automatyzacji.</p>}
+        </Sekcja>
+      ) : null}
+      {wezel.typ === "wyzwalacz" && podglad ? podglad : null}
+
+      {wezel.typ === "podzial_zdarzenia" ? (
+        <Sekcja tytul="Podział po zdarzeniu (Tak / Nie)">
+          <Pole etykieta="Nazwa kroku (opcjonalnie)">
+            <input className="pole" maxLength={80} placeholder="np. Pakiet longevity?" value={wezel.etykieta ?? ""} onChange={(e) => onZmiana({ etykieta: e.target.value } as Partial<Wezel>)} />
+          </Pole>
+          <div>
+            <span className="etykieta mb-1 block">Tak, gdy zdarzenie, które wprowadziło osobę…</span>
+            <EdytorFiltra rodzaje={["zdarzenie"]} katalog={katalog} filtr={wezel.filtr.grupy.length ? wezel.filtr : undefined} onZmiana={(f) => onZmiana({ filtr: f ?? { grupy: [] } } as Partial<Wezel>)} etykietaDodaj="Dodaj regułę" />
+          </div>
+          <p className="text-[12px] leading-4 text-[var(--color-tekst-3)]">Dane zdarzenia się nie zmieniają, więc wynik jest taki sam niezależnie od chwili. Do decyzji po profilu i historii osoby użyj kroku „Warunek”.</p>
         </Sekcja>
       ) : null}
 
@@ -303,6 +354,9 @@ export function PanelWezla({
               {RODZAJE_REGUL.map((r) => <option key={r.rodzaj} value={r.rodzaj} disabled={r.rodzaj === "w_segmencie" && !segmenty.length}>{r.etykieta}{r.rodzaj === "w_segmencie" && !segmenty.length ? " (brak segmentów)" : ""}</option>)}
             </select>
           </Pole>
+          {wezel.regula.rodzaj === "filtr" ? (
+            <EdytorFiltra rodzaje={["metryka", "profil", "flow"]} katalog={katalog} metryki={metrykiFiltra} filtr={wezel.regula.filtr.grupy.length ? wezel.regula.filtr : undefined} onZmiana={(f) => onZmiana({ regula: { rodzaj: "filtr", filtr: f ?? { grupy: [] } } } as Partial<Wezel>)} etykietaDodaj="Dodaj regułę" />
+          ) : null}
           {wezel.regula.rodzaj === "kupil_w_dniach" ? (
             <Pole etykieta="Liczba dni">
               <input type="number" min={1} max={3650} className="pole" value={wezel.regula.dni} onChange={(e) => onZmiana({ regula: { rodzaj: "kupil_w_dniach", dni: Math.max(1, Math.min(3650, Math.trunc(Number(e.target.value) || 1))) } } as Partial<Wezel>)} />
@@ -348,6 +402,40 @@ export function PanelWezla({
             </Link>
             {!emaile[wezel.emailId]?.maTresc ? <p className="text-[12px] leading-4 text-[var(--color-blad)]">Wiadomość nie ma jeszcze treści. Bez niej automatyzacji nie da się włączyć.</p> : null}
           </Sekcja>
+          <Sekcja tytul="Kto dostaje ten mail">
+            <div>
+              <span className="etykieta mb-1 block">Dodatkowy filtr</span>
+              {grafV2Dostepny || wezel.dodatkoweFiltry ? (
+                <EdytorFiltra rodzaje={["profil", "metryka", "flow"]} katalog={katalog} metryki={metrykiFiltra} filtr={wezel.dodatkoweFiltry} onZmiana={(f) => onZmiana({ dodatkoweFiltry: f } as Partial<Wezel>)} etykietaDodaj="Dodaj filtr maila" pusty="Mail dostaje każdy, kto dojdzie do tego kroku." />
+              ) : <p className="text-[12px] leading-4 text-[var(--color-tekst-3)]">Dostępne po włączeniu nowych automatyzacji.</p>}
+              <p className="mt-1.5 text-[12px] leading-4 text-[var(--color-tekst-3)]">Kto nie spełnia, pomija tylko ten mail i idzie dalej.</p>
+            </div>
+            <label className="flex items-start gap-2.5 text-[13px] leading-5">
+              <input type="checkbox" className="mt-1 accent-[var(--color-akcent)]" disabled={!grafV2Dostepny && !wezel.smartSending} checked={wezel.smartSending === true} onChange={(e) => onZmiana({ smartSending: e.target.checked } as Partial<Wezel>)} />
+              <span>
+                Smart sending
+                <span className="block text-[12px] text-[var(--color-tekst-3)]">Pomiń, jeśli osoba dostała od nas maila w ostatnich {wezel.smartSendingGodzin ?? SMART_SENDING_GODZIN} godz. Nie przesuwa maila, osoba idzie dalej.</span>
+              </span>
+            </label>
+            {wezel.smartSending ? (
+              <div className="grid grid-cols-[96px_1fr] items-center gap-2 pl-6">
+                <input type="number" min={1} max={168} className="pole" aria-label="okno smart sending w godzinach" value={wezel.smartSendingGodzin ?? SMART_SENDING_GODZIN} onChange={(e) => onZmiana({ smartSendingGodzin: Math.max(1, Math.min(168, Math.trunc(Number(e.target.value) || SMART_SENDING_GODZIN))) } as Partial<Wezel>)} />
+                <span className="text-[13px] text-[var(--color-tekst-2)]">godzin</span>
+              </div>
+            ) : null}
+            <label className="flex items-start gap-2.5 text-[13px] leading-5">
+              <input type="checkbox" className="mt-1 accent-[var(--color-akcent)]" disabled={!grafV2Dostepny && !wezel.transakcyjny} checked={wezel.transakcyjny === true} onChange={(e) => onZmiana({ transakcyjny: e.target.checked } as Partial<Wezel>)} />
+              <span>
+                Mail transakcyjny
+                <span className="block text-[12px] text-[var(--color-tekst-3)]">Wychodzi także do osób bez zgody marketingowej i bez smart sending. Wypisani, odbicia i skargi nie dostaną go nigdy.</span>
+              </span>
+            </label>
+            {wezel.transakcyjny ? (
+              <p className="flex items-start gap-1.5 rounded-md border border-[var(--color-czeka-ramka)] bg-[var(--color-czeka-tlo)] px-3 py-2 text-[12px] leading-4 text-[var(--color-czeka)]">
+                <AlertTriangle size={13} className="mt-0.5 shrink-0" />Tylko treści niezbędne do realizacji zamówienia albo usługi (potwierdzenie, dostawa, dostęp). Rabat albo polecane produkty w takim mailu to marketing bez zgody.
+              </p>
+            ) : null}
+          </Sekcja>
           {stat.email && stat.email.wyslane > 0 ? (
             <Sekcja tytul="Wyniki tego maila">
               <dl className="grid grid-cols-2 gap-2 text-[13px]">
@@ -364,16 +452,56 @@ export function PanelWezla({
       {wezel.typ === "profil" ? (
         <Sekcja tytul="Co zrobić z profilem">
           <Pole etykieta="Akcja">
-            <select className="pole" value={wezel.akcja.rodzaj} onChange={(e) => onZmiana({ akcja: { ...wezel.akcja, rodzaj: e.target.value as "dodaj_do_listy" | "usun_z_listy" } } as Partial<Wezel>)}>
-              <option value="dodaj_do_listy">dodaj do listy</option>
-              <option value="usun_z_listy">usuń z listy</option>
+            <select className="pole" value={wezel.akcja.rodzaj} onChange={(e) => {
+              const r = e.target.value as AkcjaProfilu["rodzaj"];
+              const poprzedniaLista = "listId" in wezel.akcja ? wezel.akcja.listId : listy[0]?.id ?? "";
+              const poprzedniKlucz = "klucz" in wezel.akcja ? wezel.akcja.klucz : "etap_automatyzacji";
+              const akcja: AkcjaProfilu = r === "dodaj_do_listy" || r === "usun_z_listy" ? { rodzaj: r, listId: poprzedniaLista }
+                : r === "ustaw_wlasciwosc" ? { rodzaj: r, klucz: poprzedniKlucz, wartosc: "" } : { rodzaj: r, klucz: poprzedniKlucz };
+              onZmiana({ akcja } as Partial<Wezel>);
+            }}>
+              <option value="dodaj_do_listy" disabled={!listy.length}>dodaj do listy{listy.length ? "" : " (brak list)"}</option>
+              <option value="usun_z_listy" disabled={!listy.length}>usuń z listy</option>
+              <option value="ustaw_wlasciwosc" disabled={!grafV2Dostepny && wezel.akcja.rodzaj !== "ustaw_wlasciwosc"}>ustaw właściwość</option>
+              <option value="usun_wlasciwosc" disabled={!grafV2Dostepny && wezel.akcja.rodzaj !== "usun_wlasciwosc"}>usuń właściwość</option>
             </select>
           </Pole>
-          <Pole etykieta="Lista">
-            <select className="pole" value={wezel.akcja.listId} onChange={(e) => onZmiana({ akcja: { ...wezel.akcja, listId: e.target.value } } as Partial<Wezel>)}>
-              {listy.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-            </select>
-          </Pole>
+          {wezel.akcja.rodzaj === "dodaj_do_listy" || wezel.akcja.rodzaj === "usun_z_listy" ? (
+            <Pole etykieta="Lista">
+              <select className="pole" value={wezel.akcja.listId} onChange={(e) => onZmiana({ akcja: { ...wezel.akcja, listId: e.target.value } } as Partial<Wezel>)}>
+                {listy.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+              </select>
+            </Pole>
+          ) : (
+            <>
+              <Pole etykieta="Właściwość" podpowiedz={katalog?.profil.length ? "Wybierz istniejącą albo wpisz nową nazwę." : undefined}>
+                <input className="pole" list="wlasciwosci-profilu" maxLength={255} value={wezel.akcja.klucz} onChange={(e) => onZmiana({ akcja: { ...wezel.akcja, klucz: e.target.value } } as Partial<Wezel>)} aria-invalid={!wezel.akcja.klucz.trim() || undefined} />
+                <datalist id="wlasciwosci-profilu">{(katalog?.profil ?? []).map((p) => <option key={p.klucz} value={p.klucz} />)}</datalist>
+              </Pole>
+              {wezel.akcja.rodzaj === "ustaw_wlasciwosc" ? (
+                <div className="grid grid-cols-[1fr_110px] gap-2">
+                  <Pole etykieta="Wartość">
+                    {typeof wezel.akcja.wartosc === "boolean" ? (
+                      <select className="pole" value={String(wezel.akcja.wartosc)} onChange={(e) => onZmiana({ akcja: { ...wezel.akcja, wartosc: e.target.value === "true" } } as Partial<Wezel>)}>
+                        <option value="true">tak</option>
+                        <option value="false">nie</option>
+                      </select>
+                    ) : (
+                      <input className="pole" type={typeof wezel.akcja.wartosc === "number" ? "number" : "text"} value={String(wezel.akcja.wartosc)} onChange={(e) => onZmiana({ akcja: { ...wezel.akcja, wartosc: typeof (wezel.akcja as { wartosc: unknown }).wartosc === "number" ? Number(e.target.value) : e.target.value } } as Partial<Wezel>)} />
+                    )}
+                  </Pole>
+                  <Pole etykieta="Typ">
+                    <select className="pole" value={typeof wezel.akcja.wartosc} onChange={(e) => onZmiana({ akcja: { ...wezel.akcja, wartosc: e.target.value === "number" ? 0 : e.target.value === "boolean" ? true : "" } } as Partial<Wezel>)}>
+                      <option value="string">tekst</option>
+                      <option value="number">liczba</option>
+                      <option value="boolean">tak/nie</option>
+                    </select>
+                  </Pole>
+                </div>
+              ) : null}
+              <p className="text-[12px] leading-4 text-[var(--color-tekst-3)]">Zmiana trafia do profilu osoby i jest widoczna w filtrach, segmentach i zmiennych {"{{ person.… }}"}.</p>
+            </>
+          )}
         </Sekcja>
       ) : null}
 
@@ -388,7 +516,7 @@ export function PanelWezla({
           <button type="button" onClick={onUsun} className="przycisk przycisk-wtorny przycisk-maly w-full hover:!border-[var(--color-blad-ramka)] hover:!bg-[var(--color-blad-tlo)] hover:!text-[var(--color-blad)]">
             <Trash2 size={14} /> Usuń krok
           </button>
-          {wezel.typ === "warunek" || wezel.typ === "ab_split" ? <p className="mt-2 text-[12px] leading-4 text-[var(--color-tekst-3)]">Zostanie gałąź {wezel.typ === "warunek" ? "„Tak”" : "A"}; druga gałąź zniknie razem ze swoimi krokami.</p> : null}
+          {wezel.typ === "warunek" || wezel.typ === "ab_split" || wezel.typ === "podzial_zdarzenia" ? <p className="mt-2 text-[12px] leading-4 text-[var(--color-tekst-3)]">Zostanie gałąź {wezel.typ !== "ab_split" ? "„Tak”" : "A"}; druga gałąź zniknie razem ze swoimi krokami.</p> : null}
         </div>
       ) : null}
     </div>

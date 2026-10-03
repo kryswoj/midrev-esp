@@ -61,11 +61,13 @@ import {
 import { sciezkaSvg, ulozGraf } from "../../../../../../domain/automatyzacje/uklad";
 import { STATUSY, type StatusAutomatyzacji } from "../../../../../../domain/automatyzacje/statusy";
 import type { StatystykiAutomatyzacji } from "../../../../../../usecases/automatyzacje/journeye";
-import { opublikujAkcja, statystykiAkcja, utworzWiadomoscAkcja, zapiszNaglowekWiadomosciAkcja, zapiszSzkicAkcja, zmienNazweAkcja, zmienStatusAkcja } from "../../akcje";
+import { katalogWlasciwosciAkcja, opublikujAkcja, statystykiAkcja, utworzWiadomoscAkcja, zapiszNaglowekWiadomosciAkcja, zapiszSzkicAkcja, zmienNazweAkcja, zmienStatusAkcja } from "../../akcje";
 import { BibliotekaKrokow, IKONY_WEZLOW, KAFELEK, KATEGORIE, PasekKrokow, type TypDoDodania } from "./biblioteka-krokow";
 import { ListaProblemow, Minimapa } from "./nawigacja-kanwy";
 import { KartaWezla, PanelWezla, wysokoscWezla, type StatWezla, type Tryb } from "./wezly";
 import { WyborPonownegoWejscia, type MetrykaDoWyboru } from "./wyzwalacz";
+import { PodgladWyzwalacza } from "./podglad-wyzwalacza";
+import type { KatalogFiltra } from "../../../../../ui/edytor-filtra";
 
 /**
  * Kanwa automatyzacji (jak flow builder Klaviyo): wyzwalacz na gorze, sciezka w dol,
@@ -124,7 +126,11 @@ function nowyWezel(typ: TypDoDodania, g: Graf, dane: { emailId?: string; listId?
     case "ab_split":
       return { id, typ, procentA: 50, links: { a: null, b: null } };
     case "profil":
-      return { id, typ, akcja: { rodzaj: "dodaj_do_listy", listId: dane.listId ?? "" }, links: { next: null } };
+      return dane.listId
+        ? { id, typ, akcja: { rodzaj: "dodaj_do_listy", listId: dane.listId }, links: { next: null } }
+        : { id, typ, akcja: { rodzaj: "ustaw_wlasciwosc", klucz: "etap_automatyzacji", wartosc: "" }, links: { next: null } };
+    case "podzial_zdarzenia":
+      return { id, typ, filtr: { grupy: [] }, links: { next_if_true: null, next_if_false: null } };
   }
 }
 
@@ -285,10 +291,27 @@ export function Kanwa({
   const uklad = useMemo(() => ulozGraf(g, (w) => wysokoscWezla(w, tryb)), [g, tryb]);
   const wezelZaznaczony = zaznaczony ? g.wezly.find((w) => w.id === zaznaczony) ?? null : null;
 
-  const blokady: Partial<Record<TypDoDodania, string>> = useMemo(
-    () => (start.listy.length ? {} : { profil: "Najpierw utwórz listę w zakładce Listy." }),
-    [start.listy.length],
-  );
+  const blokady: Partial<Record<TypDoDodania, string>> = useMemo(() => {
+    const b: Partial<Record<TypDoDodania, string>> = {};
+    if (!start.listy.length && !start.grafV2Dostepny) b.profil = "Najpierw utwórz listę w zakładce Listy.";
+    if (!start.grafV2Dostepny) b.podzial_zdarzenia = "Dostępne po włączeniu nowych automatyzacji.";
+    return b;
+  }, [start.listy.length, start.grafV2Dostepny]);
+
+  // ── katalog wlasciwosci dla EdytorFiltra (metryka wyzwalacza + profile), E4b 4.11 ──
+  const wyzwalacz = g.wezly.find((w) => w.typ === "wyzwalacz");
+  const metrykaWyzwalacza = wyzwalacz?.typ === "wyzwalacz" && wyzwalacz.zrodlo.rodzaj === "metryka" ? wyzwalacz.zrodlo.metryka : null;
+  const kluczKatalogu = metrykaWyzwalacza ? `${metrykaWyzwalacza.integracja}|${metrykaWyzwalacza.nazwa}` : "";
+  const [katalog, setKatalog] = useState<KatalogFiltra | null>(null);
+  useEffect(() => {
+    let aktualny = true;
+    const [integracja, ...nazwa] = kluczKatalogu.split("|");
+    katalogWlasciwosciAkcja(tenantId, kluczKatalogu ? { integracja, nazwa: nazwa.join("|") } : null)
+      .then((k) => { if (aktualny) setKatalog(k); })
+      .catch(() => { if (aktualny) setKatalog({ zdarzenie: [], profil: [], flowy: [] }); });
+    return () => { aktualny = false; };
+  }, [kluczKatalogu, tenantId]);
+  const metrykiFiltra = useMemo(() => start.metryki.map((m) => ({ integracja: m.integracja, nazwa: m.nazwa, etykieta: m.etykieta })), [start.metryki]);
 
   const statWezla = useCallback(
     (w: Wezel): StatWezla => ({
@@ -925,6 +948,14 @@ export function Kanwa({
                   segmenty={start.segmenty}
                   metryki={start.metryki}
                   grafV2Dostepny={start.grafV2Dostepny}
+                  katalog={katalog}
+                  metrykiFiltra={metrykiFiltra}
+                  filtrProfilu={g.ustawienia.filtrProfilu}
+                  onFiltrProfilu={(filtrProfilu) => aktualizuj((d) => {
+                    const { filtrProfilu: _f, ...reszta } = d.ustawienia;
+                    return { ...d, ustawienia: filtrProfilu ? { ...reszta, filtrProfilu } : reszta };
+                  })}
+                  podglad={metrykaWyzwalacza && start.grafV2Dostepny ? <PodgladWyzwalacza tenantId={tenantId} flowId={flowId} szkicJson={biezacyJson} /> : null}
                   emaile={emaile}
                   // niedokonczone warunki maja komunikat przy samym polu; tu reszta problemow kroku
                   bledy={bledyWezla(wezelZaznaczony.id).filter((t) => t !== BLAD_BEZ_AKCJI && !niedokonczone.some((n) => n.wezelId === wezelZaznaczony.id && n.tresc === t))}
