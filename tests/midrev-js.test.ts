@@ -114,6 +114,18 @@ describe("midrev.js w przeglądarce", () => {
     expect(await b.w.midrev.isIdentified()).toBe(false);
   });
 
+  it("jawna odmowa (Consent Mode denied) kasuje ciasteczko __mx_id z dawnej wizyty, choć zgody i tak nie było", async () => {
+    const b = przegladarka({
+      przed: (w) => {
+        w.document.cookie = "__mx_id=" + encodeURIComponent(JSON.stringify({ a: "staryIdentyfikator1", t: 1 })) + "; path=/";
+        w.dataLayer = [["consent", "default", { analytics_storage: "denied" }]];
+      },
+    });
+    await b.czekaj();
+    expect(b.ciasteczka.has("__mx_id")).toBe(false);
+    expect(b.wyslane).toHaveLength(0);
+  });
+
   it("zgoda przez Google Consent Mode v2 (gtag consent update): kolejka sprzed zgody wysłana, token z linku użyty", async () => {
     const token = "B".repeat(87);
     const b = przegladarka({

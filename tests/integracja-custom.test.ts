@@ -453,10 +453,15 @@ describe("Integracja custom jak Klaviyo (0044)", () => {
       expect(await zly.text()).toMatch(/^\/\* midrev\.js/);
     });
 
-    it("wymiana klucza: stary przestaje działać, nowy dostaje te same ustawienia", async () => {
+    it("wymiana klucza: stary przestaje działać, nowy dostaje te same ustawienia (także platformę)", async () => {
+      // platforma decyduje o wymuszeniu zgody w midrev.js (Woo/Shopify), więc rotacja jej nie gubi
+      await getPool().query("update site_keys set platform = 'woocommerce' where tenant_id = $1 and revoked_at is null", [tenantB]);
       const nowy = await wymienKluczStrony(tenantB);
       expect(nowy.id).not.toBe(kluczB);
       expect(nowy.domeny).toEqual(["sklep-b.test"]);
+      expect(nowy.platforma).toBe("woocommerce");
+      await getPool().query("update site_keys set platform = 'custom' where tenant_id = $1 and revoked_at is null", [tenantB]);
+      wyczyscPamiecKluczy();
       const stary = await postEvents(zadanie(`/client/events?company_id=${kluczB}`, zdarzenie("X", { email: "a@b.pl" }), { origin: "https://sklep-b.test" }));
       expect(stary.status).toBe(400);
       kluczB = nowy.id;

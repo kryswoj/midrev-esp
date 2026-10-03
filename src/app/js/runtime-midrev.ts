@@ -158,7 +158,9 @@ export const RUNTIME_MIDREV = String.raw`(function (w, d, K) {
   var trybRecznej = false;
   function ustawZgode(v, zrodlo) {
     v = !!v;
-    if (v === zgoda) return;
+    // jawna odmowa przy braku zgody: ciasteczko z dawnej wizyty (np. sprzed włączenia wymogu zgody)
+    // też znika; wtyczka Woo bierze samo __mx_id za zgodę (RODO wariant B, review r5)
+    if (v === zgoda) { if (!v && czytajCiasteczko()) usunCiasteczko(); return; }
     zgoda = v;
     log("zgoda", v, zrodlo);
     if (v) {

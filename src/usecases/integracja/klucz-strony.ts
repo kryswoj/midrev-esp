@@ -220,8 +220,8 @@ export async function wymienKluczStrony(tenantId: string): Promise<KluczStrony> 
     for (let proba = 0; proba < 5 && !nowy; proba++) {
       const { rows } = await klient.query<Wiersz>(
         `insert into site_keys (id, tenant_id, link_domains, allowed_origins, restrict_origins, require_cookie_consent,
-                                identify_from_links, ga4_datalayer, load_forms, consent_wording, consent_privacy_url)
-         values ($1, $2, $3, $3, $4, $5, $6, $7, $8, $9, $10)
+                                identify_from_links, ga4_datalayer, load_forms, consent_wording, consent_privacy_url, platform)
+         values ($1, $2, $3, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          on conflict (id) do nothing returning ${KOLUMNY}`,
         [
           nowyIdentyfikator(),
@@ -234,6 +234,8 @@ export async function wymienKluczStrony(tenantId: string): Promise<KluczStrony> 
           stare[0]?.load_forms ?? true,
           stare[0]?.consent_wording ?? null,
           stare[0]?.consent_privacy_url ?? null,
+          // platforma zostaje (Woo/Shopify): od niej zależy wymuszenie zgody w midrev.js (review r5)
+          stare[0]?.platform ?? "custom",
         ],
       );
       nowy = rows[0];
