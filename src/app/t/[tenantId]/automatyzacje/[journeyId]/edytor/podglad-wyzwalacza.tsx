@@ -49,7 +49,7 @@ export function PodgladWyzwalacza({ tenantId, flowId, szkicJson }: { tenantId: s
                 <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${r.wszedlby ? "bg-[var(--color-ok)]" : "bg-[var(--color-tekst-3)]"}`} aria-hidden="true" />
                 <span className="min-w-0 flex-1">
                   <span className="block truncate font-medium text-[var(--color-tekst)]">{r.email ?? "osoba bez adresu"}</span>
-                  <span className={r.wszedlby ? "text-[var(--color-ok)]" : "text-[var(--color-tekst-2)]"}>{r.wszedlby ? "weszłaby" : `odpada: ${r.opis}`}</span>
+                  <span className={r.wszedlby ? "text-[var(--color-ok)]" : "text-[var(--color-tekst-2)]"}>{r.wszedlby ? "Wejdzie" : `Nie wejdzie: ${r.opis}`}</span>
                 </span>
                 <time className="shrink-0 text-[var(--color-tekst-3)]" dateTime={r.kiedy}>{new Date(r.kiedy).toLocaleString("pl-PL", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}</time>
               </li>
@@ -57,7 +57,7 @@ export function PodgladWyzwalacza({ tenantId, flowId, szkicJson }: { tenantId: s
             {!wiersze.length ? <li className="px-2.5 py-2 text-[12px] text-[var(--color-tekst-3)]">Brak zdarzeń tej metryki w ostatnich {w.dni} dniach.</li> : null}
           </ul>
           {w.wiersze.length > 8 ? (
-            <button type="button" className="mt-1.5 text-[12px] font-medium text-[var(--color-akcent)] hover:underline" onClick={() => setWszystkie((x) => !x)}>
+            <button type="button" className="przycisk przycisk-wtorny przycisk-maly mt-2 w-full" onClick={() => setWszystkie((x) => !x)}>
               {wszystkie ? "Pokaż mniej" : `Pokaż wszystkie (${w.wiersze.length})`}
             </button>
           ) : null}

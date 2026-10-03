@@ -148,7 +148,7 @@ export function KartaWezla({
 // ── Panel wlasciwosci ────────────────────────────────────────────────────────
 
 const RODZAJE_REGUL: { rodzaj: RegulaWarunku["rodzaj"]; etykieta: string }[] = [
-  { rodzaj: "filtr", etykieta: "spełnia warunki (profil, historia, automatyzacje)" },
+  { rodzaj: "filtr", etykieta: "spełnia własne warunki" },
   { rodzaj: "kupil_od_wejscia", etykieta: "kupił od wejścia do automatyzacji" },
   { rodzaj: "kupil_w_dniach", etykieta: "kupił w ostatnich N dniach" },
   { rodzaj: "kliknal_poprzedni", etykieta: "kliknął w poprzedni e-mail" },
@@ -289,7 +289,7 @@ export function PanelWezla({
             <input className="pole" maxLength={80} placeholder="np. Pakiet longevity?" value={wezel.etykieta ?? ""} onChange={(e) => onZmiana({ etykieta: e.target.value } as Partial<Wezel>)} />
           </Pole>
           <div>
-            <span className="etykieta mb-1 block">Tak, gdy zdarzenie, które wprowadziło osobę…</span>
+            <span className="etykieta mb-1 block">Ścieżka „Tak”, gdy zdarzenie z wyzwalacza ma…</span>
             <EdytorFiltra rodzaje={["zdarzenie"]} katalog={katalog} filtr={wezel.filtr.grupy.length ? wezel.filtr : undefined} onZmiana={(f) => onZmiana({ filtr: f ?? { grupy: [] } } as Partial<Wezel>)} etykietaDodaj="Dodaj regułę" />
           </div>
           <p className="text-[12px] leading-4 text-[var(--color-tekst-3)]">Dane zdarzenia się nie zmieniają, więc wynik jest taki sam niezależnie od chwili. Do decyzji po profilu i historii osoby użyj kroku „Warunek”.</p>
@@ -414,7 +414,7 @@ export function PanelWezla({
               <input type="checkbox" className="mt-1 accent-[var(--color-akcent)]" disabled={!grafV2Dostepny && !wezel.smartSending} checked={wezel.smartSending === true} onChange={(e) => onZmiana({ smartSending: e.target.checked } as Partial<Wezel>)} />
               <span>
                 Smart sending
-                <span className="block text-[12px] text-[var(--color-tekst-3)]">Pomiń, jeśli osoba dostała od nas maila w ostatnich {wezel.smartSendingGodzin ?? SMART_SENDING_GODZIN} godz. Nie przesuwa maila, osoba idzie dalej.</span>
+                <span className="block text-[12px] text-[var(--color-tekst-3)]">Pomiń, jeśli dostała od nas maila w ostatnich {wezel.smartSendingGodzin ?? SMART_SENDING_GODZIN} godz.</span>
               </span>
             </label>
             {wezel.smartSending ? (
@@ -427,7 +427,7 @@ export function PanelWezla({
               <input type="checkbox" className="mt-1 accent-[var(--color-akcent)]" disabled={!grafV2Dostepny && !wezel.transakcyjny} checked={wezel.transakcyjny === true} onChange={(e) => onZmiana({ transakcyjny: e.target.checked } as Partial<Wezel>)} />
               <span>
                 Mail transakcyjny
-                <span className="block text-[12px] text-[var(--color-tekst-3)]">Wychodzi także do osób bez zgody marketingowej i bez smart sending. Wypisani, odbicia i skargi nie dostaną go nigdy.</span>
+                <span className="block text-[12px] text-[var(--color-tekst-3)]">Także bez zgody marketingowej. Wypisani nie dostaną go nigdy.</span>
               </span>
             </label>
             {wezel.transakcyjny ? (

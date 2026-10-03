@@ -19,16 +19,16 @@ export const DNI_PODGLADU = 30;
 export type PowodPodgladu = PowodOdrzucenia | "filtr_profilu" | "brak_adresu" | "juz_w_automatyzacji" | "ponowne_wejscie" | "blad_filtra";
 
 export const OPISY_PODGLADU: Record<PowodPodgladu, string> = {
-  backfill: "uzupełnienie historii (backfill): nie uruchamia automatyzacji",
-  import: "import historii: nie uruchamia automatyzacji",
+  backfill: "zdarzenie z uzupełnienia historii",
+  import: "zdarzenie z importu historii",
   spoznione: "dotarło ponad 4 godziny po fakcie",
-  z_przyszlosci: "czas zdarzenia z przyszłości",
+  z_przyszlosci: "data zdarzenia z przyszłości",
   sprzed_wlaczenia: "sprzed włączenia automatyzacji",
-  filtr_wyzwalacza: "nie spełnia filtra wyzwalacza",
-  filtr_profilu: "nie spełnia filtra profilu",
-  brak_adresu: "osoba bez adresu e-mail",
-  juz_w_automatyzacji: "już była w tej automatyzacji (wejście tylko raz)",
-  ponowne_wejscie: "wcześniejsze zdarzenie tej osoby już ją wprowadziło (wejście tylko raz)",
+  filtr_wyzwalacza: "nie pasuje do filtra wyzwalacza",
+  filtr_profilu: "nie pasuje do filtra profilu",
+  brak_adresu: "brak adresu e-mail",
+  juz_w_automatyzacji: "już była w tej automatyzacji",
+  ponowne_wejscie: "weszła już wcześniejszym zdarzeniem",
   blad_filtra: "filtra nie da się policzyć",
 };
 
@@ -102,7 +102,7 @@ export async function podgladWyzwalacza(tenantId: string, flowId: string, grafSu
       }
     }
     if (!powod && r.profile_id) weszli.add(r.profile_id);
-    wynik.push({ eventId: r.id, profileId: r.profile_id, email: r.email, kiedy: r.occurred_at, wszedlby: !powod, powod, opis: powod ? OPISY_PODGLADU[powod] : "weszłaby do automatyzacji" });
+    wynik.push({ eventId: r.id, profileId: r.profile_id, email: r.email, kiedy: r.occurred_at, wszedlby: !powod, powod, opis: powod ? OPISY_PODGLADU[powod] : "wejdzie" });
   }
   wynik.reverse();
   return { ok: true, wiersze: wynik, weszloby: weszli.size, przeanalizowane: rows.length, dni: DNI_PODGLADU };

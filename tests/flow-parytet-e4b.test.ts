@@ -282,6 +282,30 @@ describe("Automatyzacje E4b: parytet (filtry profilu, historia, split, smart sen
       const t = await przejscia(f.id, "henryk");
       expect(t.some((x) => x.kind === "pominieto" && x.detail.powod === "smart_sending" && x.detail.przyWysylce === true)).toBe(true);
     });
+
+    it("przy wysyłce liczy się tylko mail faktycznie wysłany: inny mail w stanie „sending” bez zdarzenia sent nie blokuje", async () => {
+      await wylaczWszystkie();
+      const f = await flow("E4B smart sending w toku", CHECKOUT, 1, (m, g) => zWezlami(g, "m1", [mail("m1", m[0], "k", { smartSending: true }), koniec("k")]));
+      await wlacz(f.id);
+      await zdarzenie("iza", CHECKOUT, { temu: "1 minute" });
+      await getPool().query("delete from messages where tenant_id = $1 and profile_id = $2", [tenantId, profile.iza]);
+      await getPool().query("update tenants set sending_paused_at = now(), sending_pause_reason = 'test' where id = $1", [tenantId]);
+      const d = new DostawcaAtrapa();
+      try {
+        await uruchomAutomatyzacje(tenantId, { dostawca: d });
+        expect((await wiadomosciFlow(f.id, "iza"))[0].current_state).toBe("queued");
+        // drugi worker trzyma inny mail tej osoby w `sending` (jeszcze nie wyslany, moze wrocic do kolejki)
+        await getPool().query(
+          `insert into messages (tenant_id, profile_id, source_type, source_id, email, subject, body_html, click_token, unsubscribe_token, current_state, current_rank)
+           values ($1, $2, 'campaign', $3, $4, 'w drodze', '<p>x</p>', md5(random()::text), md5(random()::text), 'sending', 2)`,
+          [tenantId, profile.iza, randomUUID(), email("iza")],
+        );
+      } finally {
+        await getPool().query("update tenants set sending_paused_at = null, sending_pause_reason = null where id = $1", [tenantId]);
+      }
+      await wyslijPartie(tenantId, { dostawca: d });
+      expect(d.wyslane).toEqual([email("iza")]);
+    });
   });
 
   describe("filtr profilu przy wejściu (4.6)", () => {

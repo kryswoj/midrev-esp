@@ -53,10 +53,10 @@ export interface MetrykaFiltra {
 export type RodzajWarunku = "zdarzenie" | "profil" | "metryka" | "flow";
 
 const NAZWY_RODZAJOW: Record<RodzajWarunku, string> = {
-  zdarzenie: "Właściwość zdarzenia",
-  profil: "Właściwość profilu",
+  zdarzenie: "Dane zdarzenia",
+  profil: "Dane osoby",
   metryka: "Co osoba zrobiła",
-  flow: "Udział w automatyzacji",
+  flow: "Czy była w automatyzacji",
 };
 
 const POLA_STANDARDOWE: Record<(typeof POLA_STANDARDOWE_PROFILU)[number], string> = {
@@ -174,7 +174,7 @@ function WyborPola({ wartosc, pola, standard, onZmiana }: {
   const znane = new Set([...pola.map((p) => p.klucz), ...(standard ? Object.keys(POLA_STANDARDOWE).map((k) => `std:${k}`) : [])]);
   const reczne = wartosc !== "" && !znane.has(wartosc);
   return (
-    <span className="flex min-w-0 flex-1 flex-col gap-1.5">
+    <span className="flex w-full min-w-0 flex-col gap-1.5">
       <select
         className="pole"
         aria-label="pole"
@@ -362,9 +362,9 @@ function WierszWarunku({ w, rodzaje, katalog, metryki, wFlow, onZmiana, onUsun }
       <div className="flex items-start gap-1.5">
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
           {rodzaje.length > 1 ? (
-            <select className="pole !h-auto !min-h-0 !w-auto !border-transparent !bg-[var(--color-powierzchnia-2)] !py-1 !pl-2 text-[12px] font-medium text-[var(--color-tekst-2)]" aria-label="rodzaj warunku" value={rodzaj} onChange={(e) => onZmiana(nowyWarunek(e.target.value as RodzajWarunku, metryki, wFlow))}>
+            <span className="w-full"><select className="pole !h-auto !min-h-0 !w-auto !border-transparent !bg-[var(--color-powierzchnia-2)] !py-1 !pl-2 text-[12px] font-medium text-[var(--color-tekst-2)]" aria-label="rodzaj warunku" value={rodzaj} onChange={(e) => onZmiana(nowyWarunek(e.target.value as RodzajWarunku, metryki, wFlow))}>
               {rodzaje.map((r) => <option key={r} value={r}>{NAZWY_RODZAJOW[r]}</option>)}
-            </select>
+            </select></span>
           ) : null}
           {tresc}
         </div>
@@ -409,7 +409,7 @@ export function EdytorFiltra({
         <div key={gi}>
           {gi > 0 ? (
             <div className="my-1.5 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-tekst-3)]">
-              <span className="h-px flex-1 bg-[var(--color-linia)]" />i<span className="h-px flex-1 bg-[var(--color-linia)]" />
+              <span className="h-px flex-1 bg-[var(--color-linia)]" /><span className="rounded-full bg-[var(--color-powierzchnia-2)] px-2 py-0.5 text-[var(--color-tekst-2)]">i dodatkowo</span><span className="h-px flex-1 bg-[var(--color-linia)]" />
             </div>
           ) : null}
           <div className="space-y-2 rounded-lg border border-[var(--color-linia)] bg-white p-2.5">
@@ -427,14 +427,14 @@ export function EdytorFiltra({
                 />
               </div>
             ))}
-            <button type="button" className="text-[12px] font-semibold text-[var(--color-akcent)] hover:underline" onClick={() => ustaw(grupy.map((x, i) => (i === gi ? { warunki: [...x.warunki, nowy()] } : x)))}>
+            <button type="button" className="rounded-md border border-dashed border-[var(--color-akcent-ramka)] px-2 py-1 text-[12px] font-semibold text-[var(--color-akcent)] hover:bg-[var(--color-akcent-tlo)]" onClick={() => ustaw(grupy.map((x, i) => (i === gi ? { warunki: [...x.warunki, nowy()] } : x)))}>
               + LUB
             </button>
           </div>
         </div>
       ))}
       <button type="button" className="przycisk przycisk-wtorny przycisk-maly" onClick={() => ustaw([...grupy, { warunki: [nowy()] }])}>
-        <Plus size={13} /> {grupy.length ? "I (kolejny warunek)" : etykietaDodaj}
+        <Plus size={13} /> {grupy.length ? "I" : etykietaDodaj}
       </button>
     </div>
   );

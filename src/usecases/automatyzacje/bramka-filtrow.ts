@@ -50,8 +50,9 @@ export const STANY_W_KOLEJCE = ["queued", "claimed"];
  * Smart sending (plan 3.5): czy osoba dostala od nas mail w ostatnich N godzinach. Czas maila =
  * moment WYSLANIA (zdarzenie `sent`), a gdy go jeszcze nie ma, utworzenie: mail utworzony 20 h
  * temu i wyslany godzine temu blokuje. `zKolejka`: przy BUDOWIE licza sie tez maile czekajace
- * w kolejce (dwa flow naraz = 1 mail); przy WYSYLCE tylko te, ktore juz wyszly (pierwszy
- * z dwoch czekajacych wychodzi, drugi wtedy widzi go jako wyslany).
+ * w kolejce (dwa flow naraz = 1 mail); przy WYSYLCE wylacznie te z faktycznym zdarzeniem
+ * `sent` w oknie (pierwszy z dwoch czekajacych wychodzi, drugi wtedy widzi go jako wyslany;
+ * `sending` bez `sent` moze jeszcze wrocic do kolejki albo skonczyc sie bledem).
  */
 export async function niedawnyMail(
   klient: Klient,
@@ -69,9 +70,16 @@ export async function niedawnyMail(
           and ($5::boolean or not (m.current_state = any($6::text[])))
           and m.id is distinct from $7::uuid
           and not (m.source_type = 'journey' and m.source_id is not distinct from $8::uuid and m.journey_run_id is not distinct from $9::uuid)
-          and coalesce((select max(e.occurred_at) from message_events e
-                         where e.tenant_id = m.tenant_id and e.message_id = m.id and e.event_type = 'sent'), m.created_at)
-              > now() - make_interval(hours => $3::int)
+          and case when $5::boolean
+                -- przy budowie: wyslany w oknie albo utworzony w oknie i jeszcze w drodze
+                then coalesce((select max(e.occurred_at) from message_events e
+                                where e.tenant_id = m.tenant_id and e.message_id = m.id and e.event_type = 'sent'), m.created_at)
+                     > now() - make_interval(hours => $3::int)
+                -- przy wysylce: WYLACZNIE faktycznie wyslany w oknie (\`sending\` moze jeszcze wrocic do kolejki)
+                else exists (select 1 from message_events e
+                              where e.tenant_id = m.tenant_id and e.message_id = m.id and e.event_type = 'sent'
+                                and e.occurred_at > now() - make_interval(hours => $3::int))
+              end
      ) as niedawno`,
     [tenantId, profileId, godzin, STANY_NIEWYSLANE, opcje.zKolejka, STANY_W_KOLEJCE, opcje.pominWiadomosc ?? null,
      opcje.pominPrzebieg?.emailId ?? null, opcje.pominPrzebieg?.uczestnikId ?? null],
