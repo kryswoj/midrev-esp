@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Krem nawilżający · Sklep testowy MidRev</title>
+<link rel="canonical" href="__ORIGIN__/produkt.html">
+<meta property="og:image" content="https://picsum.photos/seed/krem/600/600">
+<!-- Google Consent Mode v2: domyślnie odmowa (jak na prawdziwym sklepie z banerem) -->
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){ dataLayer.push(arguments); }
+  gtag('consent', 'default', { analytics_storage: 'denied', ad_storage: 'denied' });
+</script>
+<!-- MidRev: ten sam kod, który pokazuje kreator w panelu -->
+<script async src="__MIDREV_SRC__"></script>
+<script>window.midrev=window.midrev||[];window._learnq=window._learnq||[];</script>
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"Product","name":"Krem nawilżający","sku":"KREM-50","image":"https://picsum.photos/seed/krem/600/600","offers":{"@type":"Offer","price":"89.90","priceCurrency":"PLN"}}
+</script>
+<style>
+  body{font-family:system-ui,sans-serif;max-width:720px;margin:0 auto;padding:24px;color:#111}
+  button{padding:10px 14px;border-radius:8px;border:1px solid #333;background:#fff;cursor:pointer;margin:4px 8px 4px 0}
+  #baner{position:fixed;left:0;right:0;bottom:0;background:#111;color:#fff;padding:16px;display:flex;gap:12px;align-items:center}
+  #baner button{background:#fff;color:#111}
+  form{margin-top:24px;padding:16px;border:1px solid #ddd;border-radius:8px}
+</style>
+</head>
+<body>
+  <h1>Krem nawilżający 50 ml</h1>
+  <p>Cena: 89,90 zł</p>
+  <button id="koszyk" type="button">Dodaj do koszyka</button>
+  <button id="zamow" type="button">Przejdź do kasy</button>
+
+  <form id="newsletter">
+    <h2>Newsletter</h2>
+    <input id="email" type="email" required placeholder="Twój e-mail">
+    <label><input id="zgoda" type="checkbox"> <span id="tresc-zgody">Zapisuję się na newsletter i zgadzam się na otrzymywanie wiadomości e-mail z ofertami i nowościami. Zgodę mogę wycofać w każdej chwili, klikając link w stopce wiadomości.</span></label>
+    <button type="submit">Zapisz</button>
+    <p id="wynik"></p>
+  </form>
+
+  <div id="baner">Ta strona używa cookies analitycznych.
+    <button id="akceptuj" type="button">Akceptuję</button>
+    <button id="odrzuc" type="button">Odrzucam</button>
+  </div>
+
+<script>
+  // GA4 ecommerce: view_item przy wejściu, add_to_cart i begin_checkout na klik
+  var item = { item_id: 'KREM-50', item_name: 'Krem nawilżający', price: 89.9, quantity: 1, item_brand: 'Somi', item_category: 'Pielęgnacja', item_category2: 'Kremy' };
+  dataLayer.push({ ecommerce: null });
+  dataLayer.push({ event: 'view_item', ecommerce: { currency: 'PLN', value: 89.9, items: [item] } });
+  document.getElementById('koszyk').onclick = function () {
+    dataLayer.push({ ecommerce: null });
+    dataLayer.push({ event: 'add_to_cart', ecommerce: { currency: 'PLN', value: 89.9, items: [item] } });
+  };
+  document.getElementById('zamow').onclick = function () {
+    dataLayer.push({ ecommerce: null });
+    dataLayer.push({ event: 'begin_checkout', ecommerce: { currency: 'PLN', value: 89.9, items: [item] } });
+  };
+  document.getElementById('akceptuj').onclick = function () {
+    gtag('consent', 'update', { analytics_storage: 'granted', ad_storage: 'granted' });
+    document.getElementById('baner').remove();
+  };
+  document.getElementById('odrzuc').onclick = function () { document.getElementById('baner').remove(); };
+  document.getElementById('newsletter').onsubmit = function (e) {
+    e.preventDefault();
+    var email = document.getElementById('email').value;
+    if (!document.getElementById('zgoda').checked) { document.getElementById('wynik').textContent = 'Zaznacz zgodę.'; return; }
+    // kod jak z Klaviyo: identify przez _learnq + zapis z dowodem zgody
+    _learnq.push(['identify', { $email: email, $first_name: 'Testowa' }]);
+    midrev.subscribe({ email: email, consentText: document.getElementById('tresc-zgody').textContent, source: 'stopka' })
+      .then(function (ok) { document.getElementById('wynik').textContent = ok ? 'Zapisano.' : 'Nie udało się.'; });
+  };
+</script>
+</body>
+</html>

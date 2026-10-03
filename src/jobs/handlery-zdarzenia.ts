@@ -2,6 +2,8 @@ import { getPool } from "../adapters/db/pool";
 import { przetworzZdarzenieApi, RODZAJ_JOBA } from "../usecases/api/przyjmij-zdarzenie";
 import { dosynchronizujOknoDeployu, dosynchronizujStareZdarzenia } from "../usecases/zdarzenia/lustro";
 import { utrzymajPartycjeMetryk } from "../usecases/zdarzenia/partycje";
+import { przetworzZadanieKlienta, RODZAJ_JOBA_KLIENTA } from "../usecases/integracja/klient-api";
+import { tikFeedow } from "../usecases/katalog/katalog";
 import type { OpcjeAlertu } from "./alerty";
 import type { Zadanie } from "./kolejka";
 
@@ -21,21 +23,42 @@ export const HANDLERY_ZDARZEN: Record<string, (z: Zadanie) => Promise<void>> = {
   async [RODZAJ_JOBA](z) {
     await przetworzZdarzenieApi(z.tenant_id, String(z.payload.rawEventId));
   },
+  // Client API ze strony (0044): zdarzenia i identify z midrev.js (usecases/integracja/klient-api.ts)
+  async [RODZAJ_JOBA_KLIENTA](z) {
+    await przetworzZadanieKlienta(z.tenant_id, String(z.payload.rawEventId));
+  },
 };
+
+/** Kanał surowych żądań → rodzaj joba, który je przetwarza (ponawianie zaległych). */
+const KANALY_PONAWIANIA: [string, string][] = [
+  ["api", RODZAJ_JOBA],
+  ["client", RODZAJ_JOBA_KLIENTA],
+];
 
 const MAKS_PONOWIEN = 3;
 const LIMIT_ZALEGLYCH = 500;
 
 export async function ponowZalegleZdarzeniaApi(): Promise<{ ponowione: number; porzucone: number }> {
+  let ponowione = 0;
+  let porzucone = 0;
+  for (const [kanal, rodzaj] of KANALY_PONAWIANIA) {
+    const w = await ponowZalegleKanalu(kanal, rodzaj);
+    ponowione += w.ponowione;
+    porzucone += w.porzucone;
+  }
+  return { ponowione, porzucone };
+}
+
+async function ponowZalegleKanalu(kanal: string, rodzajJoba: string): Promise<{ ponowione: number; porzucone: number }> {
   const klient = await getPool().connect();
   try {
     await klient.query("begin");
-    await klient.query("select pg_advisory_xact_lock(hashtextextended('zdarzenia:ponow-zalegle-api', 0))");
+    await klient.query("select pg_advisory_xact_lock(hashtextextended('zdarzenia:ponow-zalegle-' || $1::text, 0))", [kanal]);
     const { rows } = await klient.query<{ id: string; tenant_id: string; ile: number }>(
       `select r.id, r.tenant_id,
               coalesce(nullif(split_part(r.process_error, ':', 2), '')::int, 0) as ile
          from raw_events r
-        where r.channel = 'api' and r.processed_at is null
+        where r.channel = $3 and r.processed_at is null
           and r.received_at < now() - interval '15 minutes'
           and (r.process_error is null or r.process_error like 'ponowiono:%')
           and not exists (
@@ -47,7 +70,7 @@ export async function ponowZalegleZdarzeniaApi(): Promise<{ ponowione: number; p
           )
         order by r.received_at
         limit $1`,
-      [LIMIT_ZALEGLYCH, RODZAJ_JOBA],
+      [LIMIT_ZALEGLYCH, rodzajJoba, kanal],
     );
     let ponowione = 0;
     let porzucone = 0;
@@ -62,7 +85,7 @@ export async function ponowZalegleZdarzeniaApi(): Promise<{ ponowione: number; p
       }
       await klient.query(
         `insert into jobs (tenant_id, kind, payload) values ($1, $2, $3::jsonb)`,
-        [r.tenant_id, RODZAJ_JOBA, JSON.stringify({ rawEventId: r.id, ponowienie: r.ile + 1 })],
+        [r.tenant_id, rodzajJoba, JSON.stringify({ rawEventId: r.id, ponowienie: r.ile + 1 })],
       );
       await klient.query("update raw_events set process_error = $3 where tenant_id = $1 and id = $2", [
         r.tenant_id,
@@ -105,6 +128,10 @@ export function zaplanujZdarzenia(opcje: {
       });
     }
   }
+  async function feedy() {
+    const w = await tikFeedow();
+    if (w.sprawdzone) console.log(`[${workerId}] feedy produktów: sprawdzone ${w.sprawdzone}, z błędem ${w.bledy}`);
+  }
   const start = opcje.teraz?.() ?? Date.now();
   async function oknoDeployu() {
     // tylko przez pierwsze 30 min pracy workera: potem stary kod już nie działa, a przebieg
@@ -121,6 +148,8 @@ export function zaplanujZdarzenia(opcje: {
     },
     cykliczne: [
       { nazwa: "partycje metryk", ms: 24 * 3600_000, praca: partycje },
+      // feedy produktów (0044): każdy wg własnego interwału (domyślnie 6 h), sprawdzane co 15 min
+      { nazwa: "feedy produktów", ms: 15 * 60_000, praca: feedy },
       { nazwa: "zaległe zdarzenia API", ms: 15 * 60_000, praca: zalegle },
       { nazwa: "strumień: okno deployu", ms: 60_000, praca: oknoDeployu },
     ],

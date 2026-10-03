@@ -64,13 +64,14 @@ const PREDYKAT_SUROWYCH = `
  * Parametry: $1 tenant, $2 profil, $3 e-mail, $4 telefon E.164, $5 external_id, $6 anonymous_id.
  */
 const PREDYKAT_SUROWYCH_API = `
-  (r.tenant_id = $1 and r.channel = 'api' and not (r.payload ? 'anonimizowano') and (
+  (r.tenant_id = $1 and r.channel in ('api', 'client') and not (r.payload ? 'anonimizowano') and (
     r.payload -> 'meta' ->> 'profile_id' = $2::text
+    or r.payload -> 'meta' ->> 'profil_z_tokenu' = $2::text
     or r.payload #>> '{body,data,attributes,profile,data,id}' = $2::text
-    or ($3::text is not null and lower(btrim(r.payload #>> '{body,data,attributes,profile,data,attributes,email}')) = lower(btrim($3)))
-    or ($4::text is not null and midrev_telefon_e164(r.payload #>> '{body,data,attributes,profile,data,attributes,phone_number}') = $4::text)
-    or ($5::text is not null and r.payload #>> '{body,data,attributes,profile,data,attributes,external_id}' = $5::text)
-    or ($6::text is not null and r.payload #>> '{body,data,attributes,profile,data,attributes,anonymous_id}' = $6::text)
+    or ($3::text is not null and lower(btrim(coalesce(r.payload #>> '{body,data,attributes,profile,data,attributes,email}', r.payload #>> '{body,data,attributes,email}'))) = lower(btrim($3)))
+    or ($4::text is not null and midrev_telefon_e164(coalesce(r.payload #>> '{body,data,attributes,profile,data,attributes,phone_number}', r.payload #>> '{body,data,attributes,phone_number}')) = $4::text)
+    or ($5::text is not null and coalesce(r.payload #>> '{body,data,attributes,profile,data,attributes,external_id}', r.payload #>> '{body,data,attributes,external_id}') = $5::text)
+    or ($6::text is not null and coalesce(r.payload #>> '{body,data,attributes,profile,data,attributes,anonymous_id}', r.payload #>> '{body,data,attributes,anonymous_id}') = $6::text)
   ))`;
 
 /** Wzorce danych osoby w wolnym tekście: adres e-mail i numer telefonu. */
@@ -427,6 +428,9 @@ export async function anonimizujProfil(
     // Strumień metryk (1.5): właściwości zdarzeń i unique_id (z API bywa pochodną adresu)
     // znikają; metryka, czas, kwota i źródło zostają (raporty i przychód się nie zmieniają).
     // Ślady operacji RODO (metryki rodo.*) zostają: to dowód obsłużenia żądania.
+    // Koszyki z przeglądarki (0044): pozycje i identyfikator przeglądarki tej osoby
+    await klient.query("delete from carts where tenant_id = $1 and profile_id = $2", [tenantId, profileId]);
+
     const strumien = await klient.query(
       `update metric_events e
           set properties = '{}'::jsonb, unique_id = 'rodo:' || e.id::text
@@ -716,13 +720,16 @@ async function kontrolaZwrotna(klient: PoolClient, tenantId: string, profileId: 
                 and (e.properties <> '{}'::jsonb or e.unique_id not like 'rodo:%')) as p_zdarzenia_metryk,
             (select count(*)::int from event_keys k where k.tenant_id = $1 and k.profile_id = $2) as p_klucze_zdarzen,
             (select count(*)::int from raw_events r
-              where r.tenant_id = $1 and r.channel = 'api' and not (r.payload ? 'anonimizowano') and (
+              where r.tenant_id = $1 and r.channel in ('api', 'client') and not (r.payload ? 'anonimizowano') and (
                 r.payload -> 'meta' ->> 'profile_id' = $2::text
+                or r.payload -> 'meta' ->> 'profil_z_tokenu' = $2::text
                 or r.payload::text ilike '%' || $2::text || '%'
                 or ($3::text is not null and r.payload::text ilike '%' || lower(btrim($3)) || '%')
                 -- identyfikatory bywają krótkie ("7"): dokładne pole, nie wyszukiwanie w tekście
                 or r.payload #>> '{body,data,attributes,profile,data,attributes,external_id}' = any($5::text[])
-                or r.payload #>> '{body,data,attributes,profile,data,attributes,anonymous_id}' = any($5::text[]))) as p_surowe_api,
+                or r.payload #>> '{body,data,attributes,profile,data,attributes,anonymous_id}' = any($5::text[])
+                or r.payload #>> '{body,data,attributes,external_id}' = any($5::text[])
+                or r.payload #>> '{body,data,attributes,anonymous_id}' = any($5::text[]))) as p_surowe_api,
             (case when p.external_id is not null or p.anonymous_id is not null or p.organization is not null
                        or p.title is not null or p.locale is not null or p.location <> '{}'::jsonb then 1 else 0 end) as p_identyfikatory
        from profiles p where p.tenant_id = $1 and p.id = $2`,

@@ -39,6 +39,11 @@ const OCZEKIWANE_PUBLICZNE = new Set([
   "/dns/[token]",
   "/api/zdrowie",
   "/api/events",
+  // integracja custom (0044): skrypt midrev.js i Client API zgodne z Klaviyo
+  "/js/v1/[plik]",
+  "/client/events",
+  "/client/profiles",
+  "/client/subscriptions",
 ]);
 
 /** Wzorce tras wymagające sesji panelu. */

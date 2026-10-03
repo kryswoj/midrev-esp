@@ -31,6 +31,20 @@ export interface KonfliktIdentyfikatora {
   innyProfil: string;
 }
 
+/**
+ * `tryb: "klient"` = żądanie z przeglądarki (`/client/*`, klucz publiczny strony). Kto zna
+ * klucz strony i czyjś e-mail, może wysłać żądanie w jego imieniu (tak samo w Klaviyo),
+ * więc przeglądarka NIE nadpisuje danych istniejącego profilu (plan 2.5):
+ *   - imię, nazwisko, organizacja, tytuł, język: tylko uzupełnienie pustych pól,
+ *   - identyfikatory (e-mail, telefon, external_id): bez zmian; wolno wyłącznie powiązać
+ *     pusty `anonymous_id` (identyfikacja przeglądarki po identify),
+ *   - właściwości i lokalizacja: scalane (jak w Klaviyo).
+ * Nowy profil zakłada się normalnie (z e-mailem, telefonem albo external_id).
+ */
+export interface OpcjeIdentyfikacji {
+  tryb?: "api" | "klient";
+}
+
 export type WynikIdentyfikacji =
   | { odrzucone: false; profileId: string; utworzony: boolean; dopasowanyPo: RodzajIdentyfikatora | null; konflikty: KonfliktIdentyfikatora[] }
   | { odrzucone: true; powod: "rodo" | "niepoprawne_wlasciwosci" | "nie_znaleziono"; opis: string };
@@ -119,7 +133,9 @@ export async function identyfikujProfil(
   ident: IdentyfikatoryProfilu,
   atrybuty: AtrybutyProfilu,
   proba = 0,
+  opcje: OpcjeIdentyfikacji = {},
 ): Promise<WynikIdentyfikacji> {
+  const klientPrzegladarki = opcje.tryb === "klient";
   for (const [nazwa, obiekt] of [["properties", atrybuty.wlasciwosci], ["location", atrybuty.lokalizacja]] as const) {
     const n = obiekt ? sprawdzWlasciwosci(obiekt) : null;
     if (n) return { odrzucone: true, powod: "niepoprawne_wlasciwosci", opis: `${nazwa}${n.wskaznik}: ${n.opis}` };
@@ -221,7 +237,7 @@ export async function identyfikujProfil(
     } catch (blad) {
       await klient.query("rollback to savepoint nowy_profil_api");
       if ((blad as { code?: string }).code !== "23505" || proba > 0) throw blad;
-      return identyfikujProfil(klient, tenantId, ident, atrybuty, proba + 1);
+      return identyfikujProfil(klient, tenantId, ident, atrybuty, proba + 1, opcje);
     }
   }
 
@@ -239,11 +255,11 @@ export async function identyfikujProfil(
   // niekonfliktowe. Blokada wiersza na czas zapisu.
   await klient.query(
     `update profiles set
-       first_name   = case when $3::boolean then $4 else first_name end,
-       last_name    = case when $5::boolean then $6 else last_name end,
-       organization = case when $7::boolean then $8 else organization end,
-       title        = case when $9::boolean then $10 else title end,
-       locale       = case when $11::boolean then $12 else locale end,
+       first_name   = case when $3::boolean then (case when $19::boolean then coalesce(nullif(first_name, ''), $4) else $4 end) else first_name end,
+       last_name    = case when $5::boolean then (case when $19::boolean then coalesce(nullif(last_name, ''), $6) else $6 end) else last_name end,
+       organization = case when $7::boolean then (case when $19::boolean then coalesce(nullif(organization, ''), $8) else $8 end) else organization end,
+       title        = case when $9::boolean then (case when $19::boolean then coalesce(nullif(title, ''), $10) else $10 end) else title end,
+       locale       = case when $11::boolean then (case when $19::boolean then coalesce(nullif(locale, ''), $12) else $12 end) else locale end,
        location     = location || $13::jsonb,
        properties   = properties || $14::jsonb,
        email        = coalesce(email, $15),
@@ -267,10 +283,11 @@ export async function identyfikujProfil(
       jezyk ?? null,
       lokalizacja,
       wlasciwosci,
-      ident.email && wolno("email") ? ident.email : null,
-      ident.telefon && trafienia.get("phone_number") !== "wiele" && wolno("phone_number") ? ident.telefon : null,
-      ident.externalId && wolno("external_id") ? ident.externalId : null,
+      !klientPrzegladarki && ident.email && wolno("email") ? ident.email : null,
+      !klientPrzegladarki && ident.telefon && trafienia.get("phone_number") !== "wiele" && wolno("phone_number") ? ident.telefon : null,
+      !klientPrzegladarki && ident.externalId && wolno("external_id") ? ident.externalId : null,
       ident.anonymousId && wolno("anonymous_id") ? ident.anonymousId : null,
+      klientPrzegladarki,
     ],
   );
   return { odrzucone: false, profileId: wybrany, utworzony: false, dopasowanyPo, konflikty };
