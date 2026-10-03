@@ -2,7 +2,11 @@
 # (provision.sh kopiuje, waliduje i przeładowuje; każda późniejsza zmiana WYMAGA ZGODY).
 #
 # Dwa hosty na JEDNYM procesie Next (127.0.0.1:3100):
-#   esp.midrev.pl   panel operatora (cały), webhooki sklepów, akceptacja kampanii
+#   esp.midrev.pl   panel operatora (cały), webhooki sklepów (/api/webhooks/woo/{id},
+#                   /api/webhooks/shopify), Shopify OAuth (/api/shopify/auth i /callback =
+#                   APP_URL w shopify.app.toml), API wtyczki Woo (/api/integracje/woocommerce/*,
+#                   stała MIDREV_ESP_API_URL we wtyczce), akceptacja kampanii. Bez wyjątków
+#                   w Caddy: przepuszcza całą aplikację, sito robi middleware (trasy-publiczne.ts).
 #   link.midrev.pl  WYŁĄCZNIE trasy, które woła odbiorca maila albo strona sklepu:
 #                   /r (klik), /u (wypis + RFC 8058 One-Click POST), /api/o (pixel),
 #                   /o (obrazy w mailach), /s (skrypt popupów), /api/popup (dane i zapis
