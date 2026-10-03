@@ -177,9 +177,17 @@ describe("Port „Sklep”: ingest, metryki, role, koszyki, zgody, katalog", () 
        values ($1, $2, 'INNYSKLEP0000000000000001', $3, 'cart', '[]', '2026-10-01T09:00:00Z')`,
       [tenantId, drugi, profil],
     );
+    // koszyk w TYM sklepie, ale zmieniony PO złożeniu zamówienia (nowy koszyk, spóźniony webhook)
+    await pool.query(
+      `insert into carts (tenant_id, store_id, platform_token, profile_id, stage, items, source_updated_at)
+       values ($1, $2, 'NOWYPOZAKUPIE00000000001', $3, 'cart', '[]', '2026-10-01T10:00:30Z')`,
+      [tenantId, storeId, profil],
+    );
     await dostarcz("order.created", zamowienieWoo(1002));
     const { rows } = await pool.query("select stage from carts where tenant_id = $1 and store_id = $2", [tenantId, drugi]);
     expect(rows[0].stage).toBe("cart");
+    const { rows: nowy } = await pool.query("select stage from carts where tenant_id = $1 and platform_token = 'NOWYPOZAKUPIE00000000001'", [tenantId]);
+    expect(nowy[0].stage).toBe("cart");
     await pool.query("update stores set status = 'disconnected' where id = $1", [drugi]);
     const cialo = JSON.stringify(zamowienieWoo(1003));
     expect((await przyjmijWebhookSklepu("woocommerce", drugi, naglowki("order.created", cialo), cialo)).status).toBe(404);
