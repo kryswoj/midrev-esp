@@ -290,7 +290,9 @@ class Midrev_Esp_Tracker {
 	 * @param WC_Order $order Zamówienie.
 	 */
 	public static function tag_order( $order ): void {
-		if ( ! ( $order instanceof WC_Order ) ) {
+		// bez zgody token koszyka nie trafia do zamówienia (a z nim do ESP przez REST/webhook):
+		// koszyka i tak nie wysłaliśmy, więc nie ma czego zamykać (RODO wariant B)
+		if ( ! ( $order instanceof WC_Order ) || ! self::can_track() ) {
 			return;
 		}
 		$token = Midrev_Esp_Carts::token( false );

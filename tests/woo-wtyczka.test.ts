@@ -108,6 +108,11 @@ describe("Wtyczka WooCommerce po stronie ESP", () => {
     odrzucajKlucze = true;
     await expect(sparujWtyczke({ kod: k.kod, home_url: adresSklepu, consumer_key: CK, consumer_secret: CS })).rejects.toThrow(/odrzucił/);
     odrzucajKlucze = false;
+    // klucz strony z wyłączonym wymogiem zgody na cookies (np. wcześniej „Własna strona”):
+    // parowanie Woo musi go włączyć, bo __mx_id = zgoda dla wtyczki (RODO wariant B)
+    const { zapewnijKluczStrony } = await import("../src/usecases/integracja/klucz-strony");
+    await zapewnijKluczStrony(tenantId);
+    await getPool().query("update site_keys set require_cookie_consent = false where tenant_id = $1", [tenantId]);
     // ten sam kod działa po naprawie (porażka zwolniła kod)
     const w = await sparujWtyczke({ kod: k.kod, home_url: adresSklepu + "/", consumer_key: CK, consumer_secret: CS, plugin_version: "1.0.0" });
     storeId = w.store_id;
@@ -130,8 +135,8 @@ describe("Wtyczka WooCommerce po stronie ESP", () => {
     expect(webhookiSklepu.map((x) => x.topic).sort()).toEqual(["customer.created", "customer.updated", "order.created", "order.updated"]);
     const { rows: role } = await getPool().query("select role from metric_mappings where tenant_id = $1 order by role", [tenantId]);
     expect(role.map((r) => r.role)).toEqual(expect.arrayContaining(["added_to_cart", "placed_order", "started_checkout", "viewed_product"]));
-    const { rows: sk } = await getPool().query("select platform, link_domains, ga4_datalayer from site_keys where tenant_id = $1", [tenantId]);
-    expect(sk[0]).toMatchObject({ platform: "woocommerce", link_domains: ["127.0.0.1"], ga4_datalayer: false });
+    const { rows: sk } = await getPool().query("select platform, link_domains, ga4_datalayer, require_cookie_consent from site_keys where tenant_id = $1", [tenantId]);
+    expect(sk[0]).toMatchObject({ platform: "woocommerce", link_domains: ["127.0.0.1"], ga4_datalayer: false, require_cookie_consent: true });
   });
 
   function podpisane(cialo: unknown, ts = Math.floor(Date.now() / 1000), klucz = sekret) {

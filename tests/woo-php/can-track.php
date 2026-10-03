@@ -15,10 +15,20 @@ if ( 'bez-api' !== $tryb ) {
 	function wp_has_consent( $kat ) { return 'marketing' === $kat && 'api-tak' === $GLOBALS['tryb']; }
 }
 $GLOBALS['tryb'] = $tryb;
+class WC_Order { public $meta = array(); public function update_meta_data( $k, $v ) { $this->meta[ $k ] = $v; } }
+class Midrev_Esp_Carts { public static function token( $utworz = true ) { return 'TOKEN-KOSZYKA-1'; } }
 require __DIR__ . '/../../integrations/woocommerce/midrev-esp/includes/class-midrev-esp-tracker.php';
+function tag( $cookie ) {
+	$_COOKIE = $cookie ? array( '__mx_id' => $cookie ) : array();
+	$o = new WC_Order();
+	Midrev_Esp_Tracker::tag_order( $o );
+	return isset( $o->meta['_mrv_cart_token'] );
+}
 
 $wyniki = array();
 $ciastko = rawurlencode( json_encode( array( 'a' => 'abcDEF123_-xyz', 't' => 1 ) ) );
+$wyniki['token_w_zamowieniu_bez_zgody'] = tag( null );
+$wyniki['token_w_zamowieniu_ze_zgoda'] = tag( $ciastko );
 $_COOKIE = array();
 $wyniki['bez_ciastka'] = Midrev_Esp_Tracker::can_track();
 $_COOKIE['__mx_id'] = $ciastko;

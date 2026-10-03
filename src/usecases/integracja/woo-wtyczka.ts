@@ -284,7 +284,12 @@ async function przygotujStroneSklepu(tenantId: string, storeId: string, adres: s
     `update site_keys set platform = 'woocommerce',
             link_domains = case when $2::text is null or $2 = any(link_domains) or cardinality(link_domains) >= 20 then link_domains else array_append(link_domains, $2) end,
             allowed_origins = case when $2::text is null or $2 = any(allowed_origins) or cardinality(allowed_origins) >= 20 then allowed_origins else array_append(allowed_origins, $2) end,
-            ga4_datalayer = false, updated_at = now()
+            ga4_datalayer = false,
+            -- RODO wariant B (03.10): na sklepie midrev.js zakłada __mx_id dopiero po zgodzie na
+            -- cookies, a wtyczka traktuje __mx_id jako zgodę na zdarzenia koszyka; klucz strony
+            -- z wyłączonym wymogiem zgody (np. wcześniej „Własna strona”) dawałby zgodę bez banera
+            require_cookie_consent = true,
+            updated_at = now()
       where tenant_id = $1 and id = $3`,
     [tenantId, domena, klucz.id],
   );

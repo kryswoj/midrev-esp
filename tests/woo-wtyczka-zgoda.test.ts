@@ -28,11 +28,11 @@ function php(tryb: string): Record<string, boolean> | null {
 const dostepny = php("bez-api") !== null;
 
 describe.skipIf(!dostepny)("wtyczka Woo: zdarzenia koszyka tylko po zgodzie (can_track)", () => {
-  it("bez WP Consent API: zgoda = ciasteczko __mx_id z midrev.js; brak albo śmieć = nic nie wychodzi; filtr nadpisuje świadomie", () => {
-    expect(php("bez-api")).toEqual({ bez_ciastka: false, z_ciastkiem: true, zle_ciastko: false, filtr_true_bez_ciastka: true, filtr_false_z_ciastkiem: false });
+  it("bez WP Consent API: zgoda = ciasteczko __mx_id z midrev.js; brak albo śmieć = nic nie wychodzi (także token koszyka w zamówieniu); filtr nadpisuje świadomie", () => {
+    expect(php("bez-api")).toEqual({ token_w_zamowieniu_bez_zgody: false, token_w_zamowieniu_ze_zgoda: true, bez_ciastka: false, z_ciastkiem: true, zle_ciastko: false, filtr_true_bez_ciastka: true, filtr_false_z_ciastkiem: false });
   });
   it("z WP Consent API decyduje kategoria „marketing” (ciasteczko i filtr nie mają znaczenia)", () => {
-    expect(php("api-nie")).toEqual({ bez_ciastka: false, z_ciastkiem: false, zle_ciastko: false, filtr_true_bez_ciastka: false, filtr_false_z_ciastkiem: false });
-    expect(php("api-tak")).toEqual({ bez_ciastka: true, z_ciastkiem: true, zle_ciastko: true, filtr_true_bez_ciastka: true, filtr_false_z_ciastkiem: true });
+    expect(php("api-nie")).toEqual({ token_w_zamowieniu_bez_zgody: false, token_w_zamowieniu_ze_zgoda: false, bez_ciastka: false, z_ciastkiem: false, zle_ciastko: false, filtr_true_bez_ciastka: false, filtr_false_z_ciastkiem: false });
+    expect(php("api-tak")).toEqual({ token_w_zamowieniu_bez_zgody: true, token_w_zamowieniu_ze_zgoda: true, bez_ciastka: true, z_ciastkiem: true, zle_ciastko: true, filtr_true_bez_ciastka: true, filtr_false_z_ciastkiem: true });
   });
 });
