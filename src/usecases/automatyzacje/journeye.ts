@@ -35,6 +35,8 @@ import { kanonicznyJson, przygotujDokument } from "../tresc/zapisz-tresc";
 import { przychodAutomatyzacji, type SumaZrodla } from "../przelicz-atrybucje";
 import { zapiszZdarzenie } from "../wysylka/wyslij-kampanie";
 import type { PoolClient } from "pg";
+import { metrykaRoli } from "../integracja/role-metryk";
+import type { RolaMetryki } from "../../domain/store/contract";
 
 /**
  * Use-case'y panelu automatyzacji. Model: `flows` = graf ze szkicem i definicja
@@ -268,6 +270,8 @@ interface SzablonEmaila {
   temat: string;
   akapity: string[];
   przycisk?: { tekst: string; sciezka: string };
+  /** blok „Produkty z koszyka” pod akapitami (szablony sklepu) */
+  produkty?: { zrodlo: "koszyk" | "zdarzenie"; tytul: string; przycisk: string; maks: number };
 }
 
 export interface SzablonBiblioteki {
@@ -276,10 +280,16 @@ export interface SzablonBiblioteki {
   opis: string;
   zdarzenie: ZdarzenieWyzwalacza;
   kroki: string[];
-  /** buduje graf; `email(i)` zwraca id wiadomosci o indeksie i z `emaile` */
-  zbuduj: (email: (i: number) => string) => Graf;
+  /** buduje graf; `email(i)` zwraca id wiadomosci o indeksie i z `emaile`; `zrodlo` = wyzwalacz z roli */
+  zbuduj: (email: (i: number) => string, zrodlo?: ZrodloWyzwalacza, opcje?: { ponowneWejscie: boolean }) => Graf;
   emaile: SzablonEmaila[];
   wyjsciePoZakupie?: boolean;
+  /**
+   * Szablony sklepu (plan integracji E.3): wyzwalacz to ROLA metryki z `metric_mappings`
+   * (Woo z wtyczką i custom: midrev/Started Checkout, Shopify: shopify/Started Checkout).
+   * Bez ustawionej roli szablon odmawia z powodem zamiast tworzyć flow bez wyzwalacza.
+   */
+  rola?: RolaMetryki;
 }
 
 const N = (typ: Wezel["typ"], i: number) => `${typ}_${i}`;
@@ -365,12 +375,179 @@ export const BIBLIOTEKA: SzablonBiblioteki[] = [
   },
 ];
 
+// ── Szablony sklepu (porzucony koszyk / checkout, przeglądany produkt, po zakupie, winback) ──
+//
+// Na metrykach wspólnych dla platform (role) i z warunkami E4b: kto kupił od wejścia, wychodzi
+// (filtr profilu sprawdzany przed każdym mailem i przy wysyłce), „nie był w tej automatyzacji
+// w ostatnich N dniach”, smart sending 16 h. Mail marketingowy wychodzi wyłącznie do osób ze
+// zgodą (bramka canSendTo, decyzja D6), co szablon pokazuje jawnym warunkiem „Ma zgodę?”.
+
+const nieZrobilOdStartu = (nazwa: string) =>
+  ({ typ: "metryka_profilu", metryka: { nazwa }, operator: "rowna", wartosc: 0, okno: { od: "startu_flow" } }) as const;
+const nieBylWFlow = (dni: number) => ({ typ: "byl_w_flow", flow: "biezacy", jest: false, okno: { od: "ostatnich_dni", dni } }) as const;
+const filtr = (...warunki: object[]) => ({ grupy: warunki.map((w) => ({ warunki: [w] })) }) as Graf["ustawienia"]["filtrProfilu"];
+const wejscie = (dni: number, dostepne: boolean): Graf["ustawienia"]["ponowneWejscie"] => (dostepne ? { tryb: "po", ilosc: dni, jednostka: "dni" } : { tryb: "raz" });
+
+function grafPorzuconych(
+  email: (i: number) => string,
+  zrodloOpc: ZrodloWyzwalacza | undefined,
+  oOpc: { ponowneWejscie: boolean } | undefined,
+  p: { opoznienie: { ilosc: number; jednostka: "godziny" | "dni" }; drugiPo?: number; filtr: Graf["ustawienia"]["filtrProfilu"]; okno: number },
+): Graf {
+  // bez roli (testy schematu) wyzwalaczem jest metryka zamówień Woo; w produkcji zawsze rola
+  const zrodlo = zrodloOpc ?? zrodloZV1("order.created");
+  const o = oOpc ?? { ponowneWejscie: false };
+  const wezly: Wezel[] = [
+    { id: "wyzwalacz", typ: "wyzwalacz", zrodlo, links: { next: N("opoznienie", 1) } },
+    { id: N("opoznienie", 1), typ: "opoznienie", ilosc: p.opoznienie.ilosc, jednostka: p.opoznienie.jednostka, links: { next: N("warunek", 1) } },
+    { id: N("warunek", 1), typ: "warunek", etykieta: "Ma zgodę na maile?", regula: { rodzaj: "ma_zgode" }, links: { next_if_true: N("email", 1), next_if_false: N("koniec", 1) } },
+    { id: N("koniec", 1), typ: "koniec" },
+    { id: N("email", 1), typ: "email", emailId: email(0), smartSending: true, links: { next: p.drugiPo ? N("opoznienie", 2) : N("koniec", 2) } },
+  ];
+  if (p.drugiPo) {
+    wezly.push(
+      { id: N("opoznienie", 2), typ: "opoznienie", ilosc: p.drugiPo, jednostka: "dni", links: { next: N("email", 2) } },
+      { id: N("email", 2), typ: "email", emailId: email(1), smartSending: true, links: { next: N("koniec", 2) } },
+    );
+  }
+  wezly.push({ id: N("koniec", 2), typ: "koniec" });
+  return {
+    wersja: 3,
+    start: "wyzwalacz",
+    ustawienia: { wyjsciePoZakupie: false, ponowneWejscie: wejscie(p.okno, o.ponowneWejscie), filtrProfilu: p.filtr },
+    wezly,
+  };
+}
+
+export const SZABLONY_SKLEPU: SzablonBiblioteki[] = [
+  {
+    klucz: "porzucony_koszyk",
+    rola: "added_to_cart",
+    name: "Porzucony koszyk",
+    opis: "4 godziny po dodaniu do koszyka mail z produktami i przyciskiem powrotu, po dniu przypomnienie. Kto kupi albo zacznie zamówienie, wychodzi.",
+    zdarzenie: "order.created",
+    kroki: ["Dodanie do koszyka", "4 godz.", "Ma zgodę?", "Mail z koszykiem", "1 dzień", "Przypomnienie"],
+    emaile: [
+      { nazwa: "Koszyk: mail 1", temat: "Twój koszyk na Ciebie czeka", akapity: ["Cześć!", "Produkty, które wybrałeś, nadal są w koszyku. Wróć, kiedy zechcesz, wszystko jest na swoim miejscu."], produkty: { zrodlo: "koszyk", tytul: "W Twoim koszyku", przycisk: "Wróć do koszyka", maks: 5 } },
+      { nazwa: "Koszyk: przypomnienie", temat: "Nadal myślisz o tych produktach?", akapity: ["Cześć!", "Przypominamy o koszyku. Jeśli masz pytanie o produkt albo dostawę, po prostu odpisz na tego maila."], produkty: { zrodlo: "koszyk", tytul: "", przycisk: "Dokończ zakupy", maks: 5 } },
+    ],
+    zbuduj: (email, zrodlo, o) =>
+      grafPorzuconych(email, zrodlo, o, {
+        opoznienie: { ilosc: 4, jednostka: "godziny" },
+        drugiPo: 1,
+        okno: 30,
+        filtr: filtr(nieZrobilOdStartu("Placed Order"), nieZrobilOdStartu("Started Checkout"), nieBylWFlow(30)),
+      }),
+  },
+  {
+    klucz: "porzucony_checkout",
+    rola: "started_checkout",
+    name: "Porzucone zamówienie",
+    opis: "Godzinę po rozpoczęciu zamówienia mail z koszykiem i przyciskiem, który go odtwarza, po dniu przypomnienie. Kto kupi, wychodzi przed mailem.",
+    zdarzenie: "order.created",
+    kroki: ["Rozpoczęte zamówienie", "1 godz.", "Ma zgodę?", "Mail z koszykiem", "1 dzień", "Przypomnienie"],
+    emaile: [
+      { nazwa: "Zamówienie: mail 1", temat: "Dokończ zamówienie w kilka kliknięć", akapity: ["Cześć!", "Zamówienie jest prawie gotowe. Zapisaliśmy Twój koszyk, więc wystarczy wrócić i zapłacić."], produkty: { zrodlo: "koszyk", tytul: "Twoje zamówienie", przycisk: "Dokończ zamówienie", maks: 5 } },
+      { nazwa: "Zamówienie: przypomnienie", temat: "Twoje zamówienie wciąż czeka", akapity: ["Cześć!", "Gdyby coś poszło nie tak przy płatności albo dostawie, odpisz na tego maila. Pomożemy."], produkty: { zrodlo: "koszyk", tytul: "", przycisk: "Wróć do zamówienia", maks: 5 } },
+    ],
+    zbuduj: (email, zrodlo, o) =>
+      grafPorzuconych(email, zrodlo, o, {
+        opoznienie: { ilosc: 1, jednostka: "godziny" },
+        drugiPo: 1,
+        okno: 30,
+        filtr: filtr(nieZrobilOdStartu("Placed Order"), nieBylWFlow(30)),
+      }),
+  },
+  {
+    klucz: "przegladany_produkt",
+    rola: "viewed_product",
+    name: "Przeglądany produkt",
+    opis: "2 godziny po obejrzeniu produktu jeden mail z tym produktem. Kto dodał go do koszyka albo kupił, nie dostanie maila. Najwyżej raz na 14 dni.",
+    zdarzenie: "order.created",
+    kroki: ["Oglądany produkt", "2 godz.", "Ma zgodę?", "Mail z produktem"],
+    emaile: [
+      { nazwa: "Przeglądany produkt", temat: "Wpadło Ci coś w oko?", akapity: ["Cześć!", "Zostawiamy tu produkt, który oglądałeś, żeby łatwo było do niego wrócić."], produkty: { zrodlo: "zdarzenie", tytul: "", przycisk: "Zobacz produkt", maks: 1 } },
+    ],
+    zbuduj: (email, zrodlo, o) =>
+      grafPorzuconych(email, zrodlo, o, {
+        opoznienie: { ilosc: 2, jednostka: "godziny" },
+        okno: 14,
+        filtr: filtr(nieZrobilOdStartu("Placed Order"), nieZrobilOdStartu("Added to Cart"), nieBylWFlow(14)),
+      }),
+  },
+  {
+    klucz: "po_zakupie_sklep",
+    rola: "placed_order",
+    name: "Po zakupie",
+    opis: "Godzinę po zamówieniu podziękowanie, po 7 dniach polecane produkty dla osób, które kliknęły w pierwszy mail. Działa na zamówieniach z każdego sklepu.",
+    zdarzenie: "order.created",
+    kroki: ["Zamówienie", "1 godz.", "Podziękowanie", "7 dni", "Kliknął?", "Polecane"],
+    emaile: [
+      { nazwa: "Podziękowanie", temat: "Dziękujemy za zamówienie", akapity: ["Cześć!", "Dziękujemy za zakup. Zamówienie jest już u nas i zajmujemy się nim od razu.", "Gdyby cokolwiek było niejasne, po prostu odpisz na tę wiadomość."], przycisk: { tekst: "Zobacz sklep", sciezka: "" } },
+      { nazwa: "Polecane produkty", temat: "Do tego zamówienia klienci dobierają…", akapity: ["Cześć!", "Zobacz, co klienci najczęściej dobierają do takiego zamówienia jak Twoje."], przycisk: { tekst: "Zobacz polecane", sciezka: "" } },
+    ],
+    zbuduj: (email, zrodlo, o) => ({
+      wersja: 3,
+      start: "wyzwalacz",
+      ustawienia: { wyjsciePoZakupie: false, ponowneWejscie: o?.ponowneWejscie ? { tryb: "zawsze" } : { tryb: "raz" } },
+      wezly: [
+        { id: "wyzwalacz", typ: "wyzwalacz", zrodlo: zrodlo ?? zrodloZV1("order.created"), links: { next: N("opoznienie", 1) } },
+        { id: N("opoznienie", 1), typ: "opoznienie", ilosc: 1, jednostka: "godziny", links: { next: N("email", 1) } },
+        { id: N("email", 1), typ: "email", emailId: email(0), links: { next: N("opoznienie", 2) } },
+        { id: N("opoznienie", 2), typ: "opoznienie", ilosc: 7, jednostka: "dni", links: { next: N("warunek", 1) } },
+        { id: N("warunek", 1), typ: "warunek", etykieta: "Kliknął w podziękowanie?", regula: { rodzaj: "kliknal_poprzedni" }, links: { next_if_true: N("email", 2), next_if_false: N("koniec", 1) } },
+        { id: N("email", 2), typ: "email", emailId: email(1), smartSending: true, links: { next: N("koniec", 2) } },
+        { id: N("koniec", 1), typ: "koniec" },
+        { id: N("koniec", 2), typ: "koniec" },
+      ],
+    }),
+  },
+  {
+    klucz: "winback_sklep",
+    rola: "placed_order",
+    name: "Winback po 90 dniach",
+    opis: "90 dni po zamówieniu mail z zachętą do powrotu, ale tylko jeśli w tym czasie nie było kolejnego zakupu (z dowolnego sklepu).",
+    zdarzenie: "order.created",
+    kroki: ["Zamówienie", "90 dni", "Ma zgodę?", "Mail „wróć”"],
+    emaile: [
+      { nazwa: "Wróć do nas", temat: "Dawno Cię nie było", akapity: ["Cześć!", "Minęło trochę czasu od Twojego ostatniego zamówienia. Sporo się u nas zmieniło. Zobacz, co nowego."], przycisk: { tekst: "Zobacz nowości", sciezka: "" } },
+    ],
+    zbuduj: (email, zrodlo, o) => {
+      const g = grafPorzuconych(email, zrodlo, o, { opoznienie: { ilosc: 90, jednostka: "dni" }, okno: 90, filtr: filtr(nieZrobilOdStartu("Placed Order")) });
+      // każde zamówienie zaczyna nowe odliczanie (re-entry „zawsze”, gdy dostępne): filtr
+      // „nie kupił od startu” wyprowadza osobę z poprzedniego odliczania przy kolejnym zakupie
+      return { ...g, ustawienia: { ...g.ustawienia, wyjsciePoZakupie: true, ponowneWejscie: o?.ponowneWejscie ? { tryb: "zawsze" } : { tryb: "raz" } } };
+    },
+  },
+];
+
+/** Szablony do kreatora „Połącz sklep” (kolejność = karta „Gotowe automatyzacje”). */
+export const KLUCZE_SZABLONOW_KREATORA = ["porzucony_checkout", "porzucony_koszyk", "przegladany_produkt", "powitanie", "po_zakupie_sklep", "winback_sklep"] as const;
+
+export function szablonBiblioteki(klucz: string): SzablonBiblioteki | null {
+  return BIBLIOTEKA.find((s) => s.klucz === klucz) ?? SZABLONY_SKLEPU.find((s) => s.klucz === klucz) ?? null;
+}
+
 export async function utworzZBiblioteki(tenantId: string, klucz: string, opcje: { sklepUrl: string }): Promise<Wynik<{ id: string }>> {
-  const szablon = BIBLIOTEKA.find((s) => s.klucz === klucz);
+  const szablon = szablonBiblioteki(klucz);
   if (!szablon) return { ok: false, blad: "Nieznany szablon." };
   const klient = await getPool().connect();
   try {
     await klient.query("begin");
+    let zrodlo: ZrodloWyzwalacza = zrodloZV1(szablon.zdarzenie);
+    if (szablon.rola) {
+      const m = await metrykaRoli(klient, tenantId, szablon.rola);
+      if (!m) {
+        await klient.query("rollback");
+        return { ok: false, blad: "Ten szablon potrzebuje zdarzeń ze sklepu albo strony. Najpierw połącz sklep (Ustawienia > Sklep i integracje)." };
+      }
+      if (!config().MIDREV_GRAF_V2) {
+        await klient.query("rollback");
+        return { ok: false, blad: "Szablony sklepu będą dostępne po włączeniu nowych automatyzacji." };
+      }
+      zrodlo = { rodzaj: "metryka", metryka: { integracja: m.integracja, nazwa: m.nazwa } };
+    }
+    const reentry = await ponowneWejscieDostepne(klient);
     // nazwa: przy powtorce dopisujemy numer, zamiast odmawiac (drugi sklep tej samej agencji)
     const { rows: nazwy } = await klient.query("select name from flows where tenant_id = $1 and name like $2", [tenantId, `${szablon.name}%`]);
     const zajete = new Set(nazwy.map((r) => r.name));
@@ -382,7 +559,7 @@ export async function utworzZBiblioteki(tenantId: string, klucz: string, opcje: 
       if (zajete.has(name)) continue;
       const { rows: f } = await klient.query(
         "insert into flows (tenant_id, name, draft) values ($1, $2, $3) on conflict (tenant_id, name) do nothing returning id",
-        [tenantId, name, JSON.stringify(grafDoZapisu(pustyGraf(szablon.zdarzenie)))],
+        [tenantId, name, JSON.stringify(grafDoZapisu(pustyGraf(zrodlo)))],
       );
       flowId = f[0]?.id ?? null;
     }
@@ -396,6 +573,9 @@ export async function utworzZBiblioteki(tenantId: string, klucz: string, opcje: 
         e.akapity,
         e.przycisk ? { tekst: e.przycisk.tekst, link: `${opcje.sklepUrl.replace(/\/$/, "")}${e.przycisk.sciezka}` } : undefined,
       );
+      if (e.produkty) {
+        dokument.bloki.push({ ...nowyBlok("koszyk"), zrodlo: e.produkty.zrodlo, tytul: e.produkty.tytul, przyciskTekst: e.produkty.przycisk, maks: e.produkty.maks });
+      }
       const render = renderujDokument(dokument, { dynamiczne: true });
       const { rows } = await klient.query(
         `insert into journeys (tenant_id, name, subject, content, flow_id, node_id)
@@ -404,7 +584,7 @@ export async function utworzZBiblioteki(tenantId: string, klucz: string, opcje: 
       );
       ids.push(rows[0].id);
     }
-    const graf = szablon.zbuduj((i) => ids[i]);
+    const graf = szablon.zbuduj((i) => ids[i], zrodlo, { ponowneWejscie: reentry });
     // node_id wiadomosci = id wezla, ktory ja wysyla (do sciezki osoby i statystyk)
     for (const w of graf.wezly) {
       if (w.typ === "email") await klient.query("update journeys set node_id = $3 where tenant_id = $1 and id = $2", [tenantId, w.emailId, w.id]);
