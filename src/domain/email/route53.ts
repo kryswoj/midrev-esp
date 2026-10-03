@@ -136,11 +136,24 @@ export function roznicaStrefy(strefa: string, obecne: readonly RekordRoute53[], 
   }
   for (const r of obecne) {
     const n = nazwaBezKropki(r.nazwa);
-    if (n === s && (r.typ === "NS" || r.typ === "SOA")) continue;
-    if (!["CNAME", "MX", "TXT"].includes(String(r.typ))) continue;
+    if (!rekordPlatformy(s, n, String(r.typ))) continue;
     if (!chcianeKlucze.has(`${n}|${r.typ}`)) zmiany.push({ akcja: "DELETE", rekord: { ...r, nazwa: n } });
   }
   return zmiany;
+}
+
+/**
+ * Rekordy, którymi zarządza platforma (i tylko te wolno jej usuwać): podpis
+ * <token>._domainkey, adres zwrotny bounce (MX, TXT) i _dmarc. Cokolwiek innego w strefie
+ * (np. rekord dodany ręcznie przez operatora) zostaje nietknięte (review r1, P2).
+ */
+export function rekordPlatformy(strefa: string, nazwa: string, typ: string): boolean {
+  const s = nazwaBezKropki(strefa);
+  const n = nazwaBezKropki(nazwa);
+  if (typ === "CNAME") return /^[a-z0-9]{1,63}\._domainkey\./.test(n) && n.endsWith(`._domainkey.${s}`) && n.split(".").length === s.split(".").length + 2;
+  if (typ === "MX") return n === `bounce.${s}`;
+  if (typ === "TXT") return n === `bounce.${s}` || n === `_dmarc.${s}`;
+  return false;
 }
 
 // ── Ocena delegacji widzianej u rodzica ─────────────────────────────────────────
@@ -199,10 +212,15 @@ export function ocenDelegacje(o: {
       komunikat: `Pod nazwą ${o.nazwaWzgledna} jest jeszcze stary wpis (${[...new Set(o.konflikty)].join(", ")}). Usuń go: przez niego wpis NS nie działa. Rekordy pod innymi nazwami zostaw.`,
     };
   }
+  // „działa" tylko przy KOMPLECIE naszych serwerów i niczym obcym (review r1, P2)
+  const komplet = (l: readonly string[] | null) => {
+    const z = l ? norm(l) : [];
+    return z.length === nasze.length && z.every((n) => naszeSet.has(n));
+  };
   if (rodzic === null) {
     // serwery dostawcy nie odpowiedziały: zostaje to, co widzi internet
     const pub = o.publicznie ? norm(o.publicznie) : [];
-    if (pub.length && pub.every((n) => naszeSet.has(n))) return { ...bazowa, stan: "dziala", komunikat: null, znalezione: pub, brakujace: [] };
+    if (komplet(pub)) return { ...bazowa, stan: "dziala", komunikat: null, znalezione: pub, brakujace: [] };
     return { ...bazowa, stan: "czeka", komunikat: "Nie udało się teraz zapytać serwerów Twojego dostawcy domeny. Sprawdzimy ponownie za kilka minut." };
   }
   if (!rodzic.length) {
@@ -240,8 +258,7 @@ export function ocenDelegacje(o: {
       brakujace,
     };
   }
-  const pub = o.publicznie ? norm(o.publicznie) : [];
-  if (pub.length && pub.every((n) => naszeSet.has(n))) return { ...bazowa, stan: "dziala", komunikat: null, brakujace: [] };
+  if (komplet(o.publicznie)) return { ...bazowa, stan: "dziala", komunikat: null, brakujace: [] };
   return {
     ...bazowa,
     stan: "czeka",

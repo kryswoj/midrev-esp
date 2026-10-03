@@ -90,6 +90,9 @@ export function rozbierzOdpowiedz(buf: Buffer, oczekiwaneId?: number): Odpowiedz
   if (oczekiwaneId !== undefined && buf.readUInt16BE(0) !== oczekiwaneId) throw new Error("obcy identyfikator odpowiedzi DNS");
   const flagi = buf.readUInt16BE(2);
   if (!(flagi & 0x8000)) throw new Error("to nie jest odpowiedź DNS");
+  // TC: odpowiedź ucięta (nie zmieściła się w UDP). Niepełna lista serwerów dałaby fałszywe
+  // „częściowo" albo „działa", więc traktujemy ją jak brak odpowiedzi (review r1, P2).
+  if (flagi & 0x0200) throw Object.assign(new Error("ucięta odpowiedź DNS (TC)"), { code: "ETRUNC" });
   const [qd, an, ns] = [buf.readUInt16BE(4), buf.readUInt16BE(6), buf.readUInt16BE(8)];
   let poz = 12;
   for (let i = 0; i < qd; i++) poz = czytajNazwe(buf, poz).dalej + 4;

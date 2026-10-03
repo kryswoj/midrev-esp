@@ -47,8 +47,9 @@ alter table sending_domains
   -- szczegóły ostatniej oceny (komunikat dla klienta, znalezione serwery) — bez danych osobowych
   add column delegation_details jsonb,
   add column delegation_checked_at timestamptz,
-  -- dlaczego opcji „jeden wpis" nie proponujemy: apex | zajeta_nazwa | dostawca | route53
-  add column delegation_unavailable text check (delegation_unavailable is null or delegation_unavailable in ('apex', 'zajeta_nazwa', 'dostawca', 'route53')),
+  -- dlaczego opcji „jeden wpis" nie proponujemy: apex | zajeta_nazwa | dostawca | route53 |
+  -- niesprawdzona (DNS nie odpowiedział przy podłączeniu; worker ponawia)
+  add column delegation_unavailable text check (delegation_unavailable is null or delegation_unavailable in ('apex', 'zajeta_nazwa', 'dostawca', 'route53', 'niesprawdzona')),
   -- ostatnia synchronizacja rekordów w strefie (odczyt zwrotny zgodny z oczekiwanym)
   add column r53_synced_at timestamptz,
   add column r53_change_id text check (r53_change_id is null or r53_change_id ~ '^[A-Z0-9]{1,64}$'),

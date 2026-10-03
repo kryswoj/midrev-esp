@@ -94,6 +94,17 @@ describe("Route 53: rekordy strefy i różnica stanu", () => {
     expect(z.filter((x) => x.akcja === "DELETE").map((x) => x.rekord.nazwa).sort()).toEqual(["_dmarc.news.sklep.pl", "old._domainkey.news.sklep.pl"]);
   });
 
+  it("różnica: rekordów spoza naszego zestawu (np. dodanych ręcznie przez operatora) NIE kasuje (review r1)", () => {
+    const chciane = rekordyStrefyDelegowanej(rekordy());
+    const obce: RekordRoute53[] = [
+      { nazwa: "www.news.sklep.pl", typ: "CNAME", ttl: 300, wartosci: ["sklep.pl."] },
+      { nazwa: "news.sklep.pl", typ: "TXT", ttl: 300, wartosci: ['"google-site-verification=x"'] },
+      { nazwa: "news.sklep.pl", typ: "MX", ttl: 300, wartosci: ["10 mx.sklep.pl."] },
+      { nazwa: "a.b._domainkey.news.sklep.pl", typ: "CNAME", ttl: 300, wartosci: ["x."] },
+    ];
+    expect(roznicaStrefy("news.sklep.pl", [...chciane, ...obce], chciane)).toEqual([]);
+  });
+
   it("różnica: rekord spoza strefy albo NS strefy w chcianych = błąd programisty (rzuca)", () => {
     expect(() => roznicaStrefy("news.sklep.pl", [], [{ nazwa: "sklep.pl", typ: "MX", ttl: 300, wartosci: ["10 x."] }])).toThrow(/poza strefą/);
     expect(() => roznicaStrefy("news.sklep.pl", [], [{ nazwa: "evilnews.sklep.pl", typ: "TXT", ttl: 300, wartosci: ['"x"'] }])).toThrow(/poza strefą/);
@@ -147,6 +158,12 @@ describe("Ocena delegacji (co klient wpisał u siebie)", () => {
     expect(o.stan).toBe("konflikt");
     expect(o.komunikat).toContain("CNAME");
     expect(o.komunikat).toContain("Rekordy pod innymi nazwami zostaw");
+  });
+
+  it("„dziala” tylko przy komplecie naszych serwerów widzianym przez internet (review r1)", () => {
+    expect(ocenDelegacje({ ...baza, rodzic: NASZE, publicznie: NASZE.slice(0, 2) }).stan).toBe("czeka");
+    expect(ocenDelegacje({ ...baza, rodzic: null, publicznie: NASZE.slice(0, 2) }).stan).toBe("czeka");
+    expect(ocenDelegacje({ ...baza, rodzic: NASZE, publicznie: [...NASZE, "ns1.obcy.pl"] }).stan).toBe("czeka");
   });
 
   it("serwery dostawcy nie odpowiadają: decyduje to, co widzi internet; bez tego „czeka”", () => {
@@ -311,6 +328,12 @@ describe("Zapytanie wprost do serwera dostawcy (RFC 1035)", () => {
     ]);
     expect(() => rozbierzOdpowiedz(pakiet, 8)).toThrow(/obcy identyfikator/);
     expect(() => rozbierzOdpowiedz(pakiet.subarray(0, pakiet.length - 3), 7)).toThrow(/ucięty/);
+  });
+
+  it("odpowiedź ucięta (bit TC) = brak odpowiedzi, nie niepełna lista serwerów (review r1)", () => {
+    const naglowek = Buffer.alloc(12);
+    naglowek.writeUInt16BE(0x8200, 2);
+    expect(() => rozbierzOdpowiedz(naglowek)).toThrow(/TC/);
   });
 
   it("pętla kompresji nie zawiesza parsera", () => {

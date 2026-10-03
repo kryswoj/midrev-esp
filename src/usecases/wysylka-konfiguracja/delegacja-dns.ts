@@ -77,7 +77,7 @@ async function obsluzBladRoute53(b: unknown, co: string, o: OpcjeDelegacji) {
 
 // ── Czy proponować „jeden wpis" ─────────────────────────────────────────────────
 
-export type PowodBrakuDelegacji = "apex" | "zajeta_nazwa" | "dostawca" | "route53";
+export type PowodBrakuDelegacji = "apex" | "zajeta_nazwa" | "dostawca" | "route53" | "niesprawdzona";
 
 /**
  * Delegacja przejmuje WSZYSTKO pod nazwą subdomeny. Nie proponujemy jej, gdy:
@@ -99,13 +99,18 @@ export async function powodBrakuDelegacji(
     () => resolver.txt(o.domena),
   ];
   for (const z of zapytania) {
-    try {
-      if ((await z()).length) return "zajeta_nazwa";
-    } catch (b) {
-      // awaria DNS to nie dowód, że nazwa jest wolna, ale też nie powód do blokady:
-      // gdyby coś tam było, sprawdzenie delegacji pokaże konflikt
-      if (!czyBrakRekordu(b)) continue;
+    // awaria DNS to NIE dowód, że nazwa jest wolna (review r1, P1): jedna powtórka, potem
+    // „niesprawdzona" — kreator zostaje przy rekordach, a worker spróbuje ponownie później
+    let ok = false;
+    for (let proba = 0; proba < 2 && !ok; proba++) {
+      try {
+        if ((await z()).length) return "zajeta_nazwa";
+        ok = true;
+      } catch (b) {
+        if (czyBrakRekordu(b)) ok = true;
+      }
     }
+    if (!ok) return "niesprawdzona";
   }
   return null;
 }
@@ -215,8 +220,8 @@ export async function zapewnijStrefe(tenantId: string, domena: string, r53: Port
 
 /** Strefa przypięta do domeny TEGO tenanta (jedyna droga do zone_id). */
 async function strefaDomeny(tenantId: string, domainId: string) {
-  const { rows } = await getPool().query<{ id: string; zone_id: string | null; name_servers: string[]; domain: string; r53_change_id: string | null; r53_change_status: string | null }>(
-    `select z.id, z.zone_id, z.name_servers, z.domain, d.r53_change_id, d.r53_change_status
+  const { rows } = await getPool().query<{ id: string; zone_id: string | null; name_servers: string[]; domain: string; caller_reference: string; r53_change_id: string | null; r53_change_status: string | null }>(
+    `select z.id, z.zone_id, z.name_servers, z.domain, z.caller_reference, d.r53_change_id, d.r53_change_status
        from sending_domains d
        join dns_hosted_zones z on z.tenant_id = d.tenant_id and z.id = d.hosted_zone_id
       where d.tenant_id = $1 and d.id = $2 and d.managed_by = 'platforma'`,
@@ -226,12 +231,21 @@ async function strefaDomeny(tenantId: string, domainId: string) {
 }
 
 /** Przypięcie strefy do domeny i wybór trybu (tylko ten sam tenant: złożony klucz obcy). */
-export async function przypnijStrefe(tenantId: string, domainId: string, strefa: StrefaTenanta | null, powod: PowodBrakuDelegacji | null) {
+export async function przypnijStrefe(
+  tenantId: string,
+  domainId: string,
+  strefa: StrefaTenanta | null,
+  powod: PowodBrakuDelegacji | null,
+  /** true = strefa dochodzi później (ponowienie): klient już pracuje na rekordach, nie zmieniamy mu widoku */
+  zostawTryb = false,
+) {
   await getPool().query(
     `update sending_domains
-        set hosted_zone_id = $3, dns_mode = case when $3::uuid is null then 'reczny' else 'delegacja' end, delegation_unavailable = $4
+        set hosted_zone_id = $3,
+            dns_mode = case when $3::uuid is null then 'reczny' when $5 then dns_mode else 'delegacja' end,
+            delegation_unavailable = $4
       where tenant_id = $1 and id = $2 and managed_by = 'platforma'`,
-    [tenantId, domainId, strefa?.id ?? null, strefa ? null : powod],
+    [tenantId, domainId, strefa?.id ?? null, strefa ? null : powod, zostawTryb],
   );
 }
 
@@ -256,6 +270,15 @@ export async function synchronizujStrefe(
     const chciane = rekordyStrefyDelegowanej(rekordy);
     const zmiany = roznicaStrefy(z.domain, await r53.rekordy(z.zone_id), chciane);
     if (zmiany.length) {
+      // Przed KAŻDĄ zmianą: strefa w AWS nadal jest tą, którą założyliśmy dla tego tenanta
+      // (nazwa, CallerReference z wiersza, tag). Pomyłka operatora albo przestawiony tag =
+      // stop i alert, bez zapisu (review r1, P2).
+      const wAws = await r53.odczytajStrefe(z.zone_id);
+      const tagi = wAws ? await r53.tagiStrefy(z.zone_id) : {};
+      if (!wAws || wAws.nazwa !== z.domain || wAws.callerReference !== z.caller_reference || tagi[TAG_TENANTA] !== tenantId) {
+        await o.alert(`delegacja NS: strefa ${z.zone_id} nie zgadza się z zapisem tenanta ${tenantId} (nazwa, CallerReference albo tag). Rekordy NIE zostały zmienione; sprawdź ręcznie.`);
+        return false;
+      }
       const wynik = await r53.zmienRekordy(z.zone_id, zmiany, `midrev: rekordy wysylki ${z.domain}`);
       const poZmianie = roznicaStrefy(z.domain, await r53.rekordy(z.zone_id), chciane);
       if (poZmianie.length) {
@@ -316,16 +339,25 @@ export async function sprawdzDelegacje(
   const domena = nazwaBezKropki(d.domena);
   const strefa = nazwaBezKropki(d.strefa);
 
-  let serweryRodzica: string[] = [];
+  // Serwery dostawcy = NS domeny głównej BEZ naszych. Gdy klient dopisał nasze serwery do
+  // domeny głównej, resolver zwraca je razem z serwerami dostawcy; pytanie naszych udawałoby
+  // „działa" i ukryło awarię strony (review r1, P1). Nasze w tym zestawie = PILNE od razu.
+  const naszeSet = new Set(z.name_servers.map(nazwaBezKropki));
+  let nsApexPubliczne: string[] = [];
   try {
-    serweryRodzica = (await resolver.ns!(strefa)).map(nazwaBezKropki);
+    nsApexPubliczne = (await resolver.ns!(strefa)).map(nazwaBezKropki);
   } catch {
-    serweryRodzica = [];
+    nsApexPubliczne = [];
   }
+  // (filtr tylko po NASZYCH serwerach: klient może sam trzymać domenę w Route 53 na swoim koncie)
+  const serweryRodzica = nsApexPubliczne.filter((n) => !naszeSet.has(n));
   const nsDomeny = serweryRodzica.length ? await zapytajLubNull(auth, domena, "NS", serweryRodzica) : null;
   const rodzic = nsDomeny ? serweryNs(nsDomeny, domena) : null;
   const podwojona = rodzic && !rodzic.length ? serweryNs(await zapytajLubNull(auth, `${domena}.${strefa}`, "NS", serweryRodzica), `${domena}.${strefa}`) : [];
-  const apex = serweryRodzica.length ? serweryNs(await zapytajLubNull(auth, strefa, "NS", serweryRodzica), strefa) : [];
+  const apex = [
+    ...nsApexPubliczne,
+    ...(serweryRodzica.length ? serweryNs(await zapytajLubNull(auth, strefa, "NS", serweryRodzica), strefa) : []),
+  ];
 
   // Stary wpis pod samą nazwą subdomeny, który serwer dostawcy podaje Z AUTORYTETEM obok
   // (albo zamiast) NS: przy poprawnej delegacji serwer odsyła dalej i nie ma tu odpowiedzi.

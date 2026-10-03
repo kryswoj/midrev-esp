@@ -338,6 +338,7 @@ async function przygotujDelegacje(
   domainId: string,
   p: { domena: string; strefa: string; dostawca: DostawcaDns; dmarcWlasny: string | null },
   o: OpcjeDomeny,
+  zostawTryb = false,
 ) {
   const od = opcjeDelegacji(o);
   const r53 = route53Z(od);
@@ -348,7 +349,7 @@ async function przygotujDelegacje(
   }
   const strefa = await zapewnijStrefe(tenantId, p.domena, r53, od);
   if (!strefa) powod = "route53";
-  await przypnijStrefe(tenantId, domainId, strefa, powod);
+  await przypnijStrefe(tenantId, domainId, strefa, powod, zostawTryb);
   if (!strefa) return;
   // Własny DMARC subdomeny ze strefy klienta po delegacji przestanie być widoczny:
   // przenosimy go do naszej strefy bez zmian.
@@ -766,7 +767,21 @@ export async function sprawdzDomenePlatformowa(tenantId: string, domainId: strin
   // 3. „Jeden wpis": rekordy w naszej strefie (doprowadzenie do stanu) i ocena wpisu NS
   //    u dostawcy. Bez Route 53 (wyłączony, brak uprawnień) pomijamy: zostaje stan z bazy.
   let ocenaDelegacji: OcenaDelegacji | null = null;
-  const poDmarc = (await domenaPlatformowaPoId(tenantId, domainId)) ?? d;
+  let poDmarc = (await domenaPlatformowaPoId(tenantId, domainId)) ?? d;
+  // Opcji nie było, bo DNS nie odpowiedział albo Route 53 był niedostępny: proponujemy ją
+  // teraz, ale tylko domenie, która jeszcze nie jest gotowa. Klient, który zaczął wpisywać
+  // rekordy, zostaje przy nich (jeden wpis pojawi się jako alternatywa).
+  if (!poDmarc.delegacja && (poDmarc.delegacjaNiedostepna === "niesprawdzona" || poDmarc.delegacjaNiedostepna === "route53") && poDmarc.status !== "verified" && route53Z(opcjeDelegacji(o))) {
+    const zaczal = Object.values(poDmarc.raport?.rekordy ?? {}).some((r) => r && r.stan !== "brak");
+    let wlasny: string | null = null;
+    try {
+      wlasny = await rekordDmarc(poDmarc.domena, resolver);
+    } catch {
+      wlasny = null;
+    }
+    await przygotujDelegacje(tenantId, domainId, { domena: poDmarc.domena, strefa: poDmarc.strefa, dostawca: poDmarc.dostawca, dmarcWlasny: wlasny }, o, zaczal);
+    poDmarc = (await domenaPlatformowaPoId(tenantId, domainId)) ?? poDmarc;
+  }
   if (poDmarc.delegacja) {
     const od = opcjeDelegacji(o);
     const r53 = route53Z(od);

@@ -54,7 +54,7 @@ export default async function InstrukcjaDns({ params }: { params: Promise<{ toke
               <Alert tone="ok" title="Wszystko gotowe">Rekordy są na miejscu i potwierdzone. Nic więcej nie trzeba robić.</Alert>
             ) : (
               <p className="tekst-pomocniczy">
-                {i.delegacja && i.tryb === "delegacja" ? "Wystarczy jeden wpis NS poniżej. " : `Gotowe: ${i.rekordy.length - zostalo} z ${i.rekordy.length}. `}Nazwy podajemy względem strefy {i.strefa} (bez niej na końcu). Stan rekordów odświeża się sam co kilka minut — odśwież stronę, żeby go zobaczyć.
+                {i.delegacja && i.tryb === "delegacja" ? "Wystarczy jeden wpis NS poniżej. " : `Gotowe: ${i.rekordy.length - zostalo} z ${i.rekordy.length}. `}W polu Nazwa wpisuj tylko początek, bez {i.strefa} na końcu. Stan rekordów odświeża się sam co kilka minut — odśwież stronę, żeby go zobaczyć.
               </p>
             )}
             {(i.raport?.ostrzezenia ?? []).map((o) => (

@@ -199,6 +199,12 @@ describe("Jeden wpis NS: strefa Route 53, rekordy, ocena delegacji", () => {
     s.rodzic["ns-a.test"].NS = ["ns1.hostido.net.pl", "ns2.hostido.net.pl", ns[0]];
     const apex = await sprawdz();
     expect(apex.raport?.ostrzezenia[0]).toMatch(/^PILNE: Serwery z naszego wpisu są dodane do całej domeny/);
+    // nasze serwery na domenie głównej I poprawny wpis pod news: nadal PILNE, serwery
+    // dostawcy pytane bez naszych (review r1, P1)
+    s.rodzic["news.ns-a.test"] = { NS: ns };
+    const oba = await sprawdz();
+    expect(oba.raport?.ostrzezenia[0]).toMatch(/^PILNE:/);
+    delete s.rodzic["news.ns-a.test"];
     s.rodzic["ns-a.test"].NS = ["ns1.hostido.net.pl", "ns2.hostido.net.pl"];
 
     // panel przyjął CNAME pod news i serwuje go z autorytetem (NS przez to nie działa)
@@ -236,6 +242,20 @@ describe("Jeden wpis NS: strefa Route 53, rekordy, ocena delegacji", () => {
     expect(po.rekordy.some((r) => r.typ === "MX" && r.nazwa === "bounce.news.ns-a.test")).toBe(true);
     expect(po.rekordy.some((r) => r.nazwa.startsWith("stary."))).toBe(false);
     expect((await domenaPlatformowa(tenantA))?.id).toBe(d.id);
+  });
+
+  it("synchronizacja nie pisze do strefy, której tag w AWS przestawiono na innego tenanta (review r1)", async () => {
+    const { rows } = await getPool().query("select zone_id from dns_hosted_zones where tenant_id = $1 and domain = 'news.ns-a.test'", [tenantA]);
+    const strefa = r53.strefy.get(rows[0].zone_id)!;
+    strefa.tagi.midrev_tenant = tenantB;
+    strefa.rekordy = strefa.rekordy.filter((r) => r.typ !== "MX");
+    const d = (await domenaPlatformowa(tenantA))!;
+    await sprawdzDomenePlatformowa(tenantA, d.id, opcje(swiatA()));
+    expect(strefa.rekordy.some((r) => r.typ === "MX")).toBe(false);
+    expect(alerty.join(" ")).toContain("Rekordy NIE zostały zmienione");
+    strefa.tagi.midrev_tenant = tenantA;
+    await sprawdzDomenePlatformowa(tenantA, d.id, opcje(swiatA()));
+    expect(strefa.rekordy.some((r) => r.typ === "MX")).toBe(true);
   });
 
   it("izolacja: inny tenant nie odczyta ani nie sprawdzi cudzej domeny; złożony klucz nie przypnie cudzej strefy", async () => {
@@ -329,6 +349,24 @@ describe("Jeden wpis NS: strefa Route 53, rekordy, ocena delegacji", () => {
     expect(d.delegacjaNiedostepna).toBe("zajeta_nazwa");
     expect(d.tryb).toBe("reczny");
     expect([...r53.strefy.values()].some((z) => z.nazwa === "news.ns-g.test")).toBe(false);
+  });
+
+  it("DNS nie odpowiada przy podłączeniu: bez „jednego wpisu” (nie wiemy, czy nazwa wolna); worker proponuje go później (review r1)", async () => {
+    await getPool().query("delete from sending_domains where tenant_id = $1", [tenantC]);
+    const s = new Swiat("ns-j.test", r53);
+    const r = s.resolver();
+    let awaria = true;
+    const zawodny: typeof r = { ...r, a: (n) => (awaria && n === "news.ns-j.test" ? Promise.reject(Object.assign(new Error("x"), { code: "ETIMEOUT" })) : r.a(n)) };
+    const w = await podlaczDomene(tenantC, { wpis: "ns-j.test", nazwaNadawcy: "C", odpowiedzDo: "" }, { ...opcje(s), resolver: zawodny });
+    expect(w.ok).toBe(true);
+    const d = (await domenaPlatformowa(tenantC))!;
+    expect(d.delegacjaNiedostepna).toBe("niesprawdzona");
+    expect(d.delegacja).toBeNull();
+    awaria = false;
+    await sprawdzDomenePlatformowa(tenantC, d.id, { ...opcje(s), resolver: zawodny });
+    const po = (await domenaPlatformowa(tenantC))!;
+    expect(po.delegacja?.serwery).toHaveLength(4);
+    expect(po.delegacjaNiedostepna).toBeNull();
   });
 
   it("klient wpisał rekordy ręcznie zamiast NS → tryb „reczny”; potem dodał NS → wraca „delegacja”", async () => {
