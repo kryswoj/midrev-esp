@@ -77,6 +77,11 @@ export function przyjeto202(cors: Record<string, string>) {
 }
 
 export async function preflight(zadanie: NextRequest) {
+  // limit IP przed odczytem klucza także dla OPTIONS (review Codeksa r2)
+  const ip = adresKlienta(zadanie.headers) ?? "nieznane";
+  if (!sprawdzLimit("client-ip:options", ip, LIMIT_IP).ok) {
+    return new NextResponse(null, { status: 429, headers: { "Retry-After": "60", "Access-Control-Allow-Origin": "*" } });
+  }
   const klucz = await kluczStronyPublicznie(zadanie.nextUrl.searchParams.get("company_id"));
   return new NextResponse(null, { status: 204, headers: corsDla(zadanie.headers.get("origin"), klucz) });
 }

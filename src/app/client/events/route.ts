@@ -29,6 +29,9 @@ export async function POST(zadanie: NextRequest) {
       return przyjeto202(b.cors);
     }
     const w = await przyjmijZadanieKlienta(b.klucz, "event", b.cialo);
+    if (w.status === "limit") {
+      return bladKlienta(429, [{ kod: "throttled", opis: "Daily limit for this site reached." }], b.cors, { "Retry-After": String(w.poSekundach) });
+    }
     if (w.status === "odrzucone") {
       zanotujSygnal(b.klucz.id, { ...sygnal, rodzaj: "odrzucone", powod: w.bledy[0]?.opis });
       return bladKlienta(400, w.bledy, b.cors);

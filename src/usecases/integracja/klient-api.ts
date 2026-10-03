@@ -4,6 +4,10 @@ import { getPool } from "../../adapters/db/pool";
 import { jestWykluczonyGlobalnie } from "../../adapters/db/wykluczenia";
 import { odczytajTokenMx } from "../../adapters/token-mx";
 import { dodajZadanie } from "../../jobs/kolejka";
+import { sprawdzSufitDobowy, zaliczDoSufitu } from "../api/limity";
+
+/** Dzienny sufit żądań z przeglądarki na tenanta (ochrona przed zalaniem kluczem publicznym). */
+export const DOBOWY_SUFIT_KLIENTA = 500_000;
 import { wyslijAlert } from "../../jobs/alerty";
 import { sprawdzNazweMetryki, sprawdzWlasciwosci, MAKS_UNIQUE_ID } from "../../domain/zdarzenia/limity";
 import { telefonE164 } from "../../domain/zdarzenia/telefon";
@@ -305,6 +309,7 @@ function bezTokenu(cialo: unknown, sciezka: "event" | "profile"): unknown {
 export type WynikPrzyjeciaKlienta =
   | { status: "przyjete"; nowe: boolean }
   | { status: "anonimowe" }
+  | { status: "limit"; poSekundach: number }
   | { status: "odrzucone"; bledy: BladKlienta[] };
 
 /**
@@ -334,6 +339,8 @@ export async function przyjmijZadanieKlienta(
     if (!rows[0]) return { status: "anonimowe" };
   }
 
+  const sufit = await sprawdzSufitDobowy(klucz.tenantId, DOBOWY_SUFIT_KLIENTA, przyjeto.getTime(), "client");
+  if (!sufit.ok) return { status: "limit", poSekundach: sufit.poSekundach };
   const surowe = JSON.stringify(cialo);
   const identyfikator = profilZTokenu ?? i.email?.toLowerCase() ?? i.telefon ?? i.externalId ?? i.anonymousId ?? "";
   const dane = rodzaj === "event" ? (w.dane as ZdarzenieKlienta) : null;
@@ -359,6 +366,7 @@ export async function przyjmijZadanieKlienta(
     const id = rows[0]?.id ?? null;
     if (id) await dodajZadanie(klucz.tenantId, RODZAJ_JOBA_KLIENTA, { rawEventId: id }, { przez: klient });
     await klient.query("commit");
+    if (id) zaliczDoSufitu(klucz.tenantId, przyjeto.getTime(), "client");
     return { status: "przyjete", nowe: id !== null };
   } catch (b) {
     await klient.query("rollback").catch(() => {});

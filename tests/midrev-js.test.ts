@@ -176,6 +176,9 @@ describe("midrev.js w przeglądarce", () => {
     const id = b.wyslane.find((x) => x.url.includes("/client/profiles"))!;
     expect(id.url).toBe("https://link.midrev.test/client/profiles?company_id=AbC123");
     expect(id.cialo.data.attributes).toMatchObject({ email: "jan@ex.test", first_name: "Jan", properties: { plan: "pro" } });
+    // ciasteczko (leci do serwera sklepu) bez danych osoby: tylko losowy identyfikator
+    expect(decodeURIComponent(b.ciasteczka.get("__mx_id") ?? "")).not.toContain("jan@ex.test");
+    expect(b.w.localStorage.getItem("__mx_p")).toContain("jan@ex.test");
     expect(zdarzenia(b)).toEqual(expect.arrayContaining(["Kliknął baner", "Z kolejki klaviyo", "Active on Site"]));
     b.w._learnq.push(["track", "Po załadowaniu", {}]);
     await b.czekaj();

@@ -95,22 +95,24 @@ export async function sprawdzSufitDobowy(
   tenantId: string,
   sufit = DOBOWY_SUFIT_TENANTA,
   teraz = Date.now(),
+  kanal: "api" | "client" = "api",
 ): Promise<WynikLimitu> {
   const dzien = dzienUtc(teraz);
-  let l = dzienne.get(tenantId);
+  const klucz = kanal === "api" ? tenantId : `${kanal}:${tenantId}`;
+  let l = dzienne.get(klucz);
   if (!l || l.dzien !== dzien) {
     const { rows } = await getPool().query<{ n: number }>(
       `select count(*)::int as n from raw_events
-        where tenant_id = $1 and channel = 'api' and received_at >= $2::date::timestamptz`,
-      [tenantId, dzien],
+        where tenant_id = $1 and channel = $3 and received_at >= $2::date::timestamptz`,
+      [tenantId, dzien, kanal],
     );
     l = { dzien, ile: rows[0].n, zaalarmowano: false };
-    dzienne.set(tenantId, l);
+    dzienne.set(klucz, l);
   }
   if (l.ile >= sufit) {
     if (!l.zaalarmowano) {
       l.zaalarmowano = true;
-      void wyslijAlert(`dzienny sufit zdarzeń API (${sufit}) przekroczony - kolejne żądania dostają 429 do północy UTC`, {
+      void wyslijAlert(`dzienny sufit zdarzeń ${kanal === "api" ? "API" : "ze strony (Client API)"} (${sufit}) przekroczony - kolejne żądania dostają 429 do północy UTC`, {
         poziom: "krytyczny",
         tenantId,
       });
@@ -124,8 +126,8 @@ export async function sprawdzSufitDobowy(
  * Zaliczenie PRZYJĘTEGO zdarzenia do sufitu (po zapisie surowego żądania, tylko nowego):
  * odrzucone 400/413/415 i powtórki nie zjadają limitu (review Codeksa R2a).
  */
-export function zaliczDoSufitu(tenantId: string, teraz = Date.now()): void {
-  const l = dzienne.get(tenantId);
+export function zaliczDoSufitu(tenantId: string, teraz = Date.now(), kanal: "api" | "client" = "api"): void {
+  const l = dzienne.get(kanal === "api" ? tenantId : `${kanal}:${tenantId}`);
   if (l && l.dzien === dzienUtc(teraz)) l.ile += 1;
 }
 

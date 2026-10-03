@@ -61,11 +61,21 @@ export const RUNTIME_MIDREV = String.raw`(function (w, d, K) {
     if (!m) return null;
     try { var o = JSON.parse(decodeURIComponent(m[1])); return o && typeof o === "object" ? o : null; } catch (e) { return null; }
   }
+  // ciasteczko niesie TYLKO losowy identyfikator przeglądarki i znacznik czasu (leci do serwera
+  // sklepu z każdym żądaniem); e-mail, telefon, external_id i token z linku zostają w localStorage
+  function czytajOsobe() { try { var o = JSON.parse(w.localStorage.getItem("__mx_p") || "null"); return o && typeof o === "object" ? o : {}; } catch (e) { return {}; } }
+  function zapiszOsobe() {
+    try {
+      var o = {};
+      if (stan.e) o.e = stan.e; if (stan.p) o.p = stan.p; if (stan.x) o.x = stan.x; if (stan.k) o.k = stan.k;
+      w.localStorage.setItem("__mx_p", JSON.stringify(o));
+    } catch (e) {}
+  }
   function zapiszCiasteczko() {
     if (!zgoda) return;
     if (domena === undefined) domena = domenaCiasteczka();
     var o = { a: stan.a, t: stan.t };
-    if (stan.e) o.e = stan.e; if (stan.p) o.p = stan.p; if (stan.x) o.x = stan.x; if (stan.k) o.k = stan.k;
+    zapiszOsobe();
     d.cookie = C + "=" + encodeURIComponent(JSON.stringify(o)) + "; path=/; max-age=63072000; SameSite=Lax" +
       (domena ? "; domain=." + domena : "") + (w.location.protocol === "https:" ? "; Secure" : "");
   }
@@ -73,11 +83,13 @@ export const RUNTIME_MIDREV = String.raw`(function (w, d, K) {
     if (domena === undefined) domena = domenaCiasteczka();
     d.cookie = C + "=; path=/; max-age=0" + (domena ? "; domain=." + domena : "");
     d.cookie = C + "=; path=/; max-age=0";
+    try { w.localStorage.removeItem("__mx_p"); } catch (e) {}
   }
   function wczytajStan() {
-    var o = czytajCiasteczko() || {};
+    var o = czytajCiasteczko() || {}, os = czytajOsobe();
     stan.a = str(o.a, 64) || los();
-    stan.e = str(o.e, 320); stan.p = str(o.p, 40); stan.x = str(o.x, 255); stan.k = str(o.k, 200);
+    // starszy format (dane osoby w ciasteczku) czytany raz i przenoszony do localStorage
+    stan.e = str(os.e || o.e, 320); stan.p = str(os.p || o.p, 40); stan.x = str(os.x || o.x, 255); stan.k = str(os.k || o.k, 200);
     stan.t = num(o.t) || 0;
     if (tokenZLinku) stan.k = tokenZLinku;
     zapiszCiasteczko();
@@ -165,7 +177,7 @@ export const RUNTIME_MIDREV = String.raw`(function (w, d, K) {
   var LOK = { city: 1, region: 1, country: 1, zip: 1, address1: 1, address2: 1, timezone: 1 };
   function identify(o) {
     if (!o || typeof o !== "object") return P(false);
-    if (!zgoda) { kolejkaPrzedZgoda.push(["identify", o]); return P(false); }
+    if (!zgoda) { if (kolejkaPrzedZgoda.length < 30) kolejkaPrzedZgoda.push(["identify", o]); return P(false); }
     var at = {}, wl = {}, lok = {}, jest = false;
     for (var k in o) {
       if (!Object.prototype.hasOwnProperty.call(o, k)) continue;
