@@ -146,6 +146,24 @@ const blokProdukt = z.object({
   wyrownanie,
 });
 
+/**
+ * Produkty DYNAMICZNE (plan integracji E.5, R6): lista wstawiana przy wysyłce z koszyka osoby
+ * (`carts`, porzucony koszyk/checkout) albo z produktu ze zdarzenia, które wprowadziło osobę do
+ * automatyzacji (przeglądany produkt). Przycisk „wróć do koszyka” prowadzi pod link powrotu
+ * koszyka (sklep z wtyczką: odtwarza koszyk na każdym urządzeniu). W kampanii (bez zdarzenia
+ * i koszyka) blok się nie pokazuje.
+ */
+const blokKoszyk = z.object({
+  ...oprawa,
+  typ: z.literal("koszyk"),
+  zrodlo: z.enum(["koszyk", "zdarzenie"]),
+  tytul: krotki,
+  przyciskTekst: krotki,
+  maks: px(1, 10),
+  pokazCeny: z.boolean(),
+  wyrownanie,
+});
+
 const blokKod = z.object({
   ...oprawa,
   typ: z.literal("kod"),
@@ -202,6 +220,7 @@ export const schematBloku = z.discriminatedUnion("typ", [
   blokOdstep,
   blokKolumny,
   blokProdukt,
+  blokKoszyk,
   blokKod,
   blokSocial,
   blokStopka,

@@ -59,6 +59,7 @@ export function nowyBlok<T extends TypBloku>(typ: T, konto?: DaneKonta): BlokTyp
       prawa: { obrazUrl: "", obrazAlt: "", html: "<b>Prawa kolumna</b><br>Krótki opis.", przyciskTekst: "", przyciskLink: "" },
     },
     produkt: { id, typ: "produkt", ...OPRAWA, gora: 16, dol: 16, obrazUrl: "", obrazAlt: "", nazwa: "Nazwa produktu", opis: "Jedno zdanie o tym, dlaczego warto.", cena: "129,00 zł", cenaPrzed: "", przyciskTekst: "Kup teraz", link: "", wyrownanie: "center" },
+    koszyk: { id, typ: "koszyk", ...OPRAWA, gora: 16, dol: 16, zrodlo: "koszyk", tytul: "W Twoim koszyku", przyciskTekst: "Wróć do koszyka", maks: 5, pokazCeny: true, wyrownanie: "center" },
     kod: { id, typ: "kod", ...OPRAWA, gora: 16, dol: 16, tytul: "Twój kod rabatowy", kod: "RABAT10", opis: "Wpisz go w koszyku. Ważny do końca tygodnia.", kolorRamki: "#814ac8", tloKodu: "#f4eefc" },
     social: { id, typ: "social", ...OPRAWA, gora: 16, dol: 16, linki: [{ siec: "instagram", url: "" }, { siec: "facebook", url: "" }], styl: "kolor", wyrownanie: "center" },
     stopka: { id, typ: "stopka", ...OPRAWA, gora: 24, dol: 8, html: STOPKA_STARTOWA, kolor: "#868d97", wyrownanie: "center" },
