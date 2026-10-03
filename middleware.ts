@@ -22,8 +22,13 @@ export function middleware(zadanie: NextRequest) {
   if (pathname.length > 1 && pathname.endsWith("/")) {
     const bez = pathname.replace(/\/+$/, "") || "/";
     // zwykły URL, nie klon nextUrl: NextURL pamięta ukośnik z oryginału i dokleja go z powrotem
+    // API zgodne z Klaviyo (POST z ciałem nie może dostać 308): przepuszczamy BEZ rewrite
+    // w middleware, ścieżkę bez ukośnika daje rewrite z next.config.ts (beforeFiles).
+    // Rewrite w middleware na absolutny URL z zadanie.url za proxy (X-Forwarded-Proto: https,
+    // serwer na http) Next traktował jako zewnętrzny i proxował TLS-em na port http: EPROTO,
+    // 500 na produkcji (03.10). Rewrite z konfiguracji jest zawsze wewnętrzny.
+    if ((TRASY_API_Z_UKOSNIKIEM as readonly string[]).includes(bez)) return NextResponse.next();
     const cel = new URL(bez + search, zadanie.url);
-    if ((TRASY_API_Z_UKOSNIKIEM as readonly string[]).includes(bez)) return NextResponse.rewrite(cel);
     return NextResponse.redirect(cel, 308);
   }
   if (czyTrasaPubliczna(pathname)) return NextResponse.next();

@@ -3,7 +3,7 @@ import { join, relative, sep } from "node:path";
 import { NextRequest } from "next/server";
 import { describe, expect, it } from "vitest";
 import { middleware } from "../middleware";
-import { czyTrasaPubliczna, TRASY_PUBLICZNE } from "../src/trasy-publiczne";
+import { czyTrasaPubliczna, sciezkaPoPrzepisaniu, TRASY_PUBLICZNE } from "../src/trasy-publiczne";
 
 /**
  * Regresja P0-2 (audyt 28.09): pixel `/api/o` nie był na liście publicznej, więc w buildzie
@@ -142,7 +142,9 @@ describe("Trasy publiczne: lista vs drzewo src/app vs middleware", () => {
     const post = middleware(new NextRequest(new URL("/api/events/", "https://api.midrev.test"), { method: "POST", body: "{}" }));
     expect(post.headers.get("location")).toBeNull();
     expect(post.status).not.toBe(308);
-    expect(new URL(post.headers.get("x-middleware-rewrite") ?? "", "https://api.midrev.test").pathname).toBe("/api/events");
+    expect(post.headers.get("x-middleware-rewrite")).toBeNull();
+    expect(przeszlo(post)).toBe(true);
+    expect(sciezkaPoPrzepisaniu("/api/events/")).toBe("/api/events");
     expect(przeszlo(wywolaj("/api/events"))).toBe(true);
     // inne ścieżki z ukośnikiem: to samo 308 co wcześniej robił Next (skipTrailingSlashRedirect)
     const panel = wywolaj("/t/abc/profile/");

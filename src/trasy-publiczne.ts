@@ -56,10 +56,19 @@ export const TRASY_PUBLICZNE = [
  * Trasy API zgodne z Klaviyo, które klienci wołają Z UKOŚNIKIEM na końcu (`/api/events/`,
  * tak jak w workflowach n8n). Next domyślnie odpowiada na to 308, a przekierowanie POST-a
  * z ciałem to ryzyko utraty zdarzenia po stronie klienta. next.config ma
- * `skipTrailingSlashRedirect`, a middleware przepisuje (rewrite, bez 308) te ścieżki na
- * wersję bez ukośnika. Pozostałe ścieżki z ukośnikiem dostają dotychczasowe 308.
+ * `skipTrailingSlashRedirect`, a next.config przepisuje (rewrite beforeFiles, bez 308) te
+ * ścieżki na wersję bez ukośnika; middleware je przepuszcza. Pozostałe ścieżki z ukośnikiem dostają dotychczasowe 308.
  */
 export const TRASY_API_Z_UKOSNIKIEM = ["/api/events", "/client/events", "/client/profiles", "/client/subscriptions"] as const;
+
+/** Rewrite z next.config (beforeFiles): ścieżka z ukośnikiem → ta sama bez. Middleware je
+ *  przepuszcza (next), bo rewrite w middleware za proxy https→http dawał 500 (03.10). */
+export const PRZEPISANIA_UKOSNIKA = TRASY_API_Z_UKOSNIKIEM.map((trasa) => ({ source: `${trasa}/`, destination: trasa as string }));
+
+/** To, co zrobi Next po middleware: ścieżka docelowa trasy (dla testów kontraktu). */
+export function sciezkaPoPrzepisaniu(sciezka: string): string {
+  return PRZEPISANIA_UKOSNIKA.find((r) => r.source === sciezka)?.destination ?? sciezka;
+}
 
 export function czyTrasaPubliczna(sciezka: string): boolean {
   return TRASY_PUBLICZNE.some((p) => sciezka === p || sciezka.startsWith(p + "/"));

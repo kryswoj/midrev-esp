@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { NextConfig } from "next";
 import { wersjaZRevision } from "./src/wersja-wydania";
+import { PRZEPISANIA_UKOSNIKA } from "./src/trasy-publiczne";
 
 // Wersja wydania (audyt UX 02.10, „stara karta po wdrożeniu”). deploy/deploy.sh zapisuje
 // REVISION w katalogu wydania PRZED `next build`: „<sha> <ref>” albo
@@ -57,6 +58,15 @@ const nextConfig: NextConfig = {
   // n8n) BEZ 308: middleware przepisuje te ścieżki, a resztę przekierowuje jak dotąd
   // (src/trasy-publiczne.ts, TRASY_API_Z_UKOSNIKIEM).
   skipTrailingSlashRedirect: true,
+  // `/api/events/` i `/client/*/` (z ukośnikiem) → ta sama trasa bez ukośnika. Rewrite
+  // z konfiguracji (nie z middleware) jest zawsze wewnętrzny, także za reverse proxy.
+  async rewrites() {
+    return {
+      beforeFiles: PRZEPISANIA_UKOSNIKA,
+      afterFiles: [],
+      fallback: [],
+    };
+  },
   // Podgląd serwera deweloperskiego pod publicznym adresem VPS: bez tego Next 16 odmawia
   // przeglądarce plików JS (403) i panel renderuje się bez interakcji (edytor, kanwa).
   // WYŁĄCZNIE poza buildem produkcyjnym.

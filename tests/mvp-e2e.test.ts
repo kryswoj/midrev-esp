@@ -42,6 +42,7 @@ import { katalogMetryk, zrodloZdarzen } from "../src/usecases/automatyzacje/zrod
 import { ustawAktywnosc, utworzPopup } from "../src/usecases/popupy/zarzadzaj";
 import { przyjmijZgloszenie } from "../src/usecases/popupy/zglos-popup";
 import { osProfilu, wlasciwosciZdarzenia } from "../src/usecases/zdarzenia/odczyt";
+import { sciezkaPoPrzepisaniu } from "../src/trasy-publiczne";
 
 const PREFIKS = "MVPE2E ";
 const znak = randomBytes(3).toString("hex");
@@ -79,7 +80,8 @@ async function wyslijZN8n(cialo: string, klucz: string) {
   const wstepne = new NextRequest(new URL("/api/events/", "https://api.midrev.test"), { method: "POST", headers: naglowki, body: cialo });
   const mw = middleware(wstepne);
   expect(mw.headers.get("location")).toBeNull();
-  const cel = new URL(mw.headers.get("x-middleware-rewrite") ?? "https://api.midrev.test/api/events");
+  expect(mw.headers.get("x-middleware-rewrite")).toBeNull();
+  const cel = new URL(sciezkaPoPrzepisaniu("/api/events/"), "https://api.midrev.test");
   const odp = await POST(new NextRequest(cel, { method: "POST", headers: naglowki, body: cialo }));
   return odp.status;
 }
