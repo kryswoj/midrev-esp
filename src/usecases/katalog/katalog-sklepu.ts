@@ -68,8 +68,10 @@ export async function zapiszProduktySklepu(
          compare_at_minor = excluded.compare_at_minor, currency = excluded.currency, categories = excluded.categories,
          brand = excluded.brand, in_stock = excluded.in_stock, stock_qty = excluded.stock_qty, active = excluded.active,
          source_updated_at = excluded.source_updated_at, synced_at = excluded.synced_at
-       where excluded.source_updated_at is null or products.source_updated_at is null
-          or excluded.source_updated_at >= products.source_updated_at
+       -- payload bez wersji nie nadpisuje wiersza z wersją (review r1): inaczej cofałby katalog
+       -- i zerował kursor, a każdy kolejny stary payload wygrywałby dalej
+       where products.source_updated_at is null
+          or (excluded.source_updated_at is not null and excluded.source_updated_at >= products.source_updated_at)
        returning id, external_id`,
       [tenantId, storeId, JSON.stringify(paczka), zrodlo],
     );

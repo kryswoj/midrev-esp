@@ -196,8 +196,9 @@ export async function zapiszKoszykSklepu(
 
 /**
  * Zakup zamyka koszyk (E.5): dokładnie ten, którego token przyszedł z zamówieniem, oraz
- * otwarte koszyki tej osoby zmienione najpóźniej 5 minut po złożeniu zamówienia (zakup
- * z innego urządzenia albo bez tokenu). To dodatkowe, szybkie wyjście obok filtra E4b
+ * otwarte koszyki tej osoby W TYM SAMYM SKLEPIE zmienione najpóźniej 5 minut po złożeniu
+ * zamówienia (zakup z innego urządzenia albo bez tokenu). Koszyk w innym sklepie tenanta
+ * zostaje (review r1: zakup w sklepie A nie jest zakupem koszyka ze sklepu B). To dodatkowe, szybkie wyjście obok filtra E4b
  * „Placed Order od startu flow”: koszyk `ordered` nie trafi do bloku w mailu.
  */
 export async function zamknijKoszykiZamowieniem(
@@ -210,7 +211,8 @@ export async function zamknijKoszykiZamowieniem(
     `update carts set stage = 'ordered', order_external_id = $5, updated_at = now()
       where tenant_id = $1 and stage in ('cart', 'checkout')
         and (($3::text is not null and store_id is not distinct from $2::uuid and platform_token = $3)
-             or ($4::uuid is not null and profile_id = $4 and source_updated_at <= $6::timestamptz + interval '5 minutes'))`,
+             or ($4::uuid is not null and profile_id = $4 and store_id is not distinct from $2::uuid
+                 and source_updated_at <= $6::timestamptz + interval '5 minutes'))`,
     [tenantId, w.storeId, w.token, w.profileId, w.orderExternalId, w.kiedy],
   );
   return rowCount ?? 0;

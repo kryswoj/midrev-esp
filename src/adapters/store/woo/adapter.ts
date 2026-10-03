@@ -122,7 +122,7 @@ export function mapujWariantWoo(v: any): WariantSklepu {
 }
 
 /** Produkt Woo (REST v3 i webhook `product.*`) na wspólny kształt katalogu (E.4). */
-export function mapujProduktWoo(p: any, warianty: WariantSklepu[] = []): ProduktSklepu {
+export function mapujProduktWoo(p: any, warianty?: WariantSklepu[]): ProduktSklepu {
   const cena = groszeAlboNull(p?.price) ?? 0;
   const regularna = groszeAlboNull(p?.regular_price);
   return {
@@ -140,7 +140,9 @@ export function mapujProduktWoo(p: any, warianty: WariantSklepu[] = []): Produkt
     wMagazynie: p.stock_status ? p.stock_status !== "outofstock" : null,
     stan: liczbaAlboNull(p.stock_quantity),
     aktywny: (p.status ?? "publish") === "publish" && p.catalog_visibility !== "hidden",
-    warianty,
+    // produkt zmienny bez pobranej listy wariantów (webhook product.*): warianty NIEZNANE, nie
+    // puste - pusta lista wyłączyłaby w katalogu wszystkie warianty (review r1)
+    warianty: warianty ?? (p.type === "variable" ? undefined : []),
     zmodyfikowaneAt: typeof p.date_modified_gmt === "string" && p.date_modified_gmt ? new Date(p.date_modified_gmt + "Z") : null,
   };
 }
@@ -354,9 +356,9 @@ export class AdapterWoo implements PortSklepu {
     const { dane, lacznie, stron } = await this.#pobierzStrone("products", parametry);
     const pozycje: ProduktSklepu[] = [];
     for (const p of dane) {
-      let warianty: WariantSklepu[] = [];
-      if (p.type === "variable" && Array.isArray(p.variations) && p.variations.length) {
-        warianty = await this.pobierzWarianty(String(p.id));
+      let warianty: WariantSklepu[] | undefined;
+      if (p.type === "variable") {
+        warianty = Array.isArray(p.variations) && p.variations.length ? await this.pobierzWarianty(String(p.id)) : [];
       }
       pozycje.push(mapujProduktWoo(p, warianty));
     }

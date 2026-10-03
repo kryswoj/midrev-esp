@@ -162,6 +162,29 @@ describe("Port „Sklep”: ingest, metryki, role, koszyki, zgody, katalog", () 
     expect(po[0]).toEqual({ stage: "ordered", order_external_id: "1001" });
   });
 
+  it("koszyk tej osoby w INNYM sklepie tenanta nie zamyka się zakupem; odłączony sklep nie przyjmuje webhooków", async () => {
+    const pool = getPool();
+    const drugi = (
+      await pool.query(
+        `insert into stores (tenant_id, platform, base_url, credentials_encrypted, status)
+         values ($1, 'woocommerce', 'https://drugi-port.example', $2, 'connected') returning id`,
+        [tenantId, zaszyfruj(JSON.stringify({ ck: "ck_y", cs: "cs_y", webhookSecret: SEKRET }))],
+      )
+    ).rows[0].id;
+    const profil = (await pool.query("select id from profiles where tenant_id = $1 and email = 'port-kupujacy@example.test'", [tenantId])).rows[0].id;
+    await pool.query(
+      `insert into carts (tenant_id, store_id, platform_token, profile_id, stage, items, source_updated_at)
+       values ($1, $2, 'INNYSKLEP0000000000000001', $3, 'cart', '[]', '2026-10-01T09:00:00Z')`,
+      [tenantId, drugi, profil],
+    );
+    await dostarcz("order.created", zamowienieWoo(1002));
+    const { rows } = await pool.query("select stage from carts where tenant_id = $1 and store_id = $2", [tenantId, drugi]);
+    expect(rows[0].stage).toBe("cart");
+    await pool.query("update stores set status = 'disconnected' where id = $1", [drugi]);
+    const cialo = JSON.stringify(zamowienieWoo(1003));
+    expect((await przyjmijWebhookSklepu("woocommerce", drugi, naglowki("order.created", cialo), cialo)).status).toBe(404);
+  });
+
   it("zmiana statusu: Fulfilled raz (powtórka = duplikat), potem Refunded; starszy payload nic nie emituje", async () => {
     await dostarcz("order.updated", zamowienieWoo(1001, { status: "completed", zmiana: "2026-10-02T08:00:00" }));
     await dostarcz("order.updated", zamowienieWoo(1001, { status: "completed", zmiana: "2026-10-02T09:00:00" }));
@@ -172,7 +195,7 @@ describe("Port „Sklep”: ingest, metryki, role, koszyki, zgody, katalog", () 
     expect(ful[0].source).toBe("webhook");
     await dostarcz("order.updated", zamowienieWoo(1001, { status: "refunded", zmiana: "2026-10-03T08:00:00" }));
     expect(await metryki("Refunded Order")).toHaveLength(1);
-    expect(await metryki("Placed Order")).toHaveLength(1);
+    expect((await metryki("Placed Order")).filter((m) => m.properties.OrderId === "1001")).toHaveLength(1);
     const { rows } = await getPool().query("select status from orders where tenant_id = $1 and external_id = '1001'", [tenantId]);
     expect(rows[0].status).toBe("refunded");
   });
@@ -227,6 +250,18 @@ describe("Port „Sklep”: ingest, metryki, role, koszyki, zgody, katalog", () 
     const { rows } = await pool.query("select id, price_minor, url, image_url, source from products where tenant_id = $1 and store_id = $2", [tenantId, storeId]);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ price_minor: "7000", url: null, image_url: "https://sklep-port.example/k.jpg", source: "webhook" });
+    // payload bez wersji (review r1) nie cofa produktu z wersją
+    const k2 = await pool.connect();
+    try {
+      await k2.query("begin");
+      await zapiszProduktySklepu(k2, tenantId, storeId, [{ ...produkt("2026-10-03T10:00:00Z", 5, ["781"]), zmodyfikowaneAt: null, warianty: undefined }], "webhook");
+      await k2.query("commit");
+    } finally {
+      k2.release();
+    }
+    const { rows: po } = await pool.query("select price_minor, source_updated_at from products where tenant_id = $1 and store_id = $2", [tenantId, storeId]);
+    expect(po[0].price_minor).toBe("7000");
+    expect(po[0].source_updated_at).not.toBeNull();
     const { rows: w } = await pool.query("select external_id, active from product_variants where tenant_id = $1 order by external_id", [tenantId]);
     expect(w).toEqual([{ external_id: "781", active: true }, { external_id: "782", active: false }]);
   });

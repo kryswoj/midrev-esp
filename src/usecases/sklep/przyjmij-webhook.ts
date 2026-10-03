@@ -41,12 +41,15 @@ export async function przyjmijWebhookSklepu(
   if (!definicja || !webhooki) return { status: 404, tresc: "nieznany sklep" };
   const pool = getPool();
 
-  const { rows } = await pool.query<{ tenant_id: string; platform: string; credentials_encrypted: Buffer }>(
-    "select tenant_id, platform, credentials_encrypted from stores where id = $1",
+  const { rows } = await pool.query<{ tenant_id: string; platform: string; status: string; credentials_encrypted: Buffer }>(
+    "select tenant_id, platform, status, credentials_encrypted from stores where id = $1",
     [storeId],
   );
   const sklep = rows[0];
-  if (!sklep || sklep.platform !== definicja.platforma) return { status: 404, tresc: "nieznany sklep" };
+  // sklep odłączony (wtyczka „Odłącz”, odinstalowanie aplikacji) nie przyjmuje dostaw (review r1)
+  if (!sklep || sklep.platform !== definicja.platforma || sklep.status === "disconnected") {
+    return { status: 404, tresc: "nieznany sklep" };
+  }
 
   let sekret: string | null;
   try {
