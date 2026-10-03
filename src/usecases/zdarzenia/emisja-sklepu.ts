@@ -1,6 +1,6 @@
 import type { PoolClient } from "pg";
-import { METRYKI_WBUDOWANE } from "../../domain/zdarzenia/kontrakt";
-import type { KlientSklepu, ZamowienieSklepu } from "../../domain/store/contract";
+import { METRYKI_WBUDOWANE, metrykaZamowienia } from "../../domain/zdarzenia/kontrakt";
+import type { KlientSklepu, PlatformaSklepu, RolaStatusu, ZamowienieSklepu } from "../../domain/store/contract";
 import { wykladnikWaluty } from "../../domain/zdarzenia/limity";
 import { zapiszZdarzenie } from "./zapisz-zdarzenie";
 
@@ -27,9 +27,12 @@ export async function emitujZamowienie(
     profileId: string | null;
     zamowienie: ZamowienieSklepu;
     kanal: "webhook" | "import";
+    /** platforma sklepu (integracja metryk); domyślnie woocommerce (zachowanie sprzed portu) */
+    platforma?: PlatformaSklepu;
   },
 ): Promise<{ placedOrderId: string; produkty: number }> {
   const { zamowienie: z, orderId } = dane;
+  const platforma = dane.platforma ?? "woocommerce";
   const waluta = z.waluta ?? "PLN";
   const source = dane.kanal === "import" ? "import" : "webhook";
   const pozycje = z.pozycje ?? [];
@@ -47,7 +50,7 @@ export async function emitujZamowienie(
     klient,
     {
       tenantId,
-      metryka: METRYKI_WBUDOWANE.zlozoneZamowienie,
+      metryka: metrykaZamowienia(platforma, "placed_order"),
       profileId: dane.profileId,
       occurredAt: z.occurredAt,
       uniqueId: orderId,
@@ -67,10 +70,11 @@ export async function emitujZamowienie(
       },
       source,
     },
-    {
-      // lustro dla obecnego silnika automatyzacji (payload w starym kształcie)
-      lustro: { eventType: "order.created", payload: { orderId, totalMinor: z.sumaMinor, kanal: dane.kanal } },
-    },
+    // lustro dla obecnego silnika automatyzacji (payload w starym kształcie). Tylko Woo: stary
+    // wyzwalacz `order.created` = metryka woocommerce/Placed Order (METRYKA_ZE_STAREGO_TYPU)
+    platforma === "woocommerce"
+      ? { lustro: { eventType: "order.created", payload: { orderId, totalMinor: z.sumaMinor, kanal: dane.kanal } } }
+      : {},
   );
 
   let produkty = 0;
@@ -78,7 +82,7 @@ export async function emitujZamowienie(
     const linia = p.lineId ?? String(i + 1);
     const wynik = await zapiszZdarzenie(klient, {
       tenantId,
-      metryka: METRYKI_WBUDOWANE.zamowionyProdukt,
+      metryka: metrykaZamowienia(platforma, "ordered_product"),
       profileId: dane.profileId,
       occurredAt: z.occurredAt,
       uniqueId: `${orderId}:${linia}`,
@@ -92,12 +96,55 @@ export async function emitujZamowienie(
         Quantity: p.ilosc,
         ItemPrice: naGlowne(p.cenaMinor, waluta),
         $value: naGlowne(p.sumaMinor ?? p.cenaMinor * (Number.isFinite(p.ilosc) ? p.ilosc : 1), waluta),
+        ...(p.variantId ? { VariantID: p.variantId } : {}),
       },
       source,
     });
     if (!wynik.duplikat) produkty++;
   }
   return { placedOrderId: placed.id, produkty };
+}
+
+/**
+ * Metryka statusu zamówienia (Fulfilled / Cancelled / Refunded Order, plan integracji E.3).
+ * Raz na zamówienie i rolę: `unique_id` = `{rola}:{orders.id}`, więc ten sam status przysłany
+ * drugi raz (webhook po imporcie, ponowiona dostawa) jest duplikatem, nie drugim zdarzeniem.
+ * Czas = data modyfikacji ZE ŹRÓDŁA (moment zmiany statusu wg sklepu, AD-10); import = backfill.
+ */
+export async function emitujStatusZamowienia(
+  klient: PoolClient,
+  tenantId: string,
+  dane: {
+    orderId: string;
+    profileId: string | null;
+    zamowienie: ZamowienieSklepu;
+    rola: RolaStatusu;
+    kanal: "webhook" | "import";
+    platforma: PlatformaSklepu;
+  },
+): Promise<{ id: string; duplikat: boolean }> {
+  const z = dane.zamowienie;
+  const waluta = z.waluta ?? "PLN";
+  const pozycje = z.pozycje ?? [];
+  const wynik = await zapiszZdarzenie(klient, {
+    tenantId,
+    metryka: metrykaZamowienia(dane.platforma, dane.rola),
+    profileId: dane.profileId,
+    occurredAt: z.zmodyfikowaneAt,
+    uniqueId: `${dane.rola}:${dane.orderId}`,
+    valueMinor: z.sumaMinor,
+    valueCurrency: waluta,
+    properties: {
+      OrderId: z.externalId,
+      OrderNumber: z.numer,
+      Status: z.status,
+      $value: naGlowne(z.sumaMinor, waluta),
+      ItemNames: pozycje.map((p) => p.nazwa),
+      ProductIDs: pozycje.map((p) => p.productId).filter((x): x is string => Boolean(x)),
+    },
+    source: dane.kanal === "import" ? "import" : "webhook",
+  });
+  return { id: wynik.id, duplikat: wynik.duplikat };
 }
 
 /** `customer.created` / `customer.updated`: techniczne, ukryte, nie wyzwalają (kontrakt §3). */

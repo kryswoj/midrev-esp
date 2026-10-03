@@ -12,6 +12,8 @@
  * w `src/usecases/zdarzenia/` (ścieżki podane przy typach).
  */
 
+import { NAZWY_METRYK_ZAMOWIEN, type PlatformaSklepu, type RolaZamowienia } from "../store/contract";
+
 // ── Schemat (migracja 0030) ────────────────────────────────────────────────────
 
 /** Tabela strumienia: partycjonowana miesięcznie po `occurred_at`, bez partycji DEFAULT (AD-45). */
@@ -58,7 +60,7 @@ export const KOLUMNY_ZDARZENIA = [
 
 export type ZrodloZdarzenia = "api" | "client" | "webhook" | "system" | "import";
 
-export type IntegracjaMetryki = "midrev" | "api" | "woocommerce" | "stripe" | "shopify";
+export type IntegracjaMetryki = "midrev" | "api" | "woocommerce" | "stripe" | "shopify" | "shoper" | "custom";
 
 export type KategoriaIntegracji = "Internal" | "API" | "eCommerce" | "Payments";
 
@@ -68,6 +70,8 @@ export const KATEGORIA_INTEGRACJI: Record<IntegracjaMetryki, KategoriaIntegracji
   woocommerce: "eCommerce",
   stripe: "Payments",
   shopify: "eCommerce",
+  shoper: "eCommerce",
+  custom: "eCommerce",
 };
 
 /** Klucz naturalny metryki (AD-37). */
@@ -141,6 +145,17 @@ export const METRYKI_WBUDOWANE = {
 } as const satisfies Record<string, DefinicjaMetrykiWbudowanej>;
 
 export type NazwaWbudowanej = keyof typeof METRYKI_WBUDOWANE;
+
+/**
+ * Metryka zamówień pod integracją platformy sklepu (port „Sklep”, plan integracji E.3).
+ * Dla Woo `placed_order` i `ordered_product` to dokładnie `METRYKI_WBUDOWANE.zlozoneZamowienie`
+ * i `.zamowionyProdukt` (ten sam klucz naturalny i flagi). Statusy (Fulfilled/Cancelled/
+ * Refunded) wyzwalają flow jak w Klaviyo. Która metryka pełni ROLĘ u tenanta, mówi
+ * `metric_mappings` (ustawiane przy podłączeniu sklepu).
+ */
+export function metrykaZamowienia(platforma: PlatformaSklepu, rola: RolaZamowienia): DefinicjaMetrykiWbudowanej {
+  return { integracja: platforma, nazwa: NAZWY_METRYK_ZAMOWIEN[rola], mozeWyzwalac: true, ukryta: false };
+}
 
 /**
  * Mapa dla upgradera grafu v1 → v2 (strumień B): stary `event_type` z tabeli `events`

@@ -1,7 +1,5 @@
 import { getPool } from "../adapters/db/pool";
-import { odszyfruj } from "../adapters/crypto";
-import { poswiadczeniaSklepu, sklep as pobierzSklep } from "../adapters/db/repozytoria";
-import { AdapterWoo } from "../adapters/store/woo/adapter";
+import { adapterSklepu } from "../adapters/store/fabryka";
 
 export interface WynikZgodnosci {
   storeId: string;
@@ -39,15 +37,9 @@ export async function sprawdzZgodnosc(
   );
   const wBazie = rows[0].ile;
 
-  const s = await pobierzSklep(tenantId, storeId);
-  const szyfrogram = await poswiadczeniaSklepu(tenantId, storeId);
-  if (!s || !szyfrogram) {
-    return { storeId, wSklepie: null, wBazie, roznica: null, procent: null, stan: "nieustalone", okresOd };
-  }
-
   try {
-    const { ck, cs } = JSON.parse(odszyfruj(szyfrogram));
-    const adapter = new AdapterWoo(tenantId, { baseUrl: s.base_url, consumerKey: ck, consumerSecret: cs });
+    // fabryka portu „Sklep”: brak sklepu, poświadczeń albo adaptera = "nieustalone", jak dotąd
+    const { adapter } = await adapterSklepu(tenantId, storeId);
     const wSklepie = await adapter.policzZamowienia(okresOd);
     const roznica = wSklepie - wBazie;
     const procent = wSklepie === 0 ? 0 : Math.abs(roznica) / wSklepie;

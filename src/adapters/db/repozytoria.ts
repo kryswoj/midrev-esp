@@ -114,18 +114,21 @@ export async function zapiszSklep(
     credentialsEncrypted: Buffer;
     capabilities: Record<string, boolean>;
     status: string;
+    /** `stores.connection_method` (0046); brak = bez zmiany przy ponownym podłączeniu */
+    connectionMethod?: string | null;
   },
 ): Promise<Sklep> {
   const { rows } = await getPool().query<Sklep>(
-    `insert into stores (tenant_id, platform, base_url, credentials_encrypted, capabilities, status)
-     values ($1, $2, $3, $4, $5, $6)
+    `insert into stores (tenant_id, platform, base_url, credentials_encrypted, capabilities, status, connection_method)
+     values ($1, $2, $3, $4, $5, $6, $7)
      on conflict (tenant_id, platform, base_url) do update
        set credentials_encrypted = excluded.credentials_encrypted,
            capabilities = excluded.capabilities,
            status = excluded.status,
+           connection_method = coalesce(excluded.connection_method, stores.connection_method),
            last_error = null
      returning id, tenant_id, platform, base_url, capabilities, status, last_error, created_at`,
-    [tenantId, dane.platform, dane.baseUrl, dane.credentialsEncrypted, dane.capabilities, dane.status],
+    [tenantId, dane.platform, dane.baseUrl, dane.credentialsEncrypted, dane.capabilities, dane.status, dane.connectionMethod ?? null],
   );
   return rows[0];
 }
