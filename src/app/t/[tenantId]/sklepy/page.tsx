@@ -54,7 +54,11 @@ export default async function Sklepy({
   // renderowac sam segment strony) - patrz src/app/autoryzacja.ts
   await wymaganyTenant(tenantId);
   const { ok, blad } = await searchParams;
-  const [sklepy, kluczStrony] = await Promise.all([sklepyZeStanemWebhookow(tenantId), kluczStronyTenanta(tenantId)]);
+  const [wszystkie, kluczStrony] = await Promise.all([sklepyZeStanemWebhookow(tenantId), kluczStronyTenanta(tenantId)]);
+  // Shopify ma własny kreator (/sklepy/shopify) i własny stan połączenia; karty poniżej są
+  // WooCommerce (punkt scalenia z kreatorem „Połącz sklep” agenta Woo: wspólne kafle i zdrowie)
+  const sklepy = wszystkie.filter((s) => s.platform !== "shopify");
+  const shopify = wszystkie.filter((s) => s.platform === "shopify");
 
   return (
     <>
@@ -66,7 +70,17 @@ export default async function Sklepy({
 
       <div className="tresc-strony">
         <div className="flex w-full max-w-[900px] flex-col gap-6">
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <a href={`/t/${tenantId}/sklepy/shopify`} className="karta flex items-start gap-3 p-4 transition-colors hover:border-[var(--color-akcent)]">
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-[9px] bg-[var(--color-akcent-tlo)] text-[var(--color-akcent)]"><Icon name="zamowienie" size={18} /></span>
+              <span className="min-w-0">
+                <span className="flex items-center gap-2 text-[14px] font-semibold text-[var(--color-tekst)]">
+                  Shopify
+                  {shopify.some((s) => s.status === "connected") ? <Badge ton="ok">podłączony</Badge> : shopify.length ? <Badge ton="uwaga">w trakcie</Badge> : null}
+                </span>
+                <span className="block text-[13px] leading-[19px] text-[var(--color-tekst-2)]">Aplikacja MidRev: zamówienia, porzucony checkout, zgody i formularze bez kodu.</span>
+              </span>
+            </a>
             <a href="#woocommerce" className="karta flex items-start gap-3 p-4 transition-colors hover:border-[var(--color-akcent)]">
               <span className="grid h-9 w-9 shrink-0 place-items-center rounded-[9px] bg-[var(--color-akcent-tlo)] text-[var(--color-akcent)]"><Icon name="sklep" size={18} /></span>
               <span className="min-w-0">

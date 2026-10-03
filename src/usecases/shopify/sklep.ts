@@ -136,7 +136,7 @@ export async function zapiszAplikacjeShopify(
   const clientId = dane.clientId.trim();
   const sekret = dane.clientSecret.trim();
   if (!WZOR_CLIENT_ID.test(clientId)) throw new BladSklepuShopify("Client ID aplikacji wygląda na niepełny. Skopiuj go z Dev Dashboard > aplikacja > Ustawienia.");
-  if (!WZOR_SEKRETU.test(sekret)) throw new BladSklepuShopify("Client secret wygląda na niepełny. Skopiuj go z Dev Dashboard > aplikacja > Ustawienia.");
+  if (sekret && !WZOR_SEKRETU.test(sekret)) throw new BladSklepuShopify("Client secret wygląda na niepełny. Skopiuj go z Dev Dashboard > aplikacja > Ustawienia.");
 
   const klient = await getPool().connect();
   try {
@@ -147,9 +147,11 @@ export async function zapiszAplikacjeShopify(
       throw new BladSklepuShopify("Ten sklep Shopify jest już podłączony do innego konta. Najpierw odłącz go tam.");
     }
     const tenSam = zastany && zastany.poswiadczenia.clientId === clientId;
+    // puste pole sekretu = bez zmiany (formularz nie pokazuje zapisanego sekretu); nowa aplikacja go wymaga
+    if (!sekret && !tenSam) throw new BladSklepuShopify("Podaj client secret aplikacji (Dev Dashboard > aplikacja > Ustawienia).");
     const posw: PoswiadczeniaShopify = {
       clientId,
-      clientSecret: new Sekret(sekret),
+      clientSecret: sekret ? new Sekret(sekret) : zastany!.poswiadczenia.clientSecret,
       accessToken: tenSam ? zastany.poswiadczenia.accessToken : null,
       zakresy: tenSam ? zastany.poswiadczenia.zakresy : [],
       wygasaAt: tenSam ? zastany.poswiadczenia.wygasaAt : null,

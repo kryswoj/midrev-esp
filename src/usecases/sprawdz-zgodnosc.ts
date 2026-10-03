@@ -1,6 +1,7 @@
 import { getPool } from "../adapters/db/pool";
 import { odszyfruj } from "../adapters/crypto";
 import { poswiadczeniaSklepu, sklep as pobierzSklep } from "../adapters/db/repozytoria";
+import { policzZamowieniaShopify } from "./shopify/zgodnosc";
 import { AdapterWoo } from "../adapters/store/woo/adapter";
 
 export interface WynikZgodnosci {
@@ -46,9 +47,15 @@ export async function sprawdzZgodnosc(
   }
 
   try {
-    const { ck, cs } = JSON.parse(odszyfruj(szyfrogram));
-    const adapter = new AdapterWoo(tenantId, { baseUrl: s.base_url, consumerKey: ck, consumerSecret: cs });
-    const wSklepie = await adapter.policzZamowienia(okresOd);
+    // punkt scalenia z portem „Sklep” (R1, fabryka adapterSklepu): do tego czasu rozdział tutaj
+    let wSklepie: number;
+    if (s.platform === "shopify") {
+      wSklepie = await policzZamowieniaShopify(tenantId, storeId, okresOd);
+    } else {
+      const { ck, cs } = JSON.parse(odszyfruj(szyfrogram));
+      const adapter = new AdapterWoo(tenantId, { baseUrl: s.base_url, consumerKey: ck, consumerSecret: cs });
+      wSklepie = await adapter.policzZamowienia(okresOd);
+    }
     const roznica = wSklepie - wBazie;
     const procent = wSklepie === 0 ? 0 : Math.abs(roznica) / wSklepie;
     return {
