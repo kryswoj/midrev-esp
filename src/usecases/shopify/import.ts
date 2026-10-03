@@ -5,10 +5,11 @@ import { klientZBulk, produktZBulk, zamowienieZBulk } from "../../adapters/store
 import { dodajZadanie } from "../../jobs/kolejka";
 import { wyslijAlert } from "../../jobs/alerty";
 import { profilPoEmailu, upsertProfilKlienta, upsertZamowienie } from "../przetworz-zdarzenie";
-import { zapiszProduktyShopify } from "./katalog";
-import { METRYKI_ZAMOWIENIA_SHOPIFY } from "./przetwarzanie";
+import { produktSklepuZShopify } from "../../adapters/store/shopify/definicja";
+import { zapiszZgodeSklepu } from "../integracja/zgody-sklepu";
+import { zapiszProduktySklepu } from "../katalog/katalog-sklepu";
+import { OPCJE_UPSERTU_SHOPIFY } from "./przetwarzanie";
 import { fetchShopify, klientDla, sklepShopify } from "./sklep";
-import { zapiszZgodeZeSklepu } from "./zgody";
 
 /**
  * Import historii Shopify (plan A.3, F.1 krok 4) przez Bulk Operations, jako job wznawialny:
@@ -207,11 +208,14 @@ async function zapiszEtap(
     try {
       await klient.query("begin");
       if (etap === "produkty") {
-        const w = await zapiszProduktyShopify(klient, tenantId, storeId, paczka.map((x) => produktZBulk(x.wezel, x.dzieci, waluta)), {
-          zrodlo: "api",
-          waluta,
-          znacznik,
-        });
+        const produkty = paczka.map((x) => produktSklepuZShopify(produktZBulk(x.wezel, x.dzieci, waluta), waluta));
+        const w = await zapiszProduktySklepu(klient, tenantId, storeId, produkty, "api");
+        // produkt jest w źródle, nawet gdy zapis go pominął (nowsza wersja z webhooka): znacznik
+        // przebiegu się przesuwa, inaczej wyłączenie „czego nie ma w pełnej liście” trafiłoby w niego
+        await klient.query(
+          "update products set synced_at = greatest(synced_at, $3) where tenant_id = $1 and store_id = $2 and external_id = any($4::text[])",
+          [tenantId, storeId, znacznik, produkty.map((x) => x.externalId)],
+        );
         l.produkty = (l.produkty ?? 0) + w.produkty;
         l.warianty = (l.warianty ?? 0) + w.warianty;
       } else if (etap === "klienci") {
@@ -225,9 +229,8 @@ async function zapiszEtap(
               continue;
             }
             if (p.nowy) l.noweProfile = (l.noweProfile ?? 0) + 1;
-            const z = await zapiszZgodeZeSklepu(klient, {
-              tenantId,
-              profileId: p.profileId,
+            const z = await zapiszZgodeSklepu(klient, tenantId, p.profileId, {
+              email: k.email,
               stan: "granted",
               zrodlo: "shopify",
               kiedy: zgoda.kiedy ?? k.zmodyfikowaneAt,
@@ -238,9 +241,8 @@ async function zapiszEtap(
             // wypis ze sklepu: tylko dla osób, które już mamy (nie zakładamy profilu po to, żeby zapisać „nie”)
             const { rows } = await klient.query<{ id: string }>("select id from profiles where tenant_id = $1 and lower(btrim(email)) = lower(btrim($2))", [tenantId, k.email]);
             if (!rows[0]) continue;
-            const z = await zapiszZgodeZeSklepu(klient, {
-              tenantId,
-              profileId: rows[0].id,
+            const z = await zapiszZgodeSklepu(klient, tenantId, rows[0].id, {
+              email: k.email,
               stan: "withdrawn",
               zrodlo: "shopify",
               kiedy: zgoda.kiedy ?? k.zmodyfikowaneAt,
@@ -253,7 +255,7 @@ async function zapiszEtap(
         for (const x of paczka) {
           const z = zamowienieZBulk(x.wezel, x.dzieci);
           if (od && z.occurredAt.getTime() < od.getTime()) continue;
-          const w = await upsertZamowienie(klient, tenantId, storeId, z, { kanal: "import", metryki: METRYKI_ZAMOWIENIA_SHOPIFY });
+          const w = await upsertZamowienie(klient, tenantId, storeId, z, { kanal: "import", ...OPCJE_UPSERTU_SHOPIFY });
           if (w.nowe) l.noweZamowienia = (l.noweZamowienia ?? 0) + 1;
           else if (w.zaktualizowane) l.zaktualizowaneZamowienia = (l.zaktualizowaneZamowienia ?? 0) + 1;
           else l.duplikaty = (l.duplikaty ?? 0) + 1;

@@ -76,6 +76,7 @@ export function zamowienieZWebhooka(z: any): ZamowienieSklepu {
       cenaMinor: cena,
       lineId: idZGid(p?.id),
       productId: idZGid(p?.product_id),
+      variantId: idZGid(p?.variant_id),
       sumaMinor: Math.max(0, cena * (Number.isFinite(ilosc) ? ilosc : 1) - rabat),
     };
   });
@@ -94,6 +95,8 @@ export function zamowienieZWebhooka(z: any): ZamowienieSklepu {
     occurredAt: utworzone,
     zmodyfikowaneAt: zmienione,
     pozycje,
+    // zamyka koszyk w `carts` (port „Sklep”): webhook checkouts/* zapisuje go pod tokenem checkoutu
+    tokenKoszyka: napis(z.checkout_token) ?? null,
     surowe: z,
   };
 }

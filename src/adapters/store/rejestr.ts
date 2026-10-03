@@ -7,6 +7,7 @@ import type {
   RolaStatusu,
   ZamowienieSklepu,
 } from "../../domain/store/contract";
+import { DEFINICJA_SHOPIFY } from "./shopify/definicja";
 import { DEFINICJA_WOO } from "./woo/definicja";
 
 /**
@@ -64,6 +65,7 @@ export interface DefinicjaPlatformy {
 
 const DEFINICJE: Partial<Record<PlatformaSklepu, DefinicjaPlatformy>> = {
   woocommerce: DEFINICJA_WOO,
+  shopify: DEFINICJA_SHOPIFY,
 };
 
 /** Definicja platformy albo null (custom nie ma adaptera API: dane idą przez /api i /client). */

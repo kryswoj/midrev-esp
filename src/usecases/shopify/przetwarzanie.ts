@@ -14,15 +14,17 @@ import {
 import { TEMATY_RODO, type TematShopify } from "../../adapters/store/shopify/webhooki";
 import type { ZamowienieSklepu } from "../../domain/store/contract";
 import { naMinor, wykladnikWaluty } from "../../domain/zdarzenia/limity";
+import { produktSklepuZShopify } from "../../adapters/store/shopify/definicja";
+import { zapiszZgodeSklepu } from "../integracja/zgody-sklepu";
+import { zapiszProduktySklepu } from "../katalog/katalog-sklepu";
+import { zapiszKoszykSklepu } from "../katalog/koszyki";
 import { wyslijAlert } from "../../jobs/alerty";
 import { nagrobek, profilPoEmailu, upsertProfilKlienta, upsertZamowienie } from "../przetworz-zdarzenie";
 import { emitujKlienta } from "../zdarzenia/emisja-sklepu";
 import { zapiszZdarzenie } from "../zdarzenia/zapisz-zdarzenie";
 import { oznaczOdinstalowanie } from "./instalacja";
-import { wylaczProduktShopify, zapiszProduktyShopify } from "./katalog";
 import { METRYKI_SHOPIFY } from "./metryki";
 import { obsluzZadanieRodo } from "./rodo";
-import { zapiszZgodeZeSklepu } from "./zgody";
 
 /**
  * Faza 2 webhooków Shopify. Wołana z `przetworzZdarzenie` (ten sam rodzaj joba co Woo), gdy
@@ -37,7 +39,8 @@ import { zapiszZgodeZeSklepu } from "./zgody";
  * Tematy RODO idą osobną ścieżką (`obsluzZadanieRodo`), bo anonimizacja ma własną transakcję.
  */
 
-export const METRYKI_ZAMOWIENIA_SHOPIFY = { zamowienie: METRYKI_SHOPIFY.zlozoneZamowienie, produkt: METRYKI_SHOPIFY.zamowionyProdukt };
+/** Port „Sklep”: zamówienia Shopify zapisuje wspólny upsert z metrykami `shopify/*`. */
+export const OPCJE_UPSERTU_SHOPIFY = { platforma: "shopify" } as const;
 
 interface Kontekst {
   klient: PoolClient;
@@ -45,6 +48,7 @@ interface Kontekst {
   storeId: string;
   waluta: string;
   domenaPubliczna: string | null;
+  domenaSklepu: string;
   /** czas z X-Shopify-Triggered-At albo czas przyjęcia */
   wyzwolono: Date;
 }
@@ -67,8 +71,8 @@ export async function przetworzZdarzenieShopify(tenantId: string, rawEventId: st
   let alert: string | null = null;
   try {
     await klient.query("begin");
-    const { rows } = await klient.query<{ store_id: string; payload: any; processed_at: Date | null; received_at: Date; capabilities: any; currency: string | null }>(
-      `select r.store_id, r.payload, r.processed_at, r.received_at, s.capabilities, t.currency
+    const { rows } = await klient.query<{ store_id: string; payload: any; processed_at: Date | null; received_at: Date; capabilities: any; currency: string | null; shop_domain: string }>(
+      `select r.store_id, r.payload, r.processed_at, r.received_at, s.capabilities, t.currency, s.shop_domain
          from raw_events r
          join stores s on s.tenant_id = r.tenant_id and s.id = r.store_id
          join tenants t on t.id = r.tenant_id
@@ -94,6 +98,7 @@ export async function przetworzZdarzenieShopify(tenantId: string, rawEventId: st
         storeId: r.store_id,
         waluta: r.capabilities?.shopify?.waluta ?? r.currency ?? "PLN",
         domenaPubliczna: r.capabilities?.shopify?.domenaPubliczna ?? null,
+        domenaSklepu: r.shop_domain,
         wyzwolono: Number.isNaN(wyz.getTime()) ? r.received_at : wyz,
       };
       try {
@@ -154,16 +159,16 @@ async function obsluzTemat(k: Kontekst, temat: TematShopify, p: any): Promise<bo
       return zgoda(k, p);
     case "products/create":
     case "products/update":
-      await zapiszProduktyShopify(k.klient, k.tenantId, k.storeId, [produktZWebhooka(p, k.waluta, k.domenaPubliczna)], {
-        zrodlo: "webhook",
-        waluta: k.waluta,
-        znacznik: new Date(),
-      });
+      await zapiszProduktySklepu(k.klient, k.tenantId, k.storeId, [produktSklepuZShopify(produktZWebhooka(p, k.waluta, k.domenaPubliczna), k.waluta)], "webhook");
       return false;
     case "products/delete": {
       const id = idZGid(p?.id);
       if (!id) throw new BladMapowaniaShopify("products/delete bez id");
-      await wylaczProduktShopify(k.klient, k.tenantId, k.storeId, id);
+      // usunięty w Shopify = nieaktywny u nas, nigdy DELETE (stare maile i zdarzenia go wskazują)
+      await k.klient.query(
+        "update products set active = false, synced_at = now() where tenant_id = $1 and store_id = $2 and external_id = $3 and active",
+        [k.tenantId, k.storeId, id],
+      );
       return false;
     }
     case "app/uninstalled":
@@ -179,7 +184,9 @@ async function obsluzTemat(k: Kontekst, temat: TematShopify, p: any): Promise<bo
 
 async function zamowienie(k: Kontekst, p: any): Promise<boolean> {
   const z = zamowienieZWebhooka(p);
-  const w = await upsertZamowienie(k.klient, k.tenantId, k.storeId, z, { kanal: "webhook", metryki: METRYKI_ZAMOWIENIA_SHOPIFY });
+  // wspólny upsert portu: Placed/Ordered przy pierwszym pojawieniu, Fulfilled/Cancelled przy zmianie
+  // roli statusu (DEFINICJA_SHOPIFY.rolaStatusu), zamknięcie koszyka po tokenie checkoutu
+  const w = await upsertZamowienie(k.klient, k.tenantId, k.storeId, z, { kanal: "webhook", ...OPCJE_UPSERTU_SHOPIFY });
   // id zamówienia także wtedy, gdy payload był starszy od zapisanego (pominięty)
   const { rows } = await k.klient.query<{ id: string; profile_id: string | null }>(
     "select id, profile_id from orders where tenant_id = $1 and store_id = $2 and external_id = $3",
@@ -187,10 +194,9 @@ async function zamowienie(k: Kontekst, p: any): Promise<boolean> {
   );
   const orderId = rows[0]?.id ?? null;
   const profileId = rows[0]?.profile_id ?? w.profileId;
-  if (orderId) {
-    await zamknijKoszyki(k, z, profileId, p);
-    await zdarzeniaStatusu(k, z, orderId, profileId, p);
-  }
+  // dodatkowo: koszyk z carts/* (token `cart:`) i koszyk piksela (bez sklepu) z tym samym tokenem,
+  // także przy kolejnych aktualizacjach zamówienia (upsert zamyka tylko przy pierwszym pojawieniu)
+  if (orderId) await zamknijKoszyki(k, z, profileId, p);
   return w.nagrobek;
 }
 
@@ -217,43 +223,6 @@ async function zamknijKoszyki(k: Kontekst, z: ZamowienieSklepu, profileId: strin
 function glowne(minor: number, waluta: string): number {
   const e = wykladnikWaluty(waluta);
   return Number((minor / 10 ** e).toFixed(e));
-}
-
-/** Fulfilled Order / Cancelled Order: raz na zamówienie (unique_id), czas ZE ŹRÓDŁA. */
-async function zdarzeniaStatusu(k: Kontekst, z: ZamowienieSklepu, orderId: string, profileId: string | null, p: any) {
-  const wspolne = { OrderId: z.externalId, OrderNumber: z.numer, $value: glowne(z.sumaMinor, z.waluta), ItemNames: z.pozycje.map((x) => x.nazwa) };
-  if (p?.fulfillment_status === "fulfilled") {
-    const wysylki: any[] = Array.isArray(p.fulfillments) ? p.fulfillments : [];
-    const daty = wysylki.map((f) => new Date(f?.created_at)).filter((d) => !Number.isNaN(d.getTime()));
-    const kiedy = daty.length ? new Date(Math.max(...daty.map((d) => d.getTime()))) : z.zmodyfikowaneAt;
-    await zapiszZdarzenie(k.klient, {
-      tenantId: k.tenantId,
-      metryka: METRYKI_SHOPIFY.zrealizowaneZamowienie,
-      profileId,
-      occurredAt: kiedy,
-      uniqueId: `ful:${orderId}`,
-      valueMinor: z.sumaMinor,
-      valueCurrency: z.waluta,
-      properties: wspolne,
-      source: "webhook",
-    });
-  }
-  if (typeof p?.cancelled_at === "string" && p.cancelled_at) {
-    const kiedy = new Date(p.cancelled_at);
-    if (!Number.isNaN(kiedy.getTime())) {
-      await zapiszZdarzenie(k.klient, {
-        tenantId: k.tenantId,
-        metryka: METRYKI_SHOPIFY.anulowaneZamowienie,
-        profileId,
-        occurredAt: kiedy,
-        uniqueId: `can:${orderId}`,
-        valueMinor: z.sumaMinor,
-        valueCurrency: z.waluta,
-        properties: { ...wspolne, Reason: typeof p.cancel_reason === "string" ? p.cancel_reason.slice(0, 100) : null },
-        source: "webhook",
-      });
-    }
-  }
 }
 
 /** refunds/create → Refunded Order (unique_id = id zwrotu). Kwota z transakcji zwrotu. */
@@ -295,6 +264,17 @@ async function zwrot(k: Kontekst, p: any) {
  * w checkoucie (`buyer_accepts_marketing`) i z webhooka zgód. To, czy mail o porzuconym
  * checkoucie wyjdzie, rozstrzyga i tak `canSendTo` (D6: tylko osoby ze zgodą).
  */
+function linkNaDomenieSklepu(k: Kontekst, link: string | null): string | null {
+  if (!link) return null;
+  try {
+    const host = new URL(link).hostname.toLowerCase();
+    const dozwolone = [k.domenaSklepu, k.domenaPubliczna ? new URL(k.domenaPubliczna).hostname.toLowerCase() : null];
+    return dozwolone.includes(host) ? link : null;
+  } catch {
+    return null;
+  }
+}
+
 async function checkout(k: Kontekst, c: CheckoutShopify): Promise<boolean> {
   if (c.zakonczony) {
     await k.klient.query(
@@ -312,31 +292,29 @@ async function checkout(k: Kontekst, c: CheckoutShopify): Promise<boolean> {
     profileId = profil.profileId;
   }
   const wartosc = c.wartoscMinor ?? c.pozycje.reduce((s, x) => s + Number(x.price_minor ?? 0) * x.qty, 0);
-  const { rowCount } = await k.klient.query(
-    `insert into carts (tenant_id, store_id, platform_token, profile_id, email, stage, items, value_minor, currency,
-                        recovery_url, source_updated_at, updated_at)
-     values ($1, $2, $3, $4, $5, 'checkout', $6::jsonb, $7, $8, $9, $10, now())
-     on conflict (tenant_id, store_id, platform_token) do update set
-       profile_id = coalesce(excluded.profile_id, carts.profile_id), email = coalesce(excluded.email, carts.email),
-       stage = 'checkout', items = excluded.items, value_minor = excluded.value_minor, currency = excluded.currency,
-       recovery_url = coalesce(excluded.recovery_url, carts.recovery_url), source_updated_at = excluded.source_updated_at,
-       updated_at = now()
-     where carts.stage <> 'ordered' and excluded.source_updated_at >= carts.source_updated_at`,
-    [k.tenantId, k.storeId, c.token, profileId, c.email ? c.email.trim().toLowerCase() : null, JSON.stringify(c.pozycje), wartosc, c.waluta, c.linkPowrotu, c.zmieniony],
-  );
+  // link powrotu tylko na domenie TEGO sklepu (myshopify albo domena główna): obcy link w mailu
+  // „wróć do checkoutu” to phishing nawet przy podpisanym webhooku
+  const link = linkNaDomenieSklepu(k, c.linkPowrotu);
+  const { zapisany } = await zapiszKoszykSklepu(k.klient, {
+    tenantId: k.tenantId,
+    storeId: k.storeId,
+    profileId,
+    email: c.email ? c.email.trim().toLowerCase() : null,
+    koszyk: { token: c.token, etap: "checkout", pozycje: c.pozycje, wartoscMinor: wartosc, waluta: c.waluta, linkPowrotu: link, zmodyfikowaneAt: c.zmieniony },
+    hostSklepu: link ? new URL(link).hostname : k.domenaSklepu,
+  });
   if (!profileId) return false;
-  if (c.zgodaMarketingowa) {
-    await zapiszZgodeZeSklepu(k.klient, {
-      tenantId: k.tenantId,
-      profileId,
+  if (c.zgodaMarketingowa && c.email) {
+    await zapiszZgodeSklepu(k.klient, k.tenantId, profileId, {
+      email: c.email.trim().toLowerCase(),
       stan: "granted",
       zrodlo: "shopify",
       kiedy: c.zmieniony,
       szczegol: "checkout Shopify: zaznaczona zgoda na e-maile marketingowe (buyer_accepts_marketing)",
     });
   }
-  // payload starszy od zapisanego (rowCount 0) albo checkout już kupiony: bez zdarzenia
-  if (!rowCount) return false;
+  // payload starszy od zapisanego albo checkout już kupiony: bez zdarzenia
+  if (!zapisany) return false;
   await zapiszZdarzenie(k.klient, {
     tenantId: k.tenantId,
     metryka: METRYKI_SHOPIFY.rozpoczetyCheckout,
@@ -347,7 +325,7 @@ async function checkout(k: Kontekst, c: CheckoutShopify): Promise<boolean> {
     valueCurrency: c.waluta,
     properties: {
       $value: glowne(wartosc, c.waluta),
-      CheckoutURL: c.linkPowrotu,
+      CheckoutURL: link,
       CheckoutToken: c.token,
       ItemNames: c.pozycje.map((x) => x.title),
       Items: c.pozycje.map((x) => ({
@@ -372,15 +350,14 @@ async function koszyk(k: Kontekst, p: any) {
     [k.tenantId, kz.token],
   );
   const wartosc = kz.pozycje.reduce((s, x) => s + Number(x.price_minor ?? 0) * x.qty, 0);
-  await k.klient.query(
-    `insert into carts (tenant_id, store_id, platform_token, profile_id, stage, items, value_minor, currency, source_updated_at, updated_at)
-     values ($1, $2, $3, $4, 'cart', $5::jsonb, $6, $7, $8, now())
-     on conflict (tenant_id, store_id, platform_token) do update set
-       profile_id = coalesce(excluded.profile_id, carts.profile_id), items = excluded.items, value_minor = excluded.value_minor,
-       currency = excluded.currency, source_updated_at = excluded.source_updated_at, updated_at = now()
-     where carts.stage = 'cart' and excluded.source_updated_at >= carts.source_updated_at`,
-    [k.tenantId, k.storeId, `cart:${kz.token}`, rows[0]?.profile_id ?? null, JSON.stringify(kz.pozycje), wartosc, k.waluta, kz.zmieniony],
-  );
+  await zapiszKoszykSklepu(k.klient, {
+    tenantId: k.tenantId,
+    storeId: k.storeId,
+    profileId: rows[0]?.profile_id ?? null,
+    email: null,
+    koszyk: { token: `cart:${kz.token}`, etap: "cart", pozycje: kz.pozycje, wartoscMinor: wartosc, waluta: k.waluta, linkPowrotu: null, zmodyfikowaneAt: kz.zmieniony },
+    hostSklepu: k.domenaSklepu,
+  });
 }
 
 // ── klienci i zgody ───────────────────────────────────────────────────────────────────
@@ -424,10 +401,9 @@ async function zgoda(k: Kontekst, p: any): Promise<boolean> {
 }
 
 async function zgodaDlaProfilu(k: Kontekst, profileId: string, z: ReturnType<typeof zgodaZWebhooka>) {
-  if (!z.stan) return;
-  await zapiszZgodeZeSklepu(k.klient, {
-    tenantId: k.tenantId,
-    profileId,
+  if (!z.stan || !z.email) return;
+  await zapiszZgodeSklepu(k.klient, k.tenantId, profileId, {
+    email: z.email.trim().toLowerCase(),
     stan: z.stan,
     zrodlo: "shopify",
     // brak daty zmiany w Shopify (np. stary klient): czas wyzwolenia webhooka, nie now() zapisu

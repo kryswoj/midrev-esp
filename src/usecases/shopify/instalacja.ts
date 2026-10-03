@@ -15,7 +15,7 @@ import { adresDostawyShopify, ustawMetapolaInstalacji, wlaczPiksel, zarejestrujW
 import { adresSledzenia, config } from "../../config";
 import { wyslijAlert } from "../../jobs/alerty";
 import { zapewnijKluczStrony, wyczyscPamiecKluczy } from "../integracja/klucz-strony";
-import { ustawRoleMetrykStrony } from "../integracja/role-metryk";
+import { ustawRoleMetrykStrony, ustawRoleSklepu } from "../integracja/role-metryk";
 import { metrykaPoKluczu } from "../zdarzenia/metryki";
 import { METRYKI_SHOPIFY } from "./metryki";
 import { fetchShopify, klientDla, sklepPoDomenie, sklepShopify, zaszyfrujPoswiadczenia, type SklepShopify } from "./sklep";
@@ -232,16 +232,15 @@ export async function poInstalacji(tenantId: string, storeId: string): Promise<{
  */
 export async function ustawRoleShopify(tenantId: string): Promise<void> {
   const pool = getPool();
-  for (const [rola, metryka] of [
-    ["placed_order", METRYKI_SHOPIFY.zlozoneZamowienie],
-    ["started_checkout", METRYKI_SHOPIFY.rozpoczetyCheckout],
-  ] as const) {
-    const m = await metrykaPoKluczu(pool, tenantId, metryka, { utworz: true, wbudowana: true, mozeWyzwalac: true, ukryta: false });
-    if (!m) continue;
+  // role zamówień portu (placed/ordered/fulfilled/cancelled/refunded) wskazują metryki `shopify/*`
+  await ustawRoleSklepu(pool, tenantId, "shopify");
+  // Started Checkout z serwera (webhook z linkiem powrotu) jest lepszy niż z przeglądarki: nadpisuje
+  const m = await metrykaPoKluczu(pool, tenantId, METRYKI_SHOPIFY.rozpoczetyCheckout, { utworz: true, wbudowana: true, mozeWyzwalac: true, ukryta: false });
+  if (m) {
     await pool.query(
-      `insert into metric_mappings (tenant_id, role, metric_id) values ($1, $2, $3)
+      `insert into metric_mappings (tenant_id, role, metric_id) values ($1, 'started_checkout', $2)
        on conflict (tenant_id, role) do update set metric_id = excluded.metric_id, updated_at = now()`,
-      [tenantId, rola, m.id],
+      [tenantId, m.id],
     );
   }
   await ustawRoleMetrykStrony(tenantId);

@@ -21,7 +21,7 @@ import { krokImportuShopify, rozpocznijImportShopify, zaplanujImportShopify } fr
 import { CIASTECZKO_STANU } from "../src/usecases/shopify/instalacja";
 import { BladSklepuShopify, sklepShopify, ustawOpcjeTestoweShopify, zapiszAplikacjeShopify } from "../src/usecases/shopify/sklep";
 import { stanShopify } from "../src/usecases/shopify/stan";
-import { policzZamowieniaShopify } from "../src/usecases/shopify/zgodnosc";
+import { sprawdzZgodnosc } from "../src/usecases/sprawdz-zgodnosc";
 import type { Filtr } from "../src/domain/filtry";
 // piksel: ten sam plik, który bundluje Shopify CLI
 import { mapujZdarzenie, tozsamosc, tokenKoszyka, zgodaPozwala } from "../integrations/shopify/midrev-esp-app/extensions/midrev-pixel/src/mapowanie.js";
@@ -465,7 +465,9 @@ describe("Shopify: instalacja, webhooki, RODO, import (baza testowa + atrapa)", 
     const ev = await zdarzenia(tenantA);
     const ful = ev.filter((e) => e.metryka === "shopify/Fulfilled Order");
     expect(ful).toHaveLength(1);
-    expect(new Date(ful[0].occurred_at).toISOString()).toBe("2026-10-04T06:59:00.000Z");
+    // metryka statusu z portu „Sklep”: raz na zamówienie i rolę, czas = updated_at zamówienia ze źródła
+    expect(ful[0].unique_id).toMatch(/^fulfilled_order:/);
+    expect(new Date(ful[0].occurred_at).toISOString()).toBe("2026-10-04T07:00:00.000Z");
     const ref = ev.filter((e) => e.metryka === "shopify/Refunded Order");
     expect(ref).toHaveLength(1);
     expect(ref[0]).toMatchObject({ unique_id: "ref:929361462", value_minor: "6000" });
@@ -539,7 +541,12 @@ describe("Shopify: instalacja, webhooki, RODO, import (baza testowa + atrapa)", 
     // produkt zarchiwizowany w Shopify = nieaktywny
     const { rows: prod } = await getPool().query("select external_id, active from products where tenant_id = $1 and store_id = $2 order by external_id", [tenantA, storeA]);
     expect(prod).toEqual([{ external_id: "632910392", active: true }, { external_id: "632910393", active: false }]);
-    expect(await policzZamowieniaShopify(tenantA, storeA, new Date(Date.now() - 86400_000))).toBe(2);
+    // anulowane z historii: metryka statusu jako backfill (nie wyzwala flow)
+    const can = (await zdarzenia(tenantA)).filter((e) => e.metryka === "shopify/Cancelled Order" && e.source === "import");
+    expect(can.map((e) => e.backfill)).toEqual([true]);
+    // zgodność danych przez fabrykę portu „Sklep” (AdapterShopify, ordersCount)
+    const zg2 = await sprawdzZgodnosc(tenantA, storeA, 400);
+    expect(zg2.wSklepie).toBe(2);
   });
 
   it("stan „Sprawdź połączenie”: punkty kontroli i deep link app embed", async () => {
