@@ -131,7 +131,7 @@ export function ZakladkaWyswietlanie({ def, zmienReguly, formId, snippet }: { de
             </div>
           </Karta>
         ) : (
-          <Karta tytul="Kiedy pokazać" opis="Formularz pojawi się przy pierwszym spełnionym warunku.">
+          <Karta tytul="Kiedy pokazać" opis="Zaznacz jeden albo kilka warunków. Formularz pojawi się, gdy spełni się którykolwiek z nich (nie muszą wszystkie naraz).">
             <Wiersz zaznaczony={r.poSekundach !== null} onZmiana={(z) => zmienReguly({ poSekundach: z ? 5 : null })} opis="Po czasie na stronie">
               <span>Po</span>
               <Liczba etykieta="Sekundy" wartosc={r.poSekundach ?? 5} onZmiana={(n) => zmienReguly({ poSekundach: n })} min={0} maks={600} />
@@ -169,7 +169,7 @@ export function ZakladkaWyswietlanie({ def, zmienReguly, formId, snippet }: { de
               onZmiana={(komu) => zmienReguly({ komu })}
               opcje={[
                 { w: "nie_subskrybenci", tytul: "Jeszcze niezapisanym", opis: "Nie pokazuj osobom, które zapisały się przez dowolny formularz sklepu." },
-                { w: "nowi", tytul: "Nowym odwiedzającym", opis: "Tylko przy pierwszej wizycie (pierwsze 30 minut na stronie)." },
+                { w: "nowi", tytul: "Nowym odwiedzającym", opis: "Osoby w pierwszej wizycie w sklepie: przez 30 minut od pierwszego wejścia." },
                 { w: "wszyscy", tytul: "Wszystkim", opis: "Także osobom już zapisanym." },
               ]}
             />

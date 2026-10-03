@@ -250,7 +250,7 @@ export function UstawieniaFormularza({
   const s = def.styl;
   return (
     <div>
-      <Sekcja tytul={sukces ? "Krok sukcesu" : "Krok"} opis={sukces ? "Pokazuje się po zapisie. Tu stoi kod rabatowy." : undefined}>
+      <Sekcja tytul={sukces ? "Ten krok: sukces" : "Ten krok"} opis={sukces ? "Pokazuje się po zapisie. Tu stoi kod rabatowy." : "Treść kroku edytujesz na podglądzie: kliknij blok."}>
         <PoleJednoliniowe etykieta="Nazwa kroku" wartosc={krok.nazwa} onZmiana={zmienNazweKroku} maks={60} />
         {!sukces ? (
           <div className="flex gap-2">
@@ -265,7 +265,7 @@ export function UstawieniaFormularza({
           </div>
         ) : null}
       </Sekcja>
-      <Sekcja tytul="Formularz">
+      <Sekcja tytul="Cały formularz" opis="Te ustawienia dotyczą wszystkich kroków.">
         <Segmenty<TypFormularza>
           etykieta="Typ"
           wartosc={def.typ}
@@ -285,8 +285,9 @@ export function UstawieniaFormularza({
           )}
         </Pole>
       </Sekcja>
-      <Sekcja tytul="Wygląd">
-        <Suwak etykieta="Szerokość" wartosc={s.szerokosc} onZmiana={(szerokosc) => zmienStyl({ szerokosc })} min={280} maks={760} />
+      <Sekcja tytul="Wygląd całego formularza">
+        <Suwak etykieta="Szerokość maksymalna" wartosc={s.szerokosc} onZmiana={(szerokosc) => zmienStyl({ szerokosc })} min={280} maks={760} />
+        <p className="-mt-2 text-[12px] leading-[17px] text-[var(--color-tekst-3)]">Na telefonie formularz zajmuje szerokość ekranu z marginesem 16 px.</p>
         <div className="grid grid-cols-2 gap-3">
           <PoleKoloru etykieta="Tło" wartosc={s.tlo} onZmiana={(tlo) => zmienStyl({ tlo })} />
           <PoleKoloru etykieta="Tekst" wartosc={s.kolorTekstu} onZmiana={(kolorTekstu) => zmienStyl({ kolorTekstu })} />
@@ -294,6 +295,7 @@ export function UstawieniaFormularza({
           <PoleKoloru etykieta="Tekst przycisku" wartosc={s.kolorTekstuPrzycisku} onZmiana={(kolorTekstuPrzycisku) => zmienStyl({ kolorTekstuPrzycisku })} />
         </div>
         <Wybor<KrojFormularza> etykieta="Krój pisma" wartosc={s.kroj} onZmiana={(kroj) => zmienStyl({ kroj })} opcje={KROJE_OPCJE} />
+        {s.kroj === "strona" ? <p className="-mt-2 text-[12px] leading-[17px] text-[var(--color-tekst-3)]">W podglądzie widzisz krój panelu. W sklepie formularz przejmie krój strony, więc wiersze mogą się łamać trochę inaczej.</p> : null}
         <Suwak etykieta="Zaokrąglenie rogów" wartosc={s.zaokraglenie} onZmiana={(zaokraglenie) => zmienStyl({ zaokraglenie })} min={0} maks={32} />
         <Segmenty etykieta="Wyrównanie" wartosc={s.wyrownanie} onZmiana={(wyrownanie) => zmienStyl({ wyrownanie })} opcje={[{ wartosc: "lewo", etykieta: "Do lewej", opis: "Tekst do lewej" }, { wartosc: "srodek", etykieta: "Do środka", opis: "Tekst wyśrodkowany" }]} />
         {def.typ === "popup" ? <Suwak etykieta="Przyciemnienie strony pod popupem" wartosc={s.nakladka} onZmiana={(nakladka) => zmienStyl({ nakladka })} min={0} maks={90} jednostka="%" /> : null}
@@ -320,6 +322,20 @@ export function UstawieniaFormularza({
           {def.teaser.wlaczony ? <PoleTekstu etykieta="Tekst zakładki" wartosc={def.teaser.tekst} onZmiana={(tekst) => zmienDef((d) => ({ ...d, teaser: { ...d.teaser, tekst } }))} maks={60} /> : null}
         </Sekcja>
       ) : null}
+    </div>
+  );
+}
+
+/** Prawy panel, gdy zaznaczony jest teaser: tylko to, co go dotyczy. */
+export function UstawieniaTeasera({ def, zmienDef, zmienStyl }: { def: DefinicjaFormularza; zmienDef: (f: (d: DefinicjaFormularza) => DefinicjaFormularza) => void; zmienStyl: (z: Partial<StylFormularza>) => void }) {
+  return (
+    <div>
+      <Sekcja tytul="Teaser" opis="Mała zakładka w rogu ekranu. Pokazuje się po zamknięciu formularza bez zapisu i wraca na kolejnych stronach, dopóki osoba jej nie ukryje. Kliknięcie otwiera formularz od pierwszego kroku.">
+        <Przelacznik etykieta="Pokazuj teaser po zamknięciu" wartosc={def.teaser.wlaczony} onZmiana={(wlaczony) => zmienDef((d) => ({ ...d, teaser: { ...d.teaser, wlaczony, tekst: d.teaser.tekst || "Odbierz rabat" } }))} />
+        <PoleTekstu etykieta="Tekst zakładki" wartosc={def.teaser.tekst} onZmiana={(tekst) => zmienDef((d) => ({ ...d, teaser: { ...d.teaser, tekst } }))} maks={60} />
+        <Segmenty etykieta="Róg ekranu" wartosc={def.styl.rog} onZmiana={(rog) => zmienStyl({ rog })} opcje={[{ wartosc: "lewo", etykieta: "Lewy dół", opis: "Lewy dolny róg" }, { wartosc: "prawo", etykieta: "Prawy dół", opis: "Prawy dolny róg" }]} />
+        <Notka>Kolory teasera to kolory przycisku formularza (zmienisz je w ustawieniach kroku).</Notka>
+      </Sekcja>
     </div>
   );
 }

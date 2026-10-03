@@ -80,7 +80,7 @@ import type { RegulyWyswietlania } from "../../../../../domain/formularze/wyswie
 import type { WynikiFormularza } from "../../../../../usecases/popupy/wyswietlenia";
 import { akcjaListyFormularzy, opublikujAkcja, wstrzymajAkcja, zapiszSzkicAkcja } from "../akcje";
 import { AtrapaSklepu, PodgladFormularza, PodgladTeasera, StylePodgladu, WidokBloku } from "../podglad";
-import { UstawieniaFormularza, WlasciwosciBloku } from "./wlasciwosci";
+import { UstawieniaFormularza, UstawieniaTeasera, WlasciwosciBloku } from "./wlasciwosci";
 import { ZakladkaWyniki } from "./zakladka-wyniki";
 import { ZakladkaWyswietlanie } from "./zakladka-wyswietlanie";
 
@@ -194,10 +194,9 @@ function BlokSortowalny({ blok, zaznaczony, onZaznacz, children, pierwszy, ostat
         <div style={{ pointerEvents: "none" }}>{children}</div>
       </div>
       {zaznaczony ? (
-        <div className="absolute -top-[38px] right-0 z-10 flex items-center gap-0.5 rounded-lg bg-[#1f2328] p-0.5 shadow-[var(--cien-uniesiony)]" style={{ fontFamily: "var(--font-sans)" }} onClick={(e) => e.stopPropagation()}>
-          <span className="flex items-center gap-1 px-1.5 text-[11px] font-medium text-white/80">
+        <div className="absolute left-[calc(100%+14px)] top-0 z-10 flex flex-col items-center gap-0.5 rounded-lg bg-[#1f2328] p-0.5 shadow-[var(--cien-uniesiony)]" style={{ fontFamily: "var(--font-sans)" }} onClick={(e) => e.stopPropagation()}>
+          <span className="grid h-7 w-7 place-items-center text-white/60" title={`${NAZWY_BLOKOW[blok.typ]}: przeciągnij blok, żeby przenieść`}>
             <GripVertical size={13} aria-hidden="true" />
-            {NAZWY_BLOKOW[blok.typ]}
           </span>
           <button type="button" className={przycisk} disabled={pierwszy} onClick={() => onPrzesun(-1)} aria-label="Przesuń wyżej">
             <ArrowUp size={14} />
@@ -257,7 +256,7 @@ function WierszKroku({ id, numer, nazwa, aktywny, onWybierz, onDuplikuj, onUsun,
           <span className="min-w-0">
             <span className="block text-[11px] font-semibold uppercase tracking-[0.04em] text-[var(--color-tekst-3)]">Krok {numer}</span>
             <span className="block truncate text-[13px] font-semibold">{nazwa || `Krok ${numer}`}</span>
-            {zEmailem ? <span className="block text-[11px] text-[var(--color-akcent)]">zapis e-maila i zgody</span> : null}
+            {zEmailem ? <span className="block text-[11px] text-[var(--color-akcent)]">e-mail i zgoda</span> : null}
           </span>
         </button>
         <div className="relative">
@@ -398,11 +397,18 @@ export function Builder(p: DaneBuildera) {
   }, [toast]);
 
   // ── publikacja ──
-  const opublikuj = async () => {
+  const [pytanieOListe, setPytanieOListe] = useState(false);
+  const opublikuj = async (bezListy = false) => {
     setProblemyOtwarte(false);
+    setPytanieOListe(false);
     if (wymagane.length) {
       setPublikacja({ trwa: false, problemy: wymagane });
       setProblemyOtwarte(true);
+      return;
+    }
+    // formularz zapisu bez listy to zwykle przeoczenie: pytamy raz, świadomie (jak w Klaviyo)
+    if (!defRef.current.listaId && !bezListy) {
+      setPytanieOListe(true);
       return;
     }
     setPublikacja({ trwa: true, problemy: null });
@@ -481,6 +487,7 @@ export function Builder(p: DaneBuildera) {
         setBlokId(null);
         setProblemyOtwarte(false);
         setMenu(false);
+        setPytanieOListe(false);
       } else if ((e.key === "Delete" || e.key === "Backspace") && blokId && !wPolu && zakladka === "projekt") {
         e.preventDefault();
         usun(blokId);
@@ -556,7 +563,7 @@ export function Builder(p: DaneBuildera) {
     </span>
   ) : (
     <span className="flex items-center gap-1.5 text-[var(--color-tekst-2)]">
-      <Check size={14} className="text-[var(--color-ok)]" /> Szkic zapisany{zapis.kiedy ? <span className="hidden xl:inline"> o {godzina(zapis.kiedy)}</span> : null}
+      <Check size={14} className="text-[var(--color-ok)]" /> {niepublikowane && opublikowana ? "Zapisane, czeka na publikację" : "Szkic zapisany"}{zapis.kiedy ? <span className="hidden xl:inline"> o {godzina(zapis.kiedy)}</span> : null}
     </span>
   );
 
@@ -707,6 +714,16 @@ export function Builder(p: DaneBuildera) {
             </button>
           </div>
 
+          {pytanieOListe ? (
+            <div className="absolute right-3 top-[52px] z-40 w-[360px] rounded-xl border border-[var(--color-linia)] bg-white p-4 shadow-[var(--cien-uniesiony)]" role="dialog" aria-label="Publikacja bez listy">
+              <h3 className="text-[14px]">Zapisywać osoby na listę?</h3>
+              <p className="mt-1 text-[13px] leading-[18px] text-[var(--color-tekst-2)]">Formularz nie ma listy docelowej. Zapisy trafią do profili i rejestru zgód, ale nie na listę, więc nie uruchomią automatyzacji z wyzwalaczem „dołączenie do listy”.</p>
+              <div className="mt-3 flex justify-end gap-2">
+                <button type="button" className="przycisk przycisk-wtorny przycisk-maly" onClick={() => void opublikuj(true)}>Opublikuj bez listy</button>
+                <button type="button" className="przycisk przycisk-maly" onClick={() => { setPytanieOListe(false); setZakladka("projekt"); setTeaser(false); setBlokId(null); setToast({ tekst: "Wybierz listę w panelu po prawej: „Zapisz na listę”." }); }}>Wybierz listę</button>
+              </div>
+            </div>
+          ) : null}
           {problemyOtwarte ? (
             <div className="absolute right-3 top-[52px] z-40 w-[380px] rounded-xl border border-[var(--color-linia)] bg-white p-4 shadow-[var(--cien-uniesiony)]" role="dialog" aria-label="Do uzupełnienia przed publikacją">
               <div className="flex items-center justify-between">
@@ -855,7 +872,7 @@ export function Builder(p: DaneBuildera) {
                       <Plus size={15} /> Dodaj krok
                     </button>
                   ) : null}
-                  <h2 className="mb-2 mt-4 px-1 text-[12px] font-semibold uppercase tracking-[0.05em] text-[var(--color-tekst-3)]">Po zapisie</h2>
+                  <h2 className="mb-2 mt-4 px-1 text-[12px] font-semibold uppercase tracking-[0.05em] text-[var(--color-tekst-3)]">Po zapisie i po zamknięciu</h2>
                   <div className="space-y-1.5">
                     <button type="button" onClick={() => { setTeaser(false); setKrokId(def.sukces.id); setBlokId(null); }} className={`flex w-full items-center gap-2.5 rounded-[10px] border px-3 py-2.5 text-left text-[13px] font-semibold ${!teaser && sukces ? "border-[var(--color-akcent)] bg-[var(--color-akcent-tlo)]" : "border-[var(--color-linia)] bg-white hover:border-[var(--color-linia-mocna)]"}`}>
                       <PartyPopper size={16} className="text-[var(--color-ok)]" aria-hidden="true" /> Sukces
@@ -864,6 +881,7 @@ export function Builder(p: DaneBuildera) {
                     {def.typ !== "embed" ? (
                       <button type="button" onClick={() => { setTeaser(true); setBlokId(null); }} className={`flex w-full items-center gap-2.5 rounded-[10px] border px-3 py-2.5 text-left text-[13px] font-semibold ${teaser ? "border-[var(--color-akcent)] bg-[var(--color-akcent-tlo)]" : "border-[var(--color-linia)] bg-white hover:border-[var(--color-linia-mocna)]"}`}>
                         <Tag size={16} className="text-[var(--color-tekst-3)]" aria-hidden="true" /> Teaser
+                        <span className="text-[11px] font-normal text-[var(--color-tekst-3)]">po zamknięciu</span>
                         <span className={`ml-auto text-[11px] font-normal ${def.teaser.wlaczony ? "text-[var(--color-ok)]" : "text-[var(--color-tekst-3)]"}`}>{def.teaser.wlaczony ? "włączony" : "wyłączony"}</span>
                       </button>
                     ) : null}
@@ -931,6 +949,8 @@ export function Builder(p: DaneBuildera) {
                     onDuplikuj={() => aktualizuj((d) => duplikujBlok(d, krok.id, blok.id))}
                     onZamknij={() => setBlokId(null)}
                   />
+                ) : teaser ? (
+                  <UstawieniaTeasera def={def} zmienDef={aktualizuj} zmienStyl={(z: Partial<StylFormularza>) => aktualizuj((d) => ({ ...d, styl: { ...d.styl, ...z } }))} />
                 ) : (
                   <UstawieniaFormularza
                     def={def}

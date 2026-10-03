@@ -60,6 +60,8 @@ export interface WynikiFormularza {
   kroki: { indeks: number; wyswietlenia: number }[];
   /** wszystkie zapisy od początku (stary licznik z events, także sprzed 0043) */
   zapisyRazem: number;
+  /** ostatnie wyświetlenie formularza w sklepie (ostatnie 365 dni); null = nigdy: skrypt nie działa albo brak ruchu */
+  ostatnieWyswietlenie: Date | null;
 }
 
 /** Wyniki formularza z ostatnich `dni` dni. Predykat tenant_id na każdej tabeli (AD-2). */
@@ -80,6 +82,14 @@ export async function wynikiFormularza(tenantId: string, popupId: string, dni: n
     `select count(*)::int as ile from events where tenant_id = $1 and event_type = 'popup.submitted' and payload->>'popup_id' = $2`,
     [tenantId, popupId],
   );
+  const { rows: ostatnie } = await getPool().query<{ kiedy: Date | null }>(
+    `select max(e.occurred_at) as kiedy
+       from metric_events e
+       join metrics m on m.tenant_id = e.tenant_id and m.id = e.metric_id
+      where e.tenant_id = $1 and m.tenant_id = $1 and m.integration_key = 'midrev' and m.name = $3
+        and e.occurred_at >= now() - interval '365 days' and e.properties->>'form_id' = $2`,
+    [tenantId, popupId, nazwy[0]],
+  );
   let wyswietlenia = 0;
   let zapisy = 0;
   const kroki = new Map<number, number>();
@@ -98,6 +108,7 @@ export async function wynikiFormularza(tenantId: string, popupId: string, dni: n
     konwersja: wyswietlenia > 0 ? Math.round((zapisy / wyswietlenia) * 1000) / 10 : null,
     kroki: [...kroki.entries()].sort((a, b) => a[0] - b[0]).map(([indeks, w]) => ({ indeks, wyswietlenia: w })),
     zapisyRazem: razem[0]?.ile ?? 0,
+    ostatnieWyswietlenie: ostatnie[0]?.kiedy ?? null,
   };
 }
 

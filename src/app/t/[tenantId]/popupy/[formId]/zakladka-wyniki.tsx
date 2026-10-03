@@ -71,11 +71,19 @@ export function ZakladkaWyniki({ tenantId, formId, def, poczatkowe }: { tenantId
           <h3 className="text-[15px]">Kroki</h3>
           <p className="mt-0.5 text-[13px] text-[var(--color-tekst-2)]">Ile osób doszło do każdego kroku. Spadek między krokami pokazuje, gdzie ludzie rezygnują.</p>
           {dane.wyswietlenia === 0 ? (
-            <p className="mt-4 rounded-lg bg-[var(--color-powierzchnia-2)] px-4 py-6 text-center text-[13px] text-[var(--color-tekst-2)]">
-              W tym okresie nikt jeszcze nie zobaczył formularza. Wyniki pojawią się po publikacji i pierwszych odsłonach w sklepie.
-            </p>
-          ) : (
-            <ol className="mt-4 space-y-3">
+            <div className="mt-4 rounded-lg bg-[var(--color-powierzchnia-2)] px-4 py-3 text-[13px] leading-[19px] text-[var(--color-tekst-2)]">
+              <b className="font-semibold text-[var(--color-tekst)]">W tym okresie nikt jeszcze nie zobaczył formularza.</b>{" "}
+              {dane.ostatnieWyswietlenie ? `Ostatnie wyświetlenie w sklepie: ${new Date(dane.ostatnieWyswietlenie).toLocaleDateString("pl-PL")}.` : "Sklep jeszcze ani razu go nie pokazał."} Sprawdź po kolei:
+              <ol className="mt-1.5 list-decimal space-y-0.5 pl-5">
+                <li>formularz jest opublikowany (zielone „na stronie” u góry),</li>
+                <li>tag skryptu jest wklejony w sklepie (zakładka „Wyświetlanie”, na dole),</li>
+                <li>reguły z zakładki „Wyświetlanie” pasują do Ciebie: otwórz sklep w oknie prywatnym i odczekaj ustawiony czas.</li>
+              </ol>
+            </div>
+          ) : dane.ostatnieWyswietlenie ? (
+            <p className="mt-1 text-[12px] text-[var(--color-tekst-3)]">Ostatnie wyświetlenie: {new Date(dane.ostatnieWyswietlenie).toLocaleString("pl-PL", { dateStyle: "medium", timeStyle: "short" })}</p>
+          ) : null}
+          <ol className="mt-4 space-y-3">
               {kroki.map((k) => {
                 const w = dane.kroki.find((x) => x.indeks === k.indeks)?.wyswietlenia ?? 0;
                 const udzial = pierwszy > 0 ? Math.min(100, (w / pierwszy) * 100) : 0;
@@ -95,8 +103,7 @@ export function ZakladkaWyniki({ tenantId, formId, def, poczatkowe }: { tenantId
                   </li>
                 );
               })}
-            </ol>
-          )}
+          </ol>
           <p className="mt-4 border-t border-[var(--color-linia-0)] pt-3 text-[12px] text-[var(--color-tekst-3)]">Wszystkie zapisy od początku: {liczba(dane.zapisyRazem)}. Zapisy liczymy przy kroku z e-mailem, więc osoba, która pominęła dalsze kroki, też jest w zapisach.</p>
         </section>
       </div>

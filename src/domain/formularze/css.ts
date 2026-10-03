@@ -46,7 +46,7 @@ export const CSS_FORMULARZA = `
 .mf-opcja input{position:absolute;opacity:0;pointer-events:none}
 .mf-opcja:has(input:checked){background:var(--mf-przycisk);color:var(--mf-przycisk-tekst);border-color:var(--mf-przycisk)}
 .mf-opcja:has(input:focus-visible){outline:2px solid var(--mf-przycisk);outline-offset:2px}
-.mf-zgoda{display:flex;gap:10px;align-items:flex-start;font-size:12px;line-height:1.45;text-align:left;opacity:.86}
+.mf-zgoda{display:flex;gap:10px;align-items:flex-start;font-size:13px;line-height:1.45;text-align:left;opacity:.86}
 .mf-zgoda input{flex:none;width:18px;height:18px;margin:0;accent-color:var(--mf-przycisk);cursor:pointer}
 .mf-zgoda label{cursor:pointer;white-space:pre-line}
 .mf-zgoda a{color:inherit;text-decoration:underline}
@@ -61,12 +61,12 @@ export const CSS_FORMULARZA = `
 .mf-kod-opis{margin:0;font-size:13px;opacity:.7}
 .mf-kopiuj{flex:none;min-height:38px;padding:0 14px;font:inherit;font-size:13px;font-weight:600;color:var(--mf-przycisk-tekst);background:var(--mf-przycisk);border:0;border-radius:calc(var(--mf-radius) * .5);cursor:pointer}
 .mf-blad{margin:0;font-size:13px;color:#d0342c;text-align:left}
-.mf-zamknij{position:absolute;top:10px;right:10px;z-index:2;display:grid;place-items:center;width:36px;height:36px;padding:0;font:inherit;font-size:24px;line-height:1;color:inherit;opacity:.7;background:color-mix(in srgb,var(--mf-tlo) 70%,transparent);border:0;border-radius:999px;cursor:pointer}
+.mf-zamknij{position:absolute;top:8px;right:8px;z-index:2;display:grid;place-items:center;width:40px;height:40px;padding:0;font:inherit;font-size:24px;line-height:1;color:inherit;opacity:.7;background:color-mix(in srgb,var(--mf-tlo) 70%,transparent);border:0;border-radius:999px;cursor:pointer}
 .mf-zamknij:hover{opacity:1}
 .mf-teaser{position:fixed;bottom:20px;z-index:2147482999;display:flex;align-items:center;gap:8px;min-height:44px;padding:0 6px 0 18px;font-family:var(--mf-font);font-size:15px;font-weight:650;color:var(--mf-przycisk-tekst);background:var(--mf-przycisk);border-radius:999px;box-shadow:0 10px 30px rgba(0,0,0,.25);animation:mf-wysun .22s ease-out}
 .mf-teaser.mf-rog-prawo{right:20px}.mf-teaser.mf-rog-lewo{left:20px}
 .mf-teaser button{font:inherit;color:inherit;background:none;border:0;cursor:pointer;padding:10px 4px}
-.mf-teaser .mf-teaser-x{display:grid;place-items:center;width:30px;height:30px;padding:0;font-size:18px;opacity:.75;border-radius:999px}
+.mf-teaser .mf-teaser-x{display:grid;place-items:center;width:36px;height:36px;padding:0;font-size:18px;opacity:.75;border-radius:999px}
 @keyframes mf-wej{from{opacity:0}to{opacity:1}}
 @keyframes mf-wysun{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
 @media (prefers-reduced-motion:reduce){.mf-nakladka,.mf-flyout,.mf-teaser{animation:none}}

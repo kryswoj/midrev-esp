@@ -15,6 +15,7 @@ export const CSS_PODGLADU = `${CSS_FORMULARZA}
 .mf-podglad.mf-nakladka{z-index:1}
 .mf-podglad .mf-karta{max-height:none}
 .mf-root.mf-statyczny{height:100%}
+.mf-zgoda .mf-link{text-decoration:underline}
 .mfb{position:relative;border-radius:6px;outline:1.5px solid transparent;outline-offset:3px;cursor:pointer;transition:outline-color .12s}
 .mfb:hover{outline-color:rgba(129,74,200,.45)}
 .mfb[data-zaznaczony=true]{outline:2px solid #814ac8}
@@ -79,9 +80,8 @@ export function WidokBloku({ blok, zgoda }: { blok: Blok; zgoda?: { tekst: strin
             {bezpiecznyAdres(url) ? (
               <>
                 {" "}
-                <a href={url} onClick={(e) => e.preventDefault()} tabIndex={-1}>
-                  Polityka prywatności
-                </a>
+                {/* span, nie <a>: podgląd bywa w linku (miniatura na liście), a <a> w <a> łamie HTML i hydratację */}
+                <span className="mf-link">Polityka prywatności</span>
               </>
             ) : null}
           </div>
