@@ -6,7 +6,6 @@ import { jakWpisacSerwery } from "../src/app/_dns/jeden-wpis";
 import { rekordyPlatformowe } from "../src/domain/email/domena-platformowa";
 import { DOSTAWCY_DNS, dostawcaPoKluczu } from "../src/domain/email/dostawcy-dns";
 import {
-  callerReferenceStrefy,
   normalizujIdStrefy,
   ocenDelegacje,
   rekordyStrefyDelegowanej,
@@ -15,6 +14,7 @@ import {
   type RekordRoute53,
 } from "../src/domain/email/route53";
 import { BladAws } from "../src/domain/email/ses";
+import { callerReferenceZWiersza } from "../src/usecases/wysylka-konfiguracja/delegacja-dns";
 
 /**
  * „Jeden wpis NS": czysta logika (rekordy strefy, różnica stanu, ocena delegacji), klient
@@ -37,11 +37,12 @@ function rekordy(dmarc: string | null = "v=DMARC1; p=none") {
 }
 
 describe("Route 53: rekordy strefy i różnica stanu", () => {
-  it("CallerReference: deterministyczny, inny dla innego tenanta, bez znaków spoza [A-Za-z0-9-]", () => {
-    const a = callerReferenceStrefy("t-1", "News.Sklep.pl.");
-    expect(a).toBe(callerReferenceStrefy("t-1", "news.sklep.pl"));
-    expect(a).not.toBe(callerReferenceStrefy("t-2", "news.sklep.pl"));
-    expect(a).toMatch(/^[A-Za-z0-9-]{1,128}$/);
+  it("CallerReference z wiersza: deterministyczny, inny dla innego tenanta i innej próby, zgodny z checkiem 0042", () => {
+    const a = callerReferenceZWiersza("t-1", "News.Sklep.pl.", "w-1");
+    expect(a).toBe(callerReferenceZWiersza("t-1", "news.sklep.pl", "w-1"));
+    expect(a).not.toBe(callerReferenceZWiersza("t-2", "news.sklep.pl", "w-1"));
+    expect(a).not.toBe(callerReferenceZWiersza("t-1", "news.sklep.pl", "w-2"));
+    expect(a).toMatch(/^[A-Za-z0-9_-]{1,128}$/);
   });
 
   it("identyfikator strefy: tylko Z[A-Z0-9]; próba wstrzyknięcia ścieżki = null", () => {

@@ -12,7 +12,6 @@
  * innego tenanta nigdy nie jest przejmowana.
  */
 
-import { createHash } from "node:crypto";
 import type { RekordPlatformowy } from "./domena-platformowa";
 
 export interface StrefaRoute53 {
@@ -74,15 +73,6 @@ export function normalizujIdZmiany(surowy: string | null | undefined): string | 
 
 export function nazwaBezKropki(n: string): string {
   return n.trim().toLowerCase().replace(/\.$/, "");
-}
-
-/**
- * CallerReference: deterministyczny z (tenant, domena), więc powtórzone podłączenie po
- * zgubionej odpowiedzi nie tworzy drugiej strefy, a inny tenant tej samej domeny nigdy nie
- * trafi w cudzą. Route 53 pamięta CallerReference na zawsze (także po usunięciu strefy).
- */
-export function callerReferenceStrefy(tenantId: string, domena: string): string {
-  return `midrev-${createHash("sha256").update(`${tenantId}:${nazwaBezKropki(domena)}`).digest("hex").slice(0, 48)}`;
 }
 
 /** Wartość TXT w formacie Route 53: w cudzysłowach, dzielona na kawałki ≤ 255 znaków. */
