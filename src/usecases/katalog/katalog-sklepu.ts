@@ -150,8 +150,11 @@ export async function synchronizujKatalogSklepu(
   const naStrone = opcje.naStrone ?? 50;
   let produkty = 0;
   let warianty = 0;
+  const widziane = new Set<string>();
+  let kompletna = false;
   for (let strona = 1; strona <= 10_000; strona++) {
     const wynik = await adapter.pobierzProdukty(strona, naStrone, kursor ? { zmienioneOd: kursor } : {});
+    for (const p of wynik.pozycje) widziane.add(p.externalId);
     if (wynik.pozycje.length) {
       const klient = await pool.connect();
       try {
@@ -167,7 +170,19 @@ export async function synchronizujKatalogSklepu(
         klient.release();
       }
     }
-    if (strona >= wynik.stron || wynik.pozycje.length === 0) break;
+    if (strona >= wynik.stron || wynik.pozycje.length === 0) {
+      kompletna = true;
+      break;
+    }
+  }
+  // Pełna synchronizacja przeszła cały katalog: czego sklep już nie zwraca (kosz, usunięty),
+  // to active=false. Zakres: TEN sklep i wyłącznie produkty spoza listy z tego przebiegu.
+  if (!kursor && kompletna) {
+    await pool.query(
+      `update products set active = false, synced_at = now()
+        where tenant_id = $1 and store_id = $2 and active and not (external_id = any($3::text[]))`,
+      [tenantId, storeId, [...widziane]],
+    );
   }
   await pool.query(
     `update stores set sync_state = jsonb_set(sync_state, '{katalog}', $3::jsonb, true)

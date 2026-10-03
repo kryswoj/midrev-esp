@@ -18,6 +18,7 @@ import { BladZdarzenia, zapiszZdarzenie } from "../zdarzenia/zapisz-zdarzenie";
 import { normalizujDomene, wyczyscPamiecKluczy, zapewnijKluczStrony } from "./klucz-strony";
 import { ustawRoleMetrykStrony } from "./role-metryk";
 import { zapiszZgodeSklepu } from "./zgody-sklepu";
+import { RODZAJ_KATALOGU_SKLEPU } from "../sklep/kreator-sklepu";
 
 /**
  * Wtyczka „MidRev ESP for WooCommerce” po stronie ESP (plan integracji B.3, W1–W3):
@@ -230,6 +231,8 @@ async function przygotujStroneSklepu(tenantId: string, storeId: string, adres: s
   wyczyscPamiecKluczy();
   await ustawRoleMetrykStrony(tenantId);
   await zapewnijKlauzuleCheckoutu(tenantId, storeId);
+  // katalog od razu (bloki produktów w mailach, „Sprawdź połączenie”), potem co 6 h przyrostowo
+  await dodajZadanie(tenantId, RODZAJ_KATALOGU_SKLEPU, { storeId, pelna: true });
   return klucz.id;
 }
 
