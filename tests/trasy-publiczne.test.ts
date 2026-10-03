@@ -32,6 +32,9 @@ const OCZEKIWANE_PUBLICZNE = new Set([
   "/akceptacja/[token]",
   "/s/[tenantId]",
   "/api/popup/[popupId]",
+  // builder formularzy (0043): kolejny krok po e-mailu (token HMAC) i lekkie zdarzenie wyświetlenia
+  "/api/popup/[popupId]/krok",
+  "/api/popup/[popupId]/wyswietlenie",
   "/api/webhooks/woo/[storeId]",
   // zdarzenia SES przez SNS (podpis SNS + allowlista tematu, 0040)
   "/api/webhooks/ses",

@@ -160,6 +160,13 @@ const schemat = z.object({
   /* Adres, z którego idzie powiadomienie „domena gotowa" (musi być w zweryfikowanej
      tożsamości platformy, np. powiadomienia@news.midrev.pl). Brak = tylko panel. */
   SES_POWIADOMIENIA_OD: z.string().regex(/^[^@\s<>,;"]+@[^@\s<>,;"]+\.[a-z]{2,}$/i, "SES_POWIADOMIENIA_OD: jeden adres e-mail").optional(),
+  /* Delegacja subdomeny do strefy Route 53 platformy („jeden wpis NS u dostawcy", 0042).
+     Domyślnie wyłączona: włączyć dopiero, gdy użytkownik aplikacji ma politykę IAM route53
+     z raportu 08-delegacja-ns.md. Bez flagi kreator działa jak dotąd (rekordy ręcznie). */
+  ROUTE53_DELEGACJA: z
+    .string()
+    .optional()
+    .transform((w) => TAK.has(String(w ?? "").trim().toLowerCase())),
   /* Tylko sandbox: atrapa SES w pamięci procesu (kreator i zrzuty ekranu bez AWS). */
   SES_ATRAPA: z
     .string()

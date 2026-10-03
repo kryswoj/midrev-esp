@@ -2,110 +2,94 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { ZodError } from "zod";
-import { BladPopupu, MAX_KLAUZULA, MIN_KLAUZULA, ustawAktywnosc, utworzPopup, zmienKlauzule } from "../../../../usecases/popupy/zarzadzaj";
+import type { TypFormularza } from "../../../../domain/formularze/model";
+import type { IdSzablonu } from "../../../../domain/formularze/szablony";
+import {
+  archiwizujFormularz,
+  BladFormularza,
+  duplikujFormularz,
+  opublikujFormularz,
+  utworzFormularz,
+  zapiszSzkic,
+  type WynikPublikacji,
+  type WynikZapisuSzkicu,
+} from "../../../../usecases/popupy/formularze";
+import { wynikiFormularza, type WynikiFormularza } from "../../../../usecases/popupy/wyswietlenia";
+import { ustawAktywnosc } from "../../../../usecases/popupy/zarzadzaj";
 import { wymaganyTenant } from "../../../autoryzacja";
-import type { StanFormularza } from "../../../formularze";
 
-// Server actions sa cienkim opakowaniem use-case (AD-17). Lokalne dla /popupy,
-// zeby nie dotykac wspolnego akcje.ts podczas rownoleglej pracy nad epikami.
-// tenantId z hidden inputa przechodzi przez wymaganyTenant (AD-21) - patrz
-// src/app/autoryzacja.ts.
+// Server actions są cienkim opakowaniem use-case (AD-17). tenantId z klienta zawsze
+// przechodzi przez wymaganyTenant (AD-21): sesja rozstrzyga dostęp, nie parametr.
 
-// useActionState (audyt B4): blad walidacji wraca do formularza razem z wpisana
-// trescia, zamiast redirectem czyscic naglowek, tresc, przycisk i kod naraz.
-export async function utworzPopupAkcja(
-  _poprzedni: StanFormularza | undefined,
-  formularz: FormData,
-): Promise<StanFormularza> {
+const ID = /^[0-9a-f-]{36}$/i;
+
+export async function utworzFormularzAkcja(formularz: FormData): Promise<void> {
   const { tenantId } = await wymaganyTenant(formularz.get("tenantId"));
-  const wartosci = {
-    name: String(formularz.get("name") ?? "").trim(),
-    headline: String(formularz.get("headline") ?? "").trim(),
-    bodyText: String(formularz.get("bodyText") ?? "").trim(),
-    buttonText: String(formularz.get("buttonText") ?? "").trim(),
-    discountCode: String(formularz.get("discountCode") ?? "").trim(),
-    delaySeconds: String(formularz.get("delaySeconds") ?? ""),
-    consentWording: String(formularz.get("consentWording") ?? "").trim(),
-    privacyUrl: String(formularz.get("privacyUrl") ?? "").trim(),
-    listId: String(formularz.get("listId") ?? ""),
-  };
-  if (!wartosci.name || !wartosci.headline || !wartosci.bodyText || !wartosci.buttonText) {
-    return { blad: "Nazwa, nagłówek, treść i tekst przycisku są wymagane", wartosci };
-  }
-  if (wartosci.consentWording.length < MIN_KLAUZULA || wartosci.consentWording.length > MAX_KLAUZULA) {
-    return { blad: `Klauzula zgody jest wymagana: od ${MIN_KLAUZULA} do ${MAX_KLAUZULA} znaków. To ją zobaczy osoba przy polu wyboru.`, wartosci };
-  }
-  if (wartosci.privacyUrl && !/^https?:\/\/[^\s<>"]+$/.test(wartosci.privacyUrl)) {
-    return { blad: "Adres polityki prywatności musi zaczynać się od https:// albo http:// (albo zostaw puste pole).", wartosci };
-  }
-
+  const szablon = String(formularz.get("szablon") ?? "pusty") as IdSzablonu;
+  const typ = String(formularz.get("typ") ?? "") as TypFormularza;
+  const nazwa = String(formularz.get("nazwa") ?? "").trim().slice(0, 120);
+  let id: string;
   try {
-    await utworzPopup(tenantId, {
-      name: wartosci.name,
-      headline: wartosci.headline,
-      bodyText: wartosci.bodyText,
-      buttonText: wartosci.buttonText,
-      discountCode: wartosci.discountCode || null,
-      delaySeconds: Number(wartosci.delaySeconds) || 0,
-      consentWording: wartosci.consentWording,
-      privacyUrl: wartosci.privacyUrl,
-      listId: wartosci.listId || null,
-    });
-  } catch (blad: unknown) {
-    if (blad instanceof BladPopupu) return { blad: blad.message, wartosci };
-    // unikalnosc (tenant_id, name) z migracji 0009: druga proba pod ta sama nazwa
-    // ma dac czytelny komunikat, a nie piecsetke
-    const kod = (blad as { code?: string })?.code;
-    if (kod === "23505") {
-      return { blad: "Popup o tej nazwie już istnieje", wartosci };
-    }
-    // limity dlugosci z use-case'u: za dluga tresc to komunikat w panelu, nie piecsetka
-    if (blad instanceof ZodError) {
-      return {
-        blad: "Sprawdź długości: nagłówek do 200, treść do 1000, przycisk do 80, kod do 60, klauzula do 2000 znaków, adres polityki do 500 znaków i zaczyna się od https:// albo http://",
-        wartosci,
-      };
-    }
-    throw blad;
+    id = await utworzFormularz(tenantId, { nazwa, szablon, typ: ["popup", "flyout", "embed"].includes(typ) ? typ : undefined });
+  } catch (b) {
+    if (b instanceof BladFormularza) redirect(`/t/${tenantId}/popupy/nowy?blad=${encodeURIComponent(b.message)}`);
+    throw b;
   }
   revalidatePath(`/t/${tenantId}/popupy`);
-  redirect(`/t/${tenantId}/popupy?ok=${encodeURIComponent("Popup zapisany. Włącz go, gdy treść jest gotowa.")}`);
+  redirect(`/t/${tenantId}/popupy/${id}`);
 }
 
-export async function przelaczPopupAkcja(formularz: FormData) {
-  const { tenantId } = await wymaganyTenant(formularz.get("tenantId"));
-  const popupId = String(formularz.get("popupId"));
-  const wlacz = String(formularz.get("wlacz")) === "1";
-  const zmieniono = await ustawAktywnosc(tenantId, popupId, wlacz);
+export async function zapiszSzkicAkcja(tenantIdSurowy: string, id: string, revision: number, definicja: unknown, nazwa?: string): Promise<WynikZapisuSzkicu> {
+  const { tenantId } = await wymaganyTenant(tenantIdSurowy);
+  if (!ID.test(id) || !Number.isInteger(revision)) return { ok: false, blad: "Nie znaleziono takiego formularza." };
+  return zapiszSzkic(tenantId, id, revision, definicja, nazwa);
+}
+
+export async function opublikujAkcja(tenantIdSurowy: string, id: string, revision: number): Promise<WynikPublikacji> {
+  const { tenantId } = await wymaganyTenant(tenantIdSurowy);
+  if (!ID.test(id) || !Number.isInteger(revision)) return { ok: false, blad: "Nie znaleziono takiego formularza." };
+  const w = await opublikujFormularz(tenantId, id, revision);
+  if (w.ok) revalidatePath(`/t/${tenantId}/popupy`);
+  return w;
+}
+
+export async function wstrzymajAkcja(tenantIdSurowy: string, id: string, wlacz: boolean): Promise<{ ok: boolean }> {
+  const { tenantId } = await wymaganyTenant(tenantIdSurowy);
+  if (!ID.test(id)) return { ok: false };
+  const ok = await ustawAktywnosc(tenantId, id, wlacz);
   revalidatePath(`/t/${tenantId}/popupy`);
-  // komunikat sukcesu tylko po faktycznej zmianie; UPDATE bez trafienia to nie sukces
-  if (!zmieniono) {
-    redirect(`/t/${tenantId}/popupy?blad=${encodeURIComponent("Nie znaleziono takiego popupu")}`);
+  return { ok };
+}
+
+export async function wynikiAkcja(tenantIdSurowy: string, id: string, dni: number): Promise<WynikiFormularza | null> {
+  const { tenantId } = await wymaganyTenant(tenantIdSurowy);
+  if (!ID.test(id)) return null;
+  return wynikiFormularza(tenantId, id, dni);
+}
+
+/** Akcje z listy formularzy (formularz HTML): duplikat, archiwum, włącz/wstrzymaj. */
+export async function akcjaListyFormularzy(formularz: FormData): Promise<void> {
+  const { tenantId } = await wymaganyTenant(formularz.get("tenantId"));
+  const id = String(formularz.get("popupId") ?? "");
+  const co = String(formularz.get("akcja") ?? "");
+  const baza = `/t/${tenantId}/popupy`;
+  if (!ID.test(id)) redirect(`${baza}?blad=${encodeURIComponent("Nie znaleziono takiego formularza")}`);
+  let komunikat: string;
+  if (co === "duplikuj") {
+    const nowy = await duplikujFormularz(tenantId, id);
+    if (!nowy) redirect(`${baza}?blad=${encodeURIComponent("Nie znaleziono takiego formularza")}`);
+    revalidatePath(baza);
+    redirect(`${baza}/${nowy}`);
+  } else if (co === "archiwizuj") {
+    komunikat = (await archiwizujFormularz(tenantId, id)) ? "Formularz przeniesiony do archiwum. Zniknął ze strony sklepu, a zapisane zgody zostały." : "";
+  } else if (co === "wlacz" || co === "wstrzymaj") {
+    const ok = await ustawAktywnosc(tenantId, id, co === "wlacz");
+    komunikat = ok ? (co === "wlacz" ? "Formularz włączony" : "Formularz wstrzymany. Zniknął ze strony sklepu.") : co === "wlacz" ? "Ten formularz trzeba najpierw opublikować w builderze." : "";
+    if (!ok && co === "wlacz") redirect(`${baza}?blad=${encodeURIComponent(komunikat)}`);
+  } else {
+    komunikat = "";
   }
-  redirect(
-    `/t/${tenantId}/popupy?ok=${encodeURIComponent(wlacz ? "Popup włączony" : "Popup wyłączony")}`,
-  );
-}
-
-/**
- * Zmiana klauzuli zgody i listy docelowej. Nowy tekst = nowa wersja klauzuli: zgody zapisane
- * wczesniej dalej wskazuja wersje, ktora te osoby widzialy.
- */
-export async function zmienKlauzuleAkcja(
-  _poprzedni: StanFormularza | undefined,
-  formularz: FormData,
-): Promise<StanFormularza> {
-  const { tenantId } = await wymaganyTenant(formularz.get("tenantId"));
-  const popupId = String(formularz.get("popupId") ?? "");
-  const wartosci = {
-    consentWording: String(formularz.get("consentWording") ?? "").trim(),
-    privacyUrl: String(formularz.get("privacyUrl") ?? "").trim(),
-    listId: String(formularz.get("listId") ?? ""),
-  };
-  if (!/^[0-9a-f-]{36}$/i.test(popupId)) return { blad: "Nie znaleziono takiego formularza.", wartosci };
-  const w = await zmienKlauzule(tenantId, popupId, { consentWording: wartosci.consentWording, privacyUrl: wartosci.privacyUrl, listId: wartosci.listId || null });
-  if (!w.ok) return { blad: w.blad, wartosci };
-  revalidatePath(`/t/${tenantId}/popupy`);
-  redirect(`/t/${tenantId}/popupy?ok=${encodeURIComponent(w.nowaWersja ? `Zapisano wersję ${w.wersja} klauzuli. Nowe zapisy dostaną ten tekst.` : "Zapisano. Tekst klauzuli bez zmian, wersja ta sama.")}`);
+  revalidatePath(baza);
+  if (!komunikat) redirect(`${baza}?blad=${encodeURIComponent("Nie znaleziono takiego formularza")}`);
+  redirect(`${baza}?ok=${encodeURIComponent(komunikat)}`);
 }
