@@ -436,7 +436,7 @@ export const RUNTIME_MIDREV = String.raw`(function (w, d, K) {
     d.body.appendChild(b);
   }
   function formularze() {
-    if (!K.formy || w.__midrevPopup) return;
+    if (!K.formy || w.__midrevPopup || w.__midrevFormularze) return;
     var s = d.getElementsByTagName("script");
     for (var i = 0; i < s.length; i++) if ((s[i].getAttribute("src") || "").indexOf(K.formy) === 0) return;
     var el = d.createElement("script");

@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { adresSledzenia } from "../../../../config";
 import { kluczStronyPublicznie } from "../../../../usecases/integracja/klucz-strony";
-import { aktywnyPopup } from "../../../../usecases/popupy/zarzadzaj";
+import { formularzeNaStrone } from "../../../../usecases/popupy/formularze";
 import { originBezDanych, zanotujSygnal } from "../../../../usecases/integracja/podglad";
 import { WERSJA_MIDREV_JS, zbudujMidrevJs } from "../../runtime-midrev";
 import { adresKlienta } from "../../../../adapters/ip-klienta";
@@ -46,7 +46,7 @@ export async function GET(zadanie: NextRequest, ctx: { params: Promise<{ plik: s
   zanotujSygnal(klucz.id, { rodzaj: "skrypt", metryka: null, sciezka: null, origin });
 
   const adres = adresSledzenia();
-  const formy = klucz.zaladujFormularze && (await aktywnyPopup(klucz.tenantId)) ? `${adres}/s/${klucz.tenantId}` : null;
+  const formy = klucz.zaladujFormularze && (await formularzeNaStrone(klucz.tenantId)).length > 0 ? `${adres}/s/${klucz.tenantId}` : null;
   const js = zbudujMidrevJs({ id: klucz.id, api: adres, zgoda: klucz.wymagajZgodyCookies, ga4: klucz.ga4, shim: true, formy });
   // 5 min: zmiana ustawień w panelu (GA4, zgoda) dociera do stron szybko, a ruch jest z cache
   return new NextResponse(js, { headers: naglowki("public, max-age=300") });
