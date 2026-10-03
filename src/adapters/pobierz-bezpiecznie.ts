@@ -156,6 +156,7 @@ export async function pobierzBezpiecznie(adres: string, o: OpcjePobierania): Pro
       const cel = await sprawdzonyCel(url, o);
       const w = await jednoZadanie(url, cel, o, kontroler.signal);
       if (w.status >= 300 && w.status < 400 && w.status !== 304) {
+        if (skok >= (o.maksPrzekierowan ?? 3)) break;
         const dalej = w.naglowki.location;
         if (!dalej || typeof dalej !== "string") throw new BladPobierania("http", `Serwer odpowiedział ${w.status} bez adresu przekierowania.`);
         url = new URL(dalej, url);

@@ -4,6 +4,10 @@ import { kluczStronyPublicznie } from "../../../../usecases/integracja/klucz-str
 import { aktywnyPopup } from "../../../../usecases/popupy/zarzadzaj";
 import { originBezDanych, zanotujSygnal } from "../../../../usecases/integracja/podglad";
 import { WERSJA_MIDREV_JS, zbudujMidrevJs } from "../../runtime-midrev";
+import { adresKlienta } from "../../../../adapters/ip-klienta";
+import { sprawdzLimit } from "../../../../usecases/api/limity";
+
+const LIMIT_SKRYPTU = { naSekunde: 20, naMinute: 300 };
 
 /**
  * `GET /js/v1/{klucz strony}.js`: skrypt `midrev.js` z konfiguracją klucza (plan 6, plan
@@ -29,6 +33,10 @@ function naglowki(cache: string): Record<string, string> {
 
 export async function GET(zadanie: NextRequest, ctx: { params: Promise<{ plik: string }> }) {
   const { plik } = await ctx.params;
+  // limit per IP przed odczytem klucza (skrypt i tak siedzi w cache przeglądarki 5 min)
+  if (!sprawdzLimit("js-ip", adresKlienta(zadanie.headers) ?? "nieznane", LIMIT_SKRYPTU).ok) {
+    return new NextResponse("/* midrev.js: za dużo żądań */\n", { status: 429, headers: { ...naglowki("no-store"), "Retry-After": "60" } });
+  }
   const m = /^([A-Za-z0-9]{6,10})\.js$/.exec(plik);
   const klucz = m ? await kluczStronyPublicznie(m[1]) : null;
   if (!klucz) {

@@ -142,6 +142,13 @@ describe("midrev.js w przeglądarce", () => {
     expect(b.ciasteczka.has("__mx_id")).toBe(false);
   });
 
+  it("Consent Mode: google_tag_data.ics z wartościami \"granted\"/\"denied\" (napisy) jest rozumiany", async () => {
+    const b = przegladarka({ przed: (w) => { w.google_tag_data = { ics: { entries: { analytics_storage: { default: "denied", update: "granted" } } } }; } });
+    b.w.midrev.track("Po zgodzie", {});
+    await b.czekaj();
+    expect(zdarzenia(b)).toContain("Po zgodzie");
+  });
+
   it("Cookiebot: zdarzenie CookiebotOnAccept włącza śledzenie; tryb bez wymogu zgody działa od razu", async () => {
     const b = przegladarka();
     b.w.Cookiebot = { hasResponse: true, consent: { statistics: true } };

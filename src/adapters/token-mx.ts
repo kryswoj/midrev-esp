@@ -118,7 +118,8 @@ export function celZTokenemMx(cel: string, token: string, domeny: readonly strin
   } catch {
     return null;
   }
-  if (u.protocol !== "https:" && u.protocol !== "http:") return null;
+  // tylko https: token działa jak poświadczenie (90 dni), po http wyciekłby w sieci i proxy
+  if (u.protocol !== "https:" || u.username || u.password) return null;
   if (!hostWDomenach(u.hostname, domeny)) return null;
   u.searchParams.delete("_mx");
   u.searchParams.append("_mx", token);

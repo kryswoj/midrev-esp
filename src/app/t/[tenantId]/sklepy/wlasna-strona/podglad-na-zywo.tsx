@@ -75,8 +75,12 @@ export function PodgladNaZywo({ tenantId, stronaTestowa }: { tenantId: string; s
     { ok: Boolean(rozpoznane), tekst: "Rozpoznajemy osoby", detal: rozpoznane ? `${rozpoznane.osoba ?? "profil"} · ${temu(teraz - rozpoznane.kiedy)}` : "Zapisz się w formularzu albo kliknij link z maila" },
   ];
 
+  const gotowe = kroki.filter((k) => k.ok).length;
   return (
     <div className="space-y-4" aria-live="polite">
+      <p className={`text-[15px] font-semibold ${gotowe === 3 ? "text-[var(--color-ok)]" : "text-[var(--color-tekst)]"}`}>
+        {gotowe === 3 ? "Połączenie działa" : gotowe === 0 ? "Czekamy na Twoją stronę…" : `Działa częściowo (${gotowe} z 3)`}
+      </p>
       <ol className="grid gap-2 sm:grid-cols-3">
         {kroki.map((k) => (
           <li key={k.tekst} className={`grid grid-cols-[18px_minmax(0,1fr)] gap-x-2 rounded-lg px-3 py-2.5 ${k.ok ? "bg-[var(--color-powierzchnia-3)]" : "bg-[var(--color-powierzchnia-2)]"}`}>
@@ -99,8 +103,8 @@ export function PodgladNaZywo({ tenantId, stronaTestowa }: { tenantId: string; s
         ) : null}
       </div>
 
-      <div className="overflow-hidden rounded-lg border border-[var(--color-linia)]">
-        <div className="border-b border-[var(--color-linia-0)] bg-[var(--color-powierzchnia-2)] px-3 py-2 text-[12px] font-medium text-[var(--color-tekst-2)]">Ostatnio z Twojej strony</div>
+      <details className="overflow-hidden rounded-lg border border-[var(--color-linia)]" open={gotowe < 3}>
+        <summary className="cursor-pointer border-b border-[var(--color-linia-0)] bg-[var(--color-powierzchnia-2)] px-3 py-2 text-[12px] font-medium text-[var(--color-tekst-2)]">Ostatnio z Twojej strony</summary>
         {!stan ? (
           <p className="px-3 py-4 text-[13px] text-[var(--color-tekst-2)]">Łączę…</p>
         ) : stan.zdarzenia.length === 0 && stan.sygnaly.length === 0 ? (
@@ -120,7 +124,8 @@ export function PodgladNaZywo({ tenantId, stronaTestowa }: { tenantId: string; s
                 ) : null}
               </li>
             ))}
-            {stan.sygnaly.slice(0, 8).map((s, i) => (
+            {/* sygnały „przyjęte” dublowałyby wpisy z bazy: pokazujemy tylko to, czego baza nie widzi */}
+            {stan.sygnaly.filter((s) => s.rodzaj !== "przyjete").slice(0, 5).map((s, i) => (
               <li key={`s${i}-${s.kiedy}`} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-2 text-[13px]">
                 <Badge ton={s.rodzaj === "odrzucone" ? "blad" : "neutral"}>{s.rodzaj === "odrzucone" ? "odrzucone" : s.rodzaj === "skrypt" ? "skrypt" : "sygnał"}</Badge>
                 <span className="font-medium">{s.metryka ? NAZWY[s.metryka] ?? s.metryka : OPIS_SYGNALU[s.rodzaj]}</span>
@@ -131,7 +136,7 @@ export function PodgladNaZywo({ tenantId, stronaTestowa }: { tenantId: string; s
             ))}
           </ul>
         )}
-      </div>
+      </details>
     </div>
   );
 }

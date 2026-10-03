@@ -38,7 +38,8 @@ export interface KonfliktIdentyfikatora {
  *   - imię, nazwisko, organizacja, tytuł, język: tylko uzupełnienie pustych pól,
  *   - identyfikatory (e-mail, telefon, external_id): bez zmian; wolno wyłącznie powiązać
  *     pusty `anonymous_id` (identyfikacja przeglądarki po identify),
- *   - właściwości i lokalizacja: scalane (jak w Klaviyo).
+ *   - właściwości i lokalizacja: dopisywane tylko NOWE klucze; istniejące wartości wygrywają
+ *     (review Codeksa r1: publiczny klucz + cudzy e-mail nie nadpisze właściwości).
  * Nowy profil zakłada się normalnie (z e-mailem, telefonem albo external_id).
  */
 export interface OpcjeIdentyfikacji {
@@ -260,8 +261,8 @@ export async function identyfikujProfil(
        organization = case when $7::boolean then (case when $19::boolean then coalesce(nullif(organization, ''), $8) else $8 end) else organization end,
        title        = case when $9::boolean then (case when $19::boolean then coalesce(nullif(title, ''), $10) else $10 end) else title end,
        locale       = case when $11::boolean then (case when $19::boolean then coalesce(nullif(locale, ''), $12) else $12 end) else locale end,
-       location     = location || $13::jsonb,
-       properties   = properties || $14::jsonb,
+       location     = case when $19::boolean then $13::jsonb || location else location || $13::jsonb end,
+       properties   = case when $19::boolean then $14::jsonb || properties else properties || $14::jsonb end,
        email        = coalesce(email, $15),
        phone        = coalesce(phone, $16),
        external_id  = coalesce(external_id, $17),

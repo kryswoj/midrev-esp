@@ -271,16 +271,18 @@ describe("Integracja custom jak Klaviyo (0044)", () => {
     it("przeglądarka nie nadpisuje danych istniejącego profilu ani identyfikatorów; anonymous_id wiąże przeglądarkę", async () => {
       const email = `ist-${znak}@ex.test`;
       const { rows } = await getPool().query(
-        "insert into profiles (tenant_id, email, first_name, external_id) values ($1, $2, 'Anna', $3) returning id",
+        "insert into profiles (tenant_id, email, first_name, external_id, properties) values ($1, $2, 'Anna', $3, '{\"plan\":\"vip\"}') returning id",
         [tenantA, email, `ext-${znak}`],
       );
       const id = rows[0].id;
-      await postProfiles(zadanie(`/client/profiles?company_id=${kluczA}`, { data: { type: "profile", attributes: { email, first_name: "Haker", anonymous_id: `anon-ist-${znak}`, properties: { ulubione: "kremy" } } } }));
+      await postProfiles(zadanie(`/client/profiles?company_id=${kluczA}`, { data: { type: "profile", attributes: { email, first_name: "Haker", anonymous_id: `anon-ist-${znak}`, properties: { ulubione: "kremy", plan: "darmowy" } } } }));
       await postProfiles(zadanie(`/client/profiles?company_id=${kluczA}`, { data: { type: "profile", attributes: { external_id: `ext-${znak}`, email: `inny-${znak}@ex.test` } } }));
       await przetworzWszystko(tenantA);
       const { rows: p } = await getPool().query("select email, first_name, anonymous_id, properties from profiles where id = $1", [id]);
       expect(p[0]).toMatchObject({ email, first_name: "Anna", anonymous_id: `anon-ist-${znak}` });
       expect(p[0].properties.ulubione).toBe("kremy");
+      // istniejąca właściwość nie jest nadpisywana przez przeglądarkę
+      expect(p[0].properties.plan).toBe("vip");
       // teraz sam anonymous_id (przeglądarka po identify) trafia do tego profilu
       await postEvents(zadanie(`/client/events?company_id=${kluczA}`, zdarzenie("Active on Site", { anonymous_id: `anon-ist-${znak}` }, { page: "https://sklep-a.test/" })));
       await przetworzWszystko(tenantA);
@@ -415,6 +417,8 @@ describe("Integracja custom jak Klaviyo (0044)", () => {
       expect(odczytajTokenMx(u.searchParams.get("_mx"))).toMatchObject({ tenantId: tenantA, profileId: id });
       expect(zTokenem).not.toContain("r-" + znak);
       expect(await celZIdentyfikacja(tenantA, id, "https://zlysklep-a.test/")).toBe("https://zlysklep-a.test/");
+      // http: bez tokenu (poświadczenie nie leci otwartym tekstem)
+      expect(await celZIdentyfikacja(tenantA, id, "http://sklep-a.test/")).toBe("http://sklep-a.test/");
       expect(await celZIdentyfikacja(tenantA, id, "https://sklep-a.test.evil.test/")).toBe("https://sklep-a.test.evil.test/");
       expect(await celZIdentyfikacja(tenantA, null, "https://sklep-a.test/")).toBe("https://sklep-a.test/");
       // profil cofnął zgodę na śledzenie kliknięć

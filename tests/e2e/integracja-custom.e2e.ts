@@ -134,10 +134,11 @@ async function main() {
       await p.addCookies([{ name: "midrev_sesja", value: tokenSesji, domain: "localhost", path: "/" }]);
       const panel = await p.newPage();
       await panel.goto(`${APP}/t/${tenantId}/sklepy/wlasna-strona`);
-      await panel.waitForSelector("text=Ostatnio z Twojej strony");
-      await panel.waitForSelector("text=Oglądany produkt", { timeout: 10_000 });
+      await panel.waitForSelector("text=Połączenie działa", { timeout: 15_000 });
+      await panel.waitForSelector("text=Oglądany produkt", { state: "attached", timeout: 10_000 });
       sprawdz(true, `„Sprawdź połączenie” pokazuje zdarzenia (${nazwa})`);
       await panel.screenshot({ path: `${ZRZUTY}/kreator-${nazwa}.png`, fullPage: true });
+      await panel.click("summary:has-text('Ostatnio z Twojej strony')");
       await panel.locator("#sprawdz").screenshot({ path: `${ZRZUTY}/podglad-${nazwa}.png` });
       await panel.goto(`${APP}/t/${tenantId}/sklepy`);
       await panel.screenshot({ path: `${ZRZUTY}/sklepy-${nazwa}.png` });

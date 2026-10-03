@@ -17,13 +17,14 @@ export const metadata = { title: "Własna strona / inny sklep" };
 const DOMYSLNA_ZGODA =
   "Zapisuję się na newsletter i zgadzam się na otrzymywanie wiadomości e-mail z ofertami i nowościami. Zgodę mogę wycofać w każdej chwili, klikając link w stopce wiadomości.";
 
-function Krok({ numer, tytul, opis, id, children }: { numer: number; tytul: string; opis: string; id: string; children: React.ReactNode }) {
+function Krok({ numer, tytul, opis, id, wymagany, children }: { numer: number | null; tytul: string; opis: string; id: string; wymagany?: boolean; children: React.ReactNode }) {
   return (
     <section id={id} className="formularz-sekcja scroll-mt-24">
       <div className="formularz-sekcja-opis">
         <div className="flex items-center gap-2.5">
-          <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[var(--color-akcent-tlo)] text-[12px] font-semibold text-[var(--color-akcent)]">{numer}</span>
+          {numer !== null ? <span className="grid h-6 w-6 shrink-0 place-items-center rounded-full bg-[var(--color-akcent-tlo)] text-[12px] font-semibold text-[var(--color-akcent)]">{numer}</span> : null}
           <h3>{tytul}</h3>
+          {wymagany !== undefined ? <Badge ton={wymagany ? "ok" : "neutral"}>{wymagany ? "wymagane" : "opcjonalne"}</Badge> : null}
         </div>
         <p>{opis}</p>
       </div>
@@ -32,12 +33,12 @@ function Krok({ numer, tytul, opis, id, children }: { numer: number; tytul: stri
   );
 }
 
-function Przelacznik({ nazwa, wlaczony, tytul, opis }: { nazwa: string; wlaczony: boolean; tytul: string; opis: string }) {
+function Przelacznik({ nazwa, wlaczony, tytul, opis, zalecane }: { nazwa: string; wlaczony: boolean; tytul: string; opis: string; zalecane?: boolean }) {
   return (
     <label className="flex cursor-pointer items-start gap-3 rounded-lg px-3 py-2.5 hover:bg-[var(--color-powierzchnia-2)]">
       <input type="checkbox" name={nazwa} value="tak" defaultChecked={wlaczony} className="mt-0.5 h-4 w-4 shrink-0 accent-[var(--color-akcent)]" />
       <span className="min-w-0">
-        <span className="block text-[14px] font-medium leading-5 text-[var(--color-tekst)]">{tytul}</span>
+        <span className="flex flex-wrap items-center gap-2 text-[14px] font-medium leading-5 text-[var(--color-tekst)]">{tytul}{zalecane ? <Badge ton="ok">zalecane</Badge> : null}</span>
         <span className="block text-[13px] leading-[19px] text-[var(--color-tekst-2)]">{opis}</span>
       </span>
     </label>
@@ -51,7 +52,7 @@ function Kod({ tekst, etykieta }: { tekst: string; etykieta: string }) {
         <span className="text-[12px] font-medium text-[var(--color-tekst-2)]">{etykieta}</span>
         <Kopiuj wartosc={tekst} etykieta={etykieta} />
       </div>
-      <pre className="overflow-x-auto px-3 py-3 text-[12px] leading-[18px] text-[var(--color-tekst)]"><code>{tekst}</code></pre>
+      <pre className="overflow-x-auto px-3 py-3 max-md:whitespace-pre-wrap max-md:break-all text-[12px] leading-[18px] text-[var(--color-tekst)]"><code>{tekst}</code></pre>
     </div>
   );
 }
@@ -113,11 +114,11 @@ midrev.subscribe({ email: "jan@example.com", consentText: "${(klucz.tekstZgody ?
           <Card>
             <CardHeader
               title="Podłącz stronę"
-              description="Pięć kroków. Wystarczą pierwsze dwa, resztę możesz zrobić później."
+              description="Wystarczą dwa pierwsze kroki. Katalog możesz dodać później."
               action={<Badge ton="neutral">klucz strony: {klucz.id}</Badge>}
             />
 
-            <Krok numer={1} id="kod" tytul="Wklej kod na stronę" opis="Wklej przed zamknięciem </head> na każdej podstronie. Jeśli masz już kod Klaviyo, zamień go na ten.">
+            <Krok numer={1} wymagany id="kod" tytul="Wklej kod na stronę" opis="Wklej przed zamknięciem </head> na każdej podstronie. Jeśli masz już kod Klaviyo, zamień go na ten.">
               <div className="space-y-3">
                 <Kod tekst={snippet} etykieta="Kod strony" />
                 <details className="group rounded-lg border border-[var(--color-linia)] px-3 py-2">
@@ -138,17 +139,17 @@ midrev.subscribe({ email: "jan@example.com", consentText: "${(klucz.tekstZgody ?
               </div>
             </Krok>
 
-            <Krok numer={2} id="ustawienia" tytul="Co ma się dziać" opis="Bez zgody na cookies skrypt niczego nie zapisuje i nikogo nie śledzi. Formularze działają zawsze.">
+            <Krok numer={2} wymagany id="ustawienia" tytul="Co ma się dziać" opis="Bez zgody na cookies skrypt niczego nie zapisuje i nikogo nie śledzi. Formularze działają zawsze.">
               <form action={zapiszUstawieniaAkcja} className="space-y-4">
                 <input type="hidden" name="tenantId" value={tenantId} />
                 <Field label="Adres Twojej strony" htmlFor="domeny" hint="Np. mojsklep.pl. Kilka adresów oddziel przecinkiem. Subdomeny (www, sklep.) są wliczone.">
                   <Input id="domeny" name="domeny" defaultValue={klucz.domeny.join(", ")} placeholder="mojsklep.pl" autoComplete="off" />
                 </Field>
                 <div className="-mx-3 space-y-0.5">
-                  <Przelacznik nazwa="ga4" wlaczony={klucz.ga4} tytul="Odczytuj zdarzenia z Google Analytics 4" opis="Jeśli sklep ma GA4 z e-commerce, oglądane produkty, koszyk i rozpoczęte zamówienia złapiemy bez dodatkowego kodu." />
-                  <Przelacznik nazwa="identyfikacjaZLinkow" wlaczony={klucz.identyfikacjaZLinkow} tytul="Rozpoznawaj osoby, które klikną w maila" opis="Link do Twojej strony dostaje jednorazowy kod ważny 90 dni (bez adresu e-mail). Dopisz to do polityki prywatności." />
+                  <Przelacznik nazwa="ga4" wlaczony={klucz.ga4} zalecane tytul="Śledź oglądane produkty i koszyk" opis="Bierzemy je z Google Analytics na Twojej stronie (GA4 z e-commerce), bez dodatkowego kodu." />
+                  <Przelacznik nazwa="identyfikacjaZLinkow" wlaczony={klucz.identyfikacjaZLinkow} zalecane tytul="Rozpoznawaj osoby, które klikną w maila" opis="Link do Twojej strony dostaje jednorazowy kod ważny 90 dni (bez adresu e-mail). Dopisz to do polityki prywatności." />
                   <Przelacznik nazwa="zaladujFormularze" wlaczony={klucz.zaladujFormularze} tytul="Pokazuj formularze i popupy" opis="Aktywne formularze z zakładki Formularze pojawią się na stronie bez osobnego kodu." />
-                  <Przelacznik nazwa="wymagajZgodyCookies" wlaczony={klucz.wymagajZgodyCookies} tytul="Czekaj na zgodę na cookies" opis="Zalecane. Rozpoznajemy Google Consent Mode, Cookiebot, CookieYes, OneTrust, Complianz i WP Consent API. Wyłącz tylko, gdy zgodę zbierasz inaczej i wywołujesz midrev.consent.grant()." />
+                  <Przelacznik nazwa="wymagajZgodyCookies" wlaczony={klucz.wymagajZgodyCookies} zalecane tytul="Czekaj na zgodę na cookies" opis="Nic nie zapisujemy, dopóki osoba nie zaakceptuje cookies w banerze Twojej strony. Popularne banery rozpoznajemy sami. Nie wyłączaj bez porozumienia z programistą." />
                   <Przelacznik nazwa="ograniczOriginy" wlaczony={klucz.ograniczOriginy} tytul="Przyjmuj dane tylko z mojej strony" opis="Zdarzenia z innych adresów będą odrzucane. Wyłącz na czas testów na stronie testowej." />
                 </div>
                 <details className="rounded-lg border border-[var(--color-linia)] px-3 py-2">
@@ -169,7 +170,7 @@ midrev.subscribe({ email: "jan@example.com", consentText: "${(klucz.tekstZgody ?
               </form>
             </Krok>
 
-            <Krok numer={3} id="katalog" tytul="Katalog produktów" opis="Adres feedu produktów, tego samego co do Google Shopping albo Ceneo (XML albo CSV). Produkty trafią do bloków w mailach.">
+            <Krok numer={3} wymagany={false} id="katalog" tytul="Katalog produktów" opis="Adres feedu produktów, tego samego co do Google Shopping albo Ceneo (XML albo CSV). Produkty trafią do bloków w mailach.">
               <form action={zapiszFeedAkcja} className="space-y-3">
                 <input type="hidden" name="tenantId" value={tenantId} />
                 <Field label="Adres feedu" htmlFor="url" hint="Odświeżamy co 6 godzin. Bez feedu katalog uzupełnia się z oglądanych produktów.">
@@ -195,9 +196,12 @@ midrev.subscribe({ email: "jan@example.com", consentText: "${(klucz.tekstZgody ?
               <PodgladNaZywo tenantId={tenantId} stronaTestowa={stronaTestowa} />
             </Krok>
 
-            <Krok numer={5} id="programista" tytul="Dla programisty" opis="Kod zgodny z Klaviyo: _learnq.push i klaviyo.identify działają bez zmian. Zamówienia wysyłaj z serwera.">
+          </Card>
+
+          <Card>
+            <Krok numer={null} id="programista" tytul="Dla programisty" opis="Kod zgodny z Klaviyo: _learnq.push i klaviyo.identify działają bez zmian. Zamówienia wysyłaj z serwera.">
               <div className="space-y-3">
-                <details className="rounded-lg border border-[var(--color-linia)] px-3 py-2" open>
+                <details className="rounded-lg border border-[var(--color-linia)] px-3 py-2">
                   <summary className="cursor-pointer text-[14px] font-medium">Przeglądarka: identify, track, zgoda</summary>
                   <div className="mt-3"><Kod tekst={przykladIdentify} etykieta="JavaScript" /></div>
                 </details>

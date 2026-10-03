@@ -120,7 +120,13 @@ export async function kluczStronyPublicznie(id: unknown, teraz = Date.now()): Pr
     [id],
   );
   const klucz = rows[0] ? zWiersza(rows[0]) : null;
-  if (pamiec.size > 5_000) pamiec.clear();
+  // sufit mapy bez czyszczenia całości: usuwamy najstarsze wpisy (kolejność wstawienia)
+  while (pamiec.size >= 5_000) {
+    const najstarszy = pamiec.keys().next().value;
+    if (najstarszy === undefined) break;
+    pamiec.delete(najstarszy);
+  }
+  pamiec.delete(id);
   pamiec.set(id, { klucz, do: teraz + PAMIEC_MS });
   return klucz;
 }

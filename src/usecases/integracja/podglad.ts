@@ -27,7 +27,10 @@ export interface Sygnal {
 
 const MAKS_NA_KLUCZ = 30;
 const WAZNOSC_MS = 3600_000;
-const sygnaly = new Map<string, Sygnal[]>();
+// na globalThis: trasy (/client, /js) i server actions panelu to w Next osobne paczki modułów,
+// a pamięć ma być wspólna dla całego procesu
+const g = globalThis as unknown as { __midrevSygnalyStrony?: Map<string, Sygnal[]> };
+const sygnaly = (g.__midrevSygnalyStrony ??= new Map<string, Sygnal[]>());
 
 /** Sama ścieżka (bez query i fragmentu), najwyżej 200 znaków; null gdy to nie jest URL http(s). */
 export function sciezkaBezDanych(url: unknown): string | null {

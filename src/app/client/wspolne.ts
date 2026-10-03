@@ -87,6 +87,11 @@ export type WynikBramki =
 
 export async function bramkaKlienta(zadanie: NextRequest, opcje: { trasa: string; maksBajtow: number }): Promise<WynikBramki> {
   const origin = zadanie.headers.get("origin");
+  // limit per IP PRZED odczytem klucza: losowe company_id nie omijają throttlingu i nie
+  // zamieniają się w zapytania do bazy (review Codeksa r1)
+  const ip = adresKlienta(zadanie.headers) ?? "nieznane";
+  const li = sprawdzLimit(`client-ip:${opcje.trasa}`, ip, LIMIT_IP);
+  if (!li.ok) return { odpowiedz: bladKlienta(429, [{ kod: "throttled", opis: "Too many requests." }], { "Access-Control-Allow-Origin": "*" }, { "Retry-After": String(li.poSekundach) }) };
   const klucz = await kluczStronyPublicznie(zadanie.nextUrl.searchParams.get("company_id"));
   const cors = corsDla(origin, klucz);
   if (!klucz) {
@@ -96,9 +101,6 @@ export async function bramkaKlienta(zadanie: NextRequest, opcje: { trasa: string
     zanotujSygnal(klucz.id, { rodzaj: "odrzucone", metryka: null, sciezka: null, origin: originBezDanych(origin), powod: "strona spoza listy domen" });
     return { odpowiedz: bladKlienta(403, [{ kod: "permission_denied", opis: "Origin not allowed for this company_id." }], cors) };
   }
-  const ip = adresKlienta(zadanie.headers) ?? "nieznane";
-  const li = sprawdzLimit(`client-ip:${opcje.trasa}`, ip, LIMIT_IP);
-  if (!li.ok) return { odpowiedz: bladKlienta(429, [{ kod: "throttled", opis: "Too many requests." }], cors, { "Retry-After": String(li.poSekundach) }) };
   const lk = sprawdzLimit(`client-site:${opcje.trasa}`, klucz.id, LIMIT_KLUCZA);
   if (!lk.ok) return { odpowiedz: bladKlienta(429, [{ kod: "throttled", opis: "Too many requests." }], cors, { "Retry-After": String(lk.poSekundach) }) };
   const typ = (zadanie.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase();

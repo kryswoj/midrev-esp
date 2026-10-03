@@ -115,7 +115,8 @@ export const RUNTIME_MIDREV = String.raw`(function (w, d, K) {
       if (ics && ics.analytics_storage) {
         var s = ics.analytics_storage;
         var v = s.update !== undefined ? s.update : s["default"];
-        if (v === true || v === false) return v;
+        if (v === true || v === "granted") return true;
+        if (v === false || v === "denied") return false;
       }
       if (gcm !== null) return gcm;
       if (w.Cookiebot && w.Cookiebot.consent && w.Cookiebot.hasResponse) return !!w.Cookiebot.consent.statistics;
