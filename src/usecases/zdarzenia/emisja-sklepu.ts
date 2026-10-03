@@ -1,5 +1,5 @@
 import type { PoolClient } from "pg";
-import { METRYKI_WBUDOWANE } from "../../domain/zdarzenia/kontrakt";
+import { METRYKI_WBUDOWANE, type DefinicjaMetrykiWbudowanej } from "../../domain/zdarzenia/kontrakt";
 import type { KlientSklepu, ZamowienieSklepu } from "../../domain/store/contract";
 import { wykladnikWaluty } from "../../domain/zdarzenia/limity";
 import { zapiszZdarzenie } from "./zapisz-zdarzenie";
@@ -14,6 +14,17 @@ import { zapiszZdarzenie } from "./zapisz-zdarzenie";
  * `import` (backfill, nie wyzwala flow), webhook = `webhook`.
  */
 
+/** Para metryk zamówienia platformy: „Placed Order” + „Ordered Product”. */
+export interface MetrykiZamowienia {
+  zamowienie: DefinicjaMetrykiWbudowanej;
+  produkt: DefinicjaMetrykiWbudowanej;
+}
+
+export const METRYKI_ZAMOWIENIA_WOO: MetrykiZamowienia = {
+  zamowienie: METRYKI_WBUDOWANE.zlozoneZamowienie,
+  produkt: METRYKI_WBUDOWANE.zamowionyProdukt,
+};
+
 function naGlowne(minor: number, waluta: string): number {
   const exp = wykladnikWaluty(waluta);
   return Number((minor / 10 ** exp).toFixed(exp));
@@ -27,8 +38,11 @@ export async function emitujZamowienie(
     profileId: string | null;
     zamowienie: ZamowienieSklepu;
     kanal: "webhook" | "import";
+    /** metryki platformy (domyślnie Woo); Shopify podaje `shopify/Placed Order` i `shopify/Ordered Product` */
+    metryki?: MetrykiZamowienia;
   },
 ): Promise<{ placedOrderId: string; produkty: number }> {
+  const metryki = dane.metryki ?? METRYKI_ZAMOWIENIA_WOO;
   const { zamowienie: z, orderId } = dane;
   const waluta = z.waluta ?? "PLN";
   const source = dane.kanal === "import" ? "import" : "webhook";
@@ -47,7 +61,7 @@ export async function emitujZamowienie(
     klient,
     {
       tenantId,
-      metryka: METRYKI_WBUDOWANE.zlozoneZamowienie,
+      metryka: metryki.zamowienie,
       profileId: dane.profileId,
       occurredAt: z.occurredAt,
       uniqueId: orderId,
@@ -78,7 +92,7 @@ export async function emitujZamowienie(
     const linia = p.lineId ?? String(i + 1);
     const wynik = await zapiszZdarzenie(klient, {
       tenantId,
-      metryka: METRYKI_WBUDOWANE.zamowionyProdukt,
+      metryka: metryki.produkt,
       profileId: dane.profileId,
       occurredAt: z.occurredAt,
       uniqueId: `${orderId}:${linia}`,

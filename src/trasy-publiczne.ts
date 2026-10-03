@@ -36,6 +36,9 @@ export const TRASY_PUBLICZNE = [
   "/api/webhooks",
   // informatyk klienta bez konta: rekordy DNS do wpisania (token 14 dni, tylko odczyt)
   "/dns",
+  // Shopify: wejście instalacji (application_url) i callback OAuth; chroni je podpis HMAC
+  // sekretem aplikacji sklepu i jednorazowy stan (0047), nie sesja panelu
+  "/api/shopify",
   // monitoring z zewnątrz: bez danych, tylko stan (200/503)
   "/api/zdrowie",
   // API zgodne z Klaviyo (klucz API tenanta w nagłówku Authorization, nie sesja);

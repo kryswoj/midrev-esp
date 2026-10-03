@@ -5,7 +5,7 @@ import { mapujKlientaWoo, mapujZamowienieWoo } from "../adapters/store/woo/adapt
 import { bytZKlucza } from "../adapters/store/webhooki";
 import type { KlientSklepu, ZamowienieSklepu } from "../domain/store/contract";
 import { wyslijAlert } from "../jobs/alerty";
-import { emitujKlienta, emitujZamowienie } from "./zdarzenia/emisja-sklepu";
+import { emitujKlienta, emitujZamowienie, type MetrykiZamowienia } from "./zdarzenia/emisja-sklepu";
 
 /**
  * Faza 2 ingestu webhooków (AD-4): surowe zdarzenie z raw_events zamienia się
@@ -37,6 +37,14 @@ import { emitujKlienta, emitujZamowienie } from "./zdarzenia/emisja-sklepu";
  */
 export async function przetworzZdarzenie(tenantId: string, rawEventId: string): Promise<void> {
   const pool = getPool();
+  // Shopify (0047) używa tego samego rodzaju joba (ponawianie zaległych działa dla obu
+  // platform), ale własnego mapowania po temacie: rozdzielamy po źródle surowego zdarzenia
+  const { rows: zrodlo } = await pool.query<{ source: string }>("select source from raw_events where tenant_id = $1 and id = $2", [tenantId, rawEventId]);
+  if (zrodlo[0]?.source === "shopify") {
+    const { przetworzZdarzenieShopify } = await import("./shopify/przetwarzanie");
+    await przetworzZdarzenieShopify(tenantId, rawEventId);
+    return;
+  }
   const klient = await pool.connect();
   try {
     await klient.query("begin");
@@ -200,7 +208,7 @@ export async function upsertZamowienie(
   tenantId: string,
   storeId: string,
   zamowienie: ZamowienieSklepu,
-  opcje: { kanal?: "webhook" | "import" } = {},
+  opcje: { kanal?: "webhook" | "import"; metryki?: MetrykiZamowienia } = {},
 ): Promise<WynikUpsertuZamowienia> {
   const email = zamowienie.email ? zamowienie.email.trim().toLowerCase() : null;
   let profileId: string | null = null;
@@ -259,6 +267,7 @@ export async function upsertZamowienie(
       profileId,
       zamowienie,
       kanal: opcje.kanal ?? "webhook",
+      metryki: opcje.metryki,
     });
   }
   return {
