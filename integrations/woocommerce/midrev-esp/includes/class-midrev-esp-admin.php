@@ -121,7 +121,16 @@ class Midrev_Esp_Admin {
 		if ( ! is_array( $oczekujace ) || empty( $oczekujace['kod'] ) ) {
 			self::back( 'error', __( 'The confirmation expired. Paste the pairing code again.', 'midrev-esp' ) );
 		}
+		// jedno parowanie naraz (review PHP r2): dwa równoległe „Potwierdź” nie tworzą dwóch kluczy
+		if ( ! add_option( 'midrev_esp_pair_lock', time(), '', false ) ) {
+			$od = (int) get_option( 'midrev_esp_pair_lock' );
+			if ( $od > time() - 120 ) {
+				self::back( 'error', __( 'Pairing is already in progress. Wait a moment and refresh the page.', 'midrev-esp' ) );
+			}
+			update_option( 'midrev_esp_pair_lock', time(), false );
+		}
 		$wynik = Midrev_Esp_Api::pair( (string) $oczekujace['kod'] );
+		delete_option( 'midrev_esp_pair_lock' );
 		if ( is_wp_error( $wynik ) ) {
 			self::back( 'error', $wynik->get_error_message() );
 		}
@@ -134,6 +143,8 @@ class Midrev_Esp_Admin {
 	public static function handle_cancel(): void {
 		self::guard( 'midrev_esp_cancel' );
 		delete_transient( self::pending_key() );
+		// klucz REST z nieudanej próby nie zostaje w sklepie po rezygnacji (review PHP r2)
+		Midrev_Esp_Api::discard_pending();
 		wp_safe_redirect( admin_url( 'admin.php?page=' . self::PAGE ) );
 		exit;
 	}

@@ -199,3 +199,6 @@ msgstr "Potwierdź i połącz"
 
 msgid "Cancel"
 msgstr "Anuluj"
+
+msgid "Pairing is already in progress. Wait a moment and refresh the page."
+msgstr "Parowanie już trwa. Poczekaj chwilę i odśwież stronę."

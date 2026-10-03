@@ -61,7 +61,9 @@ class Midrev_Esp_Frontend {
 		$kolejka = array();
 		// e-mail zalogowanego w HTML tylko przy zgodzie (WP Consent API „marketing”, review PHP r1);
 		// sam midrev.js i tak wykona identify dopiero po zgodzie na cookies
-		if ( is_user_logged_in() && Midrev_Esp_Tracker::can_track() ) {
+		// Bez WP Consent API wtyczka nie wie, czy jest zgoda: e-maila w HTML wtedy nie ma (review r2);
+		// zalogowanego rozpozna formularz albo link z maila.
+		if ( is_user_logged_in() && function_exists( 'wp_has_consent' ) && wp_has_consent( 'marketing' ) ) {
 			$email = sanitize_email( wp_get_current_user()->user_email );
 			if ( $email ) {
 				$kolejka[] = array( 'identify', array( 'email' => $email ) );

@@ -86,7 +86,8 @@ function hostBezWww(adres: string): string {
 /** Tożsamość sklepu do przypięcia kodu: host bez www + ścieżka (multisite w podkatalogach). */
 function tozsamoscSklepu(adres: string): string {
   const u = new URL(adres);
-  return `${hostBezWww(adres)}${u.port ? `:${u.port}` : ""}${u.pathname.replace(/\/+$/, "").toLowerCase()}`;
+  // ścieżka z wielkością liter (URL jest na niej czuły; review r2)
+  return `${hostBezWww(adres)}${u.port ? `:${u.port}` : ""}${u.pathname.replace(/\/+$/, "")}`;
 }
 
 // ── 1. Parowanie ────────────────────────────────────────────────────────────────
@@ -144,13 +145,16 @@ export async function sprawdzKodParowania(cialo: unknown): Promise<{ konto: stri
   if (!kod) throw new BladParowania("Ten kod nie wygląda na kod parowania MidRev.", "zly_kod");
   if (!adres) throw new BladParowania("Adres sklepu musi zaczynać się od https:// (albo http://).", "zly_adres");
   const { rows } = await getPool().query<{ base_url: string | null; expires_at: Date; nazwa: string; uzyty: boolean }>(
-    `select t.base_url, t.expires_at, coalesce(nullif(btrim(tn.sender_company_name), ''), tn.name) as nazwa, t.used_at is not null as uzyty
+    `select coalesce(t.base_url, s.base_url) as base_url, t.expires_at, coalesce(nullif(btrim(tn.sender_company_name), ''), tn.name) as nazwa,
+            t.used_at is not null as uzyty, s.base_url is not null as polaczony
        from store_connect_tokens t join tenants tn on tn.id = t.tenant_id
+       left join stores s on s.tenant_id = t.tenant_id and s.id = t.store_id
       where t.token_hash = $1 and t.purpose = 'wtyczka' and t.expires_at > now()`,
     [sha256(kod)],
   );
-  const t = rows[0];
-  if (!t || (t.uzyty && !t.base_url)) throw new BladParowania("Kod parowania jest nieważny, wygasł albo został już użyty. Wygeneruj nowy w panelu MidRev.", "zly_kod");
+  const t = rows[0] as (typeof rows)[number] & { polaczony?: boolean } | undefined;
+  // użyty kod przechodzi tylko jako ponowienie dla sklepu, który nim połączono (review r2)
+  if (!t || (t.uzyty && !t.polaczony)) throw new BladParowania("Kod parowania jest nieważny, wygasł albo został już użyty. Wygeneruj nowy w panelu MidRev.", "zly_kod");
   if (t.base_url && tozsamoscSklepu(t.base_url) !== tozsamoscSklepu(adres)) {
     throw new BladParowania(`Ten kod wygenerowano dla innego sklepu (${new URL(t.base_url).host}). Wygeneruj kod dla ${new URL(adres).host}.`, "inny_sklep");
   }
@@ -202,7 +206,26 @@ export async function sparujWtyczke(cialo: unknown): Promise<WynikParowania> {
     throw new BladParowania(`Ten kod wygenerowano dla sklepu ${new URL(token.base_url).host}${new URL(token.base_url).pathname.replace(/\/$/, "")}, a nie ${new URL(adres).host}${new URL(adres).pathname.replace(/\/$/, "")}.`, "inny_sklep");
   }
 
-  const pluginSecret = randomBytes(32).toString("hex");
+  // Ponowienie (odpowiedź do wtyczki zginęła) jest IDEMPOTENTNE (review r2): tylko z tym samym
+  // kluczem REST, który ESP już zapisał, i z TYM SAMYM sekretem wtyczki. Ktoś z samym kodem nie
+  // obróci sekretu działającej instalacji ani nie podmieni kluczy.
+  let pluginSecret = randomBytes(32).toString("hex");
+  if (token.ponowienie && token.store_id) {
+    const { rows: st } = await pool.query<{ credentials_encrypted: Buffer }>(
+      "select credentials_encrypted from stores where tenant_id = $1 and id = $2",
+      [token.tenant_id, token.store_id],
+    );
+    let zapisane: Record<string, unknown> = {};
+    try {
+      zapisane = st[0] ? odszyfrujPoswiadczenia(st[0].credentials_encrypted) : {};
+    } catch {
+      zapisane = {};
+    }
+    if (zapisane.ck !== w.data.consumer_key || typeof zapisane.pluginSecret !== "string") {
+      throw new BladParowania("Kod parowania jest nieważny, wygasł albo został już użyty. Wygeneruj nowy w panelu MidRev.", "zly_kod");
+    }
+    pluginSecret = zapisane.pluginSecret;
+  }
   let wynik;
   try {
     wynik = await podlaczSklepWoo(

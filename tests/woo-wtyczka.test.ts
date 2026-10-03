@@ -116,12 +116,12 @@ describe("Wtyczka WooCommerce po stronie ESP", () => {
     expect(w.script_url).toContain(`/js/v1/${w.site_key}.js`);
     expect(w.konfiguracja.checkbox).toBe(true);
     expect(w.konfiguracja.zgoda?.wersja).toBe(1);
-    // ponowienie TYM SAMYM kodem dla TEGO sklepu (zgubiona odpowiedź) = ponowne parowanie z nowym
-    // sekretem; dla innego sklepu kod jest już zużyty
+    // ponowienie TYM SAMYM kodem i TYM SAMYM kluczem dla TEGO sklepu (zgubiona odpowiedź) =
+    // ten sam sekret (idempotentnie); inny klucz z tym kodem = odmowa (nikt nie obróci sekretu)
     const ponowne = await sparujWtyczke({ kod: k.kod, home_url: adresSklepu, consumer_key: CK, consumer_secret: CS });
     expect(ponowne.store_id).toBe(storeId);
-    expect(ponowne.plugin_secret).not.toBe(sekret);
-    sekret = ponowne.plugin_secret;
+    expect(ponowne.plugin_secret).toBe(sekret);
+    await expect(sparujWtyczke({ kod: k.kod, home_url: adresSklepu, consumer_key: "ck_" + "c".repeat(40), consumer_secret: CS })).rejects.toThrow(/nieważny/);
     await expect(sparujWtyczke({ kod: k.kod, home_url: "https://obcy-sklep.example", consumer_key: CK, consumer_secret: CS })).rejects.toThrow(/nieważny|innego sklepu|obcy/);
     // sklep zapisany z metodą, wersją wtyczki, sekretem w szyfrogramie; webhooki założone
     const { rows } = await getPool().query("select platform, base_url, connection_method, plugin_version, credentials_encrypted from stores where id = $1", [storeId]);

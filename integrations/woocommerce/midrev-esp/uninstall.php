@@ -15,7 +15,12 @@ if ( is_array( $midrev_esp_polaczenie ) && ! empty( $midrev_esp_polaczenie['key_
 	$wpdb->delete( $wpdb->prefix . 'woocommerce_api_keys', array( 'key_id' => absint( $midrev_esp_polaczenie['key_id'] ) ), array( '%d' ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
 }
 
-foreach ( array( 'midrev_esp_connection', 'midrev_esp_secret', 'midrev_esp_config', 'midrev_esp_status', 'midrev_esp_db_version' ) as $midrev_esp_opcja ) {
+$midrev_esp_oczekujacy = get_option( 'midrev_esp_pending_key' );
+if ( is_array( $midrev_esp_oczekujacy ) && ! empty( $midrev_esp_oczekujacy['key_id'] ) ) {
+	$wpdb->delete( $wpdb->prefix . 'woocommerce_api_keys', array( 'key_id' => absint( $midrev_esp_oczekujacy['key_id'] ) ), array( '%d' ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+}
+
+foreach ( array( 'midrev_esp_connection', 'midrev_esp_secret', 'midrev_esp_config', 'midrev_esp_status', 'midrev_esp_db_version', 'midrev_esp_pending_key', 'midrev_esp_pair_lock' ) as $midrev_esp_opcja ) {
 	delete_option( $midrev_esp_opcja );
 }
 

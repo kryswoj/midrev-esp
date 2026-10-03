@@ -111,6 +111,19 @@ class Midrev_Esp_Api {
 		);
 	}
 
+	/** Porzucenie klucza z nieudanej próby parowania (anulowanie, inny kod): klucz i opcja znikają. */
+	public static function discard_pending(): void {
+		$oczekujacy = get_option( self::OPT_PENDING );
+		if ( is_array( $oczekujacy ) && ! empty( $oczekujacy['key_id'] ) ) {
+			$polaczenie = self::connection();
+			// klucz aktywnego połączenia zostaje (ponowienie zakończone sukcesem mogło go przejąć)
+			if ( ! $polaczenie || (int) ( $polaczenie['key_id'] ?? 0 ) !== (int) $oczekujacy['key_id'] ) {
+				self::delete_api_key( (int) $oczekujacy['key_id'] );
+			}
+		}
+		delete_option( self::OPT_PENDING );
+	}
+
 	/** Usunięcie klucza REST założonego przez wtyczkę. */
 	public static function delete_api_key( int $key_id ): void {
 		global $wpdb;
@@ -180,7 +193,13 @@ class Midrev_Esp_Api {
 		// Klucz z poprzedniej próby, której wynik jest NIEZNANY (timeout, 5xx): ESP mógł go już
 		// zapisać, więc nie kasujemy go, tylko ponawiamy z nim (ESP przyjmie ponowienie tym samym
 		// kodem dla tego samego sklepu). Nowy klucz tylko, gdy poprzedniego nie ma.
+		// Klucz z nieudanej próby jest przypięty do KODU (review PHP r2): inny kod = stary klucz
+		// usuwany, nowy tworzony; nigdy nie wysyłamy klucza z próby dla innego konta.
 		$oczekujacy = get_option( self::OPT_PENDING );
+		if ( is_array( $oczekujacy ) && ( empty( $oczekujacy['kod'] ) || ! hash_equals( (string) $oczekujacy['kod'], $kod ) ) ) {
+			self::discard_pending();
+			$oczekujacy = null;
+		}
 		if ( is_array( $oczekujacy ) && ! empty( $oczekujacy['key_id'] ) && ! empty( $oczekujacy['consumer_key'] ) ) {
 			$klucz = array(
 				'key_id'          => (int) $oczekujacy['key_id'],
@@ -217,7 +236,7 @@ class Midrev_Esp_Api {
 		$code = is_wp_error( $response ) ? 0 : (int) wp_remote_retrieve_response_code( $response );
 		if ( is_wp_error( $response ) || $code >= 500 || 0 === $code ) {
 			// wynik nieznany: klucz zostaje do ponowienia (sekret poza autoload, usuwany po sukcesie)
-			update_option( self::OPT_PENDING, $klucz, false );
+			update_option( self::OPT_PENDING, array_merge( $klucz, array( 'kod' => $kod ) ), false );
 			$msg = is_wp_error( $response ) ? $response->get_error_message() : sprintf( 'HTTP %d', $code );
 			/* translators: %s: error message */
 			return new WP_Error( 'midrev_http', sprintf( __( 'MidRev ESP did not respond: %s', 'midrev-esp' ), $msg ) . ' ' . __( 'Try again with the same code.', 'midrev-esp' ) );
