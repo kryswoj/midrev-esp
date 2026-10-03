@@ -3,6 +3,7 @@ import { przetworzZdarzenieApi, RODZAJ_JOBA } from "../usecases/api/przyjmij-zda
 import { dosynchronizujOknoDeployu, dosynchronizujStareZdarzenia } from "../usecases/zdarzenia/lustro";
 import { utrzymajPartycjeMetryk } from "../usecases/zdarzenia/partycje";
 import { przetworzZadanieKlienta, RODZAJ_JOBA_KLIENTA } from "../usecases/integracja/klient-api";
+import { przetworzZdarzenieWtyczki, RODZAJ_JOBA_WTYCZKI } from "../usecases/integracja/woo-wtyczka";
 import { tikFeedow } from "../usecases/katalog/katalog";
 import type { OpcjeAlertu } from "./alerty";
 import type { Zadanie } from "./kolejka";
@@ -27,12 +28,17 @@ export const HANDLERY_ZDARZEN: Record<string, (z: Zadanie) => Promise<void>> = {
   async [RODZAJ_JOBA_KLIENTA](z) {
     await przetworzZadanieKlienta(z.tenant_id, String(z.payload.rawEventId));
   },
+  // wtyczka WooCommerce (0046): Added to Cart, Started Checkout, identify, zgoda z checkoutu
+  async [RODZAJ_JOBA_WTYCZKI](z) {
+    await przetworzZdarzenieWtyczki(z.tenant_id, String(z.payload.rawEventId));
+  },
 };
 
 /** Kanał surowych żądań → rodzaj joba, który je przetwarza (ponawianie zaległych). */
 const KANALY_PONAWIANIA: [string, string][] = [
   ["api", RODZAJ_JOBA],
   ["client", RODZAJ_JOBA_KLIENTA],
+  ["plugin", RODZAJ_JOBA_WTYCZKI],
 ];
 
 const MAKS_PONOWIEN = 3;

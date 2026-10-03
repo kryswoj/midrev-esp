@@ -8,3 +8,7 @@ sandbox/woo/.woo-credentials
 
 # pliki importu CSV (dane osobowe), nigdy do repo
 var/
+
+# paczka wtyczki Woo budowana skryptem (npm run build:woo-plugin), nie wersjonowana w repo
+public/integracja/midrev-esp-woocommerce.zip
+public/integracja/midrev-esp-woocommerce.json

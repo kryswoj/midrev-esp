@@ -1,0 +1,179 @@
+# Polish translation of MidRev ESP for WooCommerce.
+# This file is distributed under the same license as the plugin (GPL-2.0-or-later).
+msgid ""
+msgstr ""
+"Project-Id-Version: MidRev ESP for WooCommerce 1.0.0\n"
+"Language: pl_PL\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=3; plural=(n==1 ? 0 : n%10>=2 && n%10<=4 && (n%100<12 || n%100>14) ? 1 : 2);\n"
+"X-Domain: midrev-esp\n"
+
+#, php-format
+msgid "%s ago"
+msgstr "%s temu"
+
+msgid "2 years"
+msgstr "2 lata"
+
+msgid "Check connection"
+msgstr "Sprawdź połączenie"
+
+msgid "Checkbox text (set in the MidRev panel):"
+msgstr "Treść zgody przy polu wyboru (ustawiana w panelu MidRev):"
+
+msgid "Connect the store"
+msgstr "Połącz sklep"
+
+msgid "Connect with MidRev"
+msgstr "Połącz z MidRev"
+
+msgid "Connect your store"
+msgstr "Połącz sklep z MidRev"
+
+msgid "Connected"
+msgstr "Połączono"
+
+msgid "Connected to MidRev ESP"
+msgstr "Połączono z MidRev ESP"
+
+msgid "Connected, needs attention"
+msgstr "Połączono, wymaga uwagi"
+
+msgid "Connected. Orders, products and cart events now flow to MidRev ESP."
+msgstr "Połączono. Zamówienia, produkty i zdarzenia koszyka trafiają teraz do MidRev ESP."
+
+msgid "Connection works. Settings refreshed from MidRev ESP."
+msgstr "Połączenie działa. Ustawienia odświeżone z MidRev ESP."
+
+msgid "Could not create a WooCommerce REST API key."
+msgstr "Nie udało się utworzyć klucza REST API WooCommerce."
+
+#, php-format
+msgid "Data is sent only to %s over HTTPS."
+msgstr "Dane trafiają wyłącznie do %s, przez HTTPS."
+
+msgid "Disconnect"
+msgstr "Odłącz"
+
+msgid "Disconnect the store from MidRev ESP? Orders and cart events will stop flowing."
+msgstr "Odłączyć sklep od MidRev ESP? Zamówienia i zdarzenia koszyka przestaną docierać."
+
+msgid "Disconnected. The REST API key created by the plugin was deleted."
+msgstr "Odłączono. Klucz REST API utworzony przez wtyczkę został usunięty."
+
+msgid "Events waiting"
+msgstr "Zdarzenia w kolejce"
+
+msgid "Last check"
+msgstr "Ostatnie sprawdzenie"
+
+msgid "Last error"
+msgstr "Ostatni błąd"
+
+msgid "Last event sent"
+msgstr "Ostatnie wysłane zdarzenie"
+
+msgid "MidRev ESP"
+msgstr "MidRev ESP"
+
+#, php-format
+msgid "MidRev ESP did not respond: %s"
+msgstr "MidRev ESP nie odpowiada: %s"
+
+msgid "MidRev ESP for WooCommerce requires WooCommerce to be active."
+msgstr "MidRev ESP for WooCommerce wymaga aktywnego WooCommerce."
+
+msgid "MidRev ESP is installed but not connected yet."
+msgstr "MidRev ESP jest zainstalowany, ale sklep nie jest jeszcze połączony."
+
+#, php-format
+msgid "MidRev ESP rejected events (HTTP %d)."
+msgstr "MidRev ESP odrzucił zdarzenia (HTTP %d)."
+
+msgid "MidRev ESP rejected the signature. Pair the store again."
+msgstr "MidRev ESP odrzucił podpis. Połącz sklep ponownie."
+
+#, php-format
+msgid "MidRev ESP returned HTTP %d."
+msgstr "MidRev ESP zwrócił HTTP %d."
+
+msgid "Newsletter checkbox"
+msgstr "Zgoda na newsletter w kasie"
+
+msgid "Pairing code"
+msgstr "Kod parowania"
+
+#, php-format
+msgid "Pairing failed: %s"
+msgstr "Parowanie nie powiodło się: %s"
+
+msgid "Paste the pairing code from the MidRev panel (Settings → Store → WooCommerce). The plugin creates the REST API key and webhooks for you; you do not copy any keys."
+msgstr "Wklej kod parowania z panelu MidRev (Ustawienia → Sklep → WooCommerce). Wtyczka sama utworzy klucz REST API i webhooki, nie kopiujesz żadnych kluczy."
+
+msgid "Plugin version"
+msgstr "Wersja wtyczki"
+
+msgid "Privacy policy"
+msgstr "Polityka prywatności"
+
+#, php-format
+msgid "Privacy policy: %s"
+msgstr "Polityka prywatności: %s"
+
+#, php-format
+msgid "Queue processed. Events still waiting: %d."
+msgstr "Kolejka przetworzona. W kolejce zostało: %d."
+
+msgid "Random browser identifier used to recognise returning visitors and personalise e-mails."
+msgstr "Losowy identyfikator przeglądarki, dzięki któremu rozpoznajemy powracających gości i dopasowujemy wiadomości e-mail."
+
+msgid "Send waiting events now"
+msgstr "Wyślij zaległe zdarzenia teraz"
+
+msgid "Settings"
+msgstr "Ustawienia"
+
+msgid "Some products from your cart are no longer available."
+msgstr "Część produktów z Twojego koszyka nie jest już dostępna."
+
+msgid "The store is not connected to MidRev ESP."
+msgstr "Sklep nie jest połączony z MidRev ESP."
+
+msgid "This cart link has expired. Your cart could not be restored."
+msgstr "Ten link do koszyka wygasł. Nie udało się odtworzyć koszyka."
+
+msgid "This does not look like a MidRev pairing code (MRV-XXXXX-…)."
+msgstr "To nie wygląda na kod parowania MidRev (MRV-XXXXX-…)."
+
+msgid "Tracking script"
+msgstr "Kod śledzenia"
+
+msgid "You are not allowed to do this."
+msgstr "Nie masz uprawnień do tej operacji."
+
+msgid "added to cart"
+msgstr "dodanie do koszyka"
+
+msgid "customer identified"
+msgstr "rozpoznanie klienta"
+
+msgid "never"
+msgstr "nigdy"
+
+msgid "newsletter consent"
+msgstr "zgoda na newsletter"
+
+msgid "off"
+msgstr "wyłączony"
+
+msgid "on"
+msgstr "włączony"
+
+#, php-format
+msgid "on (clause version %d)"
+msgstr "włączona (klauzula w wersji %d)"
+
+msgid "started checkout"
+msgstr "rozpoczęcie zamówienia"
