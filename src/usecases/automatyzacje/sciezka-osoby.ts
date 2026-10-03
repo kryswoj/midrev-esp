@@ -39,6 +39,15 @@ export const POWODY_WYJSCIA: Record<string, string> = {
   "segment nieprawidłowy": "segment z warunku ma reguły, których nie da się policzyć",
   "segment z warunku nie istnieje": "segment z warunku został usunięty",
   "opóźnienie przeterminowane (automatyzacja stała)": "automatyzacja stała dłużej niż doba po terminie tego kroku",
+  filtr_profilu: "nie spełnia już filtra profilu automatyzacji",
+};
+
+/** Powody pominiecia maila (E4b): dodatkowy filtr, smart sending, filtr przy wysylce. */
+const POWODY_POMINIECIA: Record<string, string> = {
+  dodatkowy_filtr: "nie spełnia dodatkowego filtra tego maila",
+  smart_sending: "smart sending: dostał od nas maila niedawno",
+  filtr_profilu: "nie spełniał filtra profilu w chwili wysyłki",
+  blad_definicji: "definicji automatyzacji nie dało się odczytać",
 };
 
 const RODZAJE: Record<string, string> = {
@@ -112,11 +121,11 @@ export async function sciezkaOsobyWeFlow(tenantId: string, profileId: string): P
             opis = nazwa(t.from_node);
             break;
           case "pominieto":
-            opis = `${nazwa(t.from_node)}: ${String(d.powod ?? "")}`;
+            opis = `${nazwa(t.from_node)}: ${POWODY_POMINIECIA[String(d.powod ?? "")] ?? String(d.powod ?? "")}`;
             break;
           case "warunek":
             tytul = `${nazwa(t.from_node)}: ${d.wynik ? "Tak" : "Nie"}`;
-            opis = "warunek sprawdzony na danych z tej chwili";
+            opis = d.podzialZdarzenia ? "sprawdzone na zdarzeniu, które wprowadziło osobę" : "warunek sprawdzony na danych z tej chwili";
             break;
           case "podzial":
             tytul = `Test A/B: gałąź ${String(d.galaz ?? "")}`;
@@ -126,7 +135,10 @@ export async function sciezkaOsobyWeFlow(tenantId: string, profileId: string): P
             opis = d.do ? `czeka do ${new Date(String(d.do)).toLocaleString("pl-PL", { dateStyle: "short", timeStyle: "short" })}` : null;
             break;
           case "profil":
-            opis = d.akcja === "dodaj_do_listy" ? "dodano do listy" : "usunięto z listy";
+            opis = d.akcja === "dodaj_do_listy" ? "dodano do listy"
+              : d.akcja === "usun_z_listy" ? "usunięto z listy"
+              : d.akcja === "ustaw_wlasciwosc" ? `ustawiono „${String(d.klucz ?? "")}”${d.pominieto ? " (pominięto: profil zanonimizowany)" : ""}`
+              : `usunięto właściwość „${String(d.klucz ?? "")}”`;
             break;
           case "wyjscie":
             opis = POWODY_WYJSCIA[String(d.powod ?? "")] ?? String(d.powod ?? "");
@@ -151,4 +163,25 @@ export async function sciezkaOsobyWeFlow(tenantId: string, profileId: string): P
       kroki,
     };
   });
+}
+
+/** Odrzucone proby wejscia (filtr profilu przy wejsciu, E4b): osoba nie weszla, wiec nie ma przebiegu. */
+export interface PominieteWejscie {
+  flowId: string;
+  nazwa: string;
+  kiedy: Date;
+  powod: string;
+  filtr: string | null;
+}
+
+export async function pominieteWejscia(tenantId: string, profileId: string, limit = 20): Promise<PominieteWejscie[]> {
+  if (!UUID.test(profileId) || !UUID.test(tenantId)) return [];
+  const { rows } = await getPool().query(
+    `select s.flow_id, f.name, s.occurred_at, s.reason, s.detail->>'filtr' as filtr
+       from flow_entry_skips s join flows f on f.tenant_id = s.tenant_id and f.id = s.flow_id
+      where s.tenant_id = $1 and s.profile_id = $2
+      order by s.occurred_at desc limit $3`,
+    [tenantId, profileId, limit],
+  );
+  return rows.map((r) => ({ flowId: r.flow_id, nazwa: r.name, kiedy: r.occurred_at, powod: r.reason === "filtr_profilu" ? "nie spełniała filtra profilu w chwili wejścia" : r.reason, filtr: r.filtr }));
 }
