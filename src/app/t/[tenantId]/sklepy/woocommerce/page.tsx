@@ -113,7 +113,10 @@ export default async function PolaczWoo({ params, searchParams }: { params: Prom
             </Krok>
               </>
             )}
-            <Krok numer={4} id="sprawdz" tytul="Sprawdź połączenie" opis="Otwórz sklep, obejrzyj produkt, dodaj go do koszyka. Kropki zapalą się same.">
+            <Krok numer={4} id="sprawdz" tytul="Sprawdź połączenie" opis={"Otwórz sklep, zaakceptuj cookies, obejrzyj produkt i\u00a0dodaj go do koszyka. Kropki zapalą się same."}>
+              <p className="mb-3 rounded-lg bg-[var(--color-powierzchnia-3)] px-3 py-2.5 text-[13px] leading-[19px] text-[var(--color-tekst-2)]">
+                {"Porzucone koszyki i\u00a0zamówienia działają po zgodzie na cookies: bez niej wtyczka nie wysyła zdarzeń koszyka ani kasy. Jeśli sklep nie ma wtyczki cookies zgodnej z\u00a0WP Consent API, zainstaluj np. Complianz albo CookieYes."}
+              </p>
               <SprawdzPolaczenie tenantId={tenantId} />
             </Krok>
             <Krok numer={5} id="import" gotowy={importu?.stan === "gotowe"} tytul="Import historii" opis="Zamówienia i klienci z przeszłości: do raportów, segmentów i winbacku. Nie wysyła maili.">

@@ -18,7 +18,7 @@ Connects WooCommerce with MidRev ESP: orders, products, abandoned cart and check
 * Added to Cart and Started Checkout are sent from the server (classic and block checkout), with a retry queue.
 * Signed cart recovery link `?mrv_cart=` that restores the cart on any device (expires after 30 days).
 * Newsletter checkbox at checkout (classic and block checkout), text managed in the MidRev panel, consent proof with clause version.
-* Respects the WP Consent API (category "marketing").
+* Cart and checkout events are sent only with consent: WP Consent API category "marketing" (e.g. Complianz, CookieYes) or, without it, the MidRev tracking cookie set after cookie consent. No consent signal = no events (filter `midrev_esp_can_track`).
 * HPOS compatible.
 
 == External service ==

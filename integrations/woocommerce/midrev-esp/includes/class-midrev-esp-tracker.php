@@ -64,12 +64,21 @@ class Midrev_Esp_Tracker {
 		add_action( 'woocommerce_store_api_checkout_order_processed', array( __CLASS__, 'after_order' ), 50, 0 );
 	}
 
-	/** Czy wolno wysyłać zdarzenia zachowań (WP Consent API, kategoria „marketing”). */
+	/**
+	 * Czy wolno wysyłać zdarzenia zachowań (Added to Cart, Started Checkout).
+	 *
+	 * Decyzja RODO (wariant B, 03.10.2026): bez sygnału zgody NIC nie wychodzi.
+	 *  1. Sklep z wtyczką cookies zgodną z WP Consent API (Complianz, CookieYes…): zgoda „marketing”.
+	 *  2. Bez WP Consent API: zgoda z midrev.js, czyli ciasteczko `__mx_id` (midrev.js zakłada je
+	 *     wyłącznie po zgodzie na cookies i kasuje przy jej cofnięciu).
+	 *  3. Brak obu sygnałów: false. Filtr `midrev_esp_can_track` może to zmienić świadomie
+	 *     (domyślna wartość to wynik punktu 2).
+	 */
 	public static function can_track(): bool {
 		if ( function_exists( 'wp_has_consent' ) ) {
 			return (bool) wp_has_consent( 'marketing' );
 		}
-		return (bool) apply_filters( 'midrev_esp_can_track', true );
+		return (bool) apply_filters( 'midrev_esp_can_track', null !== self::anonymous_id() );
 	}
 
 	/** Identyfikator przeglądarki z ciasteczka midrev.js (`__mx_id` = {"a":"…","t":…}). */
