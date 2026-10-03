@@ -1,0 +1,32 @@
+# Szablon konfiguracji aplikacji MidRev dla JEDNEGO sklepu (custom distribution, decyzja D1).
+# Plik roboczy `shopify.app.{klient}.toml` generuje ./nowa-aplikacja.sh; nie edytuj ręcznie
+# wartości w {{…}}. Wdrożenie: `shopify app deploy --config {klient}` (instrukcja: raport 04-shopify.md).
+
+client_id = "{{CLIENT_ID}}"
+name = "MidRev {{NAZWA_KLIENTA}}"
+handle = "midrev-{{SLUG}}"
+# wejście instalacji: backend MidRev weryfikuje HMAC i startuje OAuth (token offline)
+application_url = "{{APP_URL}}/api/shopify/auth"
+embedded = false
+
+[access_scopes]
+# read_all_orders wymaga zgody Shopify (Dev Dashboard > aplikacja > API access requests)
+scopes = "read_orders,read_all_orders,read_products,read_customers,read_checkouts,write_pixels,read_customer_events"
+use_legacy_install_flow = false
+
+[auth]
+redirect_urls = ["{{APP_URL}}/api/shopify/callback"]
+
+[webhooks]
+api_version = "2026-07"
+
+  # Obowiązkowe webhooki RODO: tylko z tego pliku (API ich nie rejestruje). Pozostałe tematy
+  # (zamówienia, checkouty, klienci, zgody, produkty, app/uninstalled) rejestruje backend
+  # przez webhookSubscriptionCreate przy instalacji, z odczytem zwrotnym.
+  [[webhooks.subscriptions]]
+  compliance_topics = ["customers/data_request", "customers/redact", "shop/redact"]
+  uri = "{{APP_URL}}/api/webhooks/shopify"
+
+[build]
+automatically_update_urls_on_dev = false
+include_config_on_deploy = true

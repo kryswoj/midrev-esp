@@ -189,14 +189,18 @@ export async function poInstalacji(tenantId: string, storeId: string): Promise<{
   if (nieaktywne.length) ostrzezenia.push(`Nie działają powiadomienia: ${nieaktywne.map((w) => w.temat).join(", ")}`);
 
   const klucz = await zapewnijKluczStrony(tenantId);
-  // domeny sklepu na liście domen strony: CORS przy `restrict_origins` i doklejanie `_mx`
+  // domeny sklepu na liście domen strony: CORS przy `restrict_origins` i doklejanie `_mx`.
+  // Przy pełnej liście (20) domen nie dopisujemy, ale zgodę i platformę ustawiamy zawsze.
   const domeny = [sklep.domena, domenaPubliczna ? new URL(domenaPubliczna).hostname : null].filter((x): x is string => Boolean(x));
   await getPool().query(
-    `update site_keys set platform = 'shopify',
-            link_domains = (select coalesce(array_agg(distinct d), '{}') from (
-              select unnest(link_domains) as d union select unnest($3::text[])) x),
+    // require_cookie_consent: na Shopify zgodę daje baner sklepu (Customer Privacy API) przez
+    // most w app embed; midrev.js nie może śledzić, zanim ten most powie „tak”
+    `update site_keys set platform = 'shopify', require_cookie_consent = true,
+            link_domains = case when cardinality(link_domains) + cardinality($3::text[]) <= 20
+              then (select coalesce(array_agg(distinct d), '{}') from (select unnest(link_domains) as d union select unnest($3::text[])) x)
+              else link_domains end,
             updated_at = now()
-      where tenant_id = $1 and id = $2 and cardinality(link_domains) + cardinality($3::text[]) <= 20`,
+      where tenant_id = $1 and id = $2`,
     [tenantId, klucz.id, domeny],
   );
   wyczyscPamiecKluczy();

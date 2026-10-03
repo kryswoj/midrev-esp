@@ -1,0 +1,31 @@
+{%- comment -%}
+  App embed MidRev: ładuje midrev.js (formularze i popupy z buildera, identyfikacja z linków
+  w mailach `_mx`, API zgodne z Klaviyo) bez wklejania kodu w motyw. Klucz strony i adres
+  skryptu zapisuje backend MidRev w metapolach instalacji aplikacji (namespace `midrev`),
+  więc ten plik nie zawiera nic specyficznego dla klienta.
+
+  Zgoda na cookies: most do Shopify Customer Privacy API (assets/midrev-shopify.js); dopóki
+  osoba nie wyrazi zgody na marketing, midrev.js niczego nie zapisuje i nie śledzi.
+  Zalogowany klient: e-mail trafia do identify DOPIERO po zgodzie (kolejka midrev.js).
+  Zdarzenia zakupowe (oglądany produkt, koszyk, checkout) liczy piksel i webhooki, nie ten skrypt.
+{%- endcomment -%}
+{%- assign mrv_klucz = app.metafields.midrev.site_key -%}
+{%- assign mrv_skrypt = app.metafields.midrev.script_url -%}
+{%- if mrv_klucz != blank and mrv_skrypt != blank -%}
+  <script>
+    window.__midrevShopify = {
+      klucz: {{ mrv_klucz | json }},
+      zalogowany: {% if customer and customer.email %}{{ customer.email | json }}{% else %}null{% endif %}
+    };
+  </script>
+  <script src="{{ 'midrev-shopify.js' | asset_url }}" defer></script>
+  <script src="{{ mrv_skrypt }}" async></script>
+{%- endif -%}
+
+{% schema %}
+{
+  "name": "MidRev: formularze i śledzenie",
+  "target": "body",
+  "settings": []
+}
+{% endschema %}

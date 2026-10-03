@@ -1,0 +1,21 @@
+{%- comment -%}
+  Blok aplikacji „Formularz MidRev” do wstawienia w sekcję motywu (np. stopka). Formularz
+  osadzony z buildera MidRev rysuje się w tym miejscu (loader formularzy szuka
+  `[data-midrev-form="{id}"]`). Wymaga włączonego app embed „MidRev: formularze i śledzenie”.
+{%- endcomment -%}
+<div data-midrev-form="{{ block.settings.form_id | escape }}" {{ block.shopify_attributes }}></div>
+
+{% schema %}
+{
+  "name": "Formularz MidRev",
+  "target": "section",
+  "settings": [
+    {
+      "type": "text",
+      "id": "form_id",
+      "label": "Identyfikator formularza",
+      "info": "Skopiuj z MidRev: Formularze > formularz osadzony > Identyfikator."
+    }
+  ]
+}
+{% endschema %}

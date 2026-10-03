@@ -1,0 +1,10 @@
+{
+  "name": "midrev-esp-shopify-app",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Rozszerzenia aplikacji Shopify MidRev (Web Pixel + app embed). Backend: midrev-esp (Next).",
+  "scripts": {
+    "deploy": "shopify app deploy"
+  },
+  "workspaces": ["extensions/*"]
+}
