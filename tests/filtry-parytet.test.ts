@@ -168,7 +168,7 @@ describe("Filtry: parytet TS vs SQL (wygenerowane przypadki)", () => {
       const w = losowyWarunek(l);
       if (!w) continue;
       sprawdzone++;
-      pokryte.add(`${w.typPola}:${w.operator}`);
+      if (w.typ === "wlasciwosc_zdarzenia" || w.typ === "wlasciwosc_profilu") pokryte.add(`${w.typPola}:${w.operator}`);
       const r = await porownaj({ grupy: [{ warunki: [w] }] });
       if (r) rozjazdy.push(r);
     }

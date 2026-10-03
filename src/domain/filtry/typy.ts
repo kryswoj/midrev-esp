@@ -17,10 +17,10 @@ import { z } from "zod";
  *    bez strefy = UTC), z kontrola zakresu pol. Inny zapis = niezgodny typ;
  *  - liczby wylacznie liczby JSON, |x| < 1e300 (porownanie w double po obu stronach).
  *
- * Etap E4a obejmuje warunki po wlasciwosciach zdarzenia i profilu. Warunki
- * `metryka_profilu`, `czlonkostwo`, `zgoda`, `byl_w_flow` (plan 3.2) dochodza w E4b:
- * celowo NIE ma ich w schemacie, zeby definicja nie mogla zawierac filtra, ktorego silnik
- * nie wykonuje (operator widzialby filtr, ktory niczego nie filtruje).
+ * E4a: warunki po wlasciwosciach zdarzenia i profilu. E4b: `metryka_profilu` (ile razy osoba
+ * zrobila X w oknie czasu) i `byl_w_flow`. Warunki `czlonkostwo` i `zgoda` (plan 3.2) dochodza
+ * z segmentami: celowo NIE ma ich w schemacie, zeby definicja nie mogla zawierac filtra, ktorego
+ * silnik nie wykonuje (operator widzialby filtr, ktory niczego nie filtruje).
  */
 
 export const TYPY_POL = ["string", "number", "boolean", "date", "list"] as const;
@@ -98,43 +98,133 @@ const polaWarunku = {
   wartosc,
 };
 
-export const schematWarunku = z.discriminatedUnion("typ", [
-  z.object({ typ: z.literal("wlasciwosc_zdarzenia"), pole: kluczPola, ...polaWarunku }),
-  z.object({
-    typ: z.literal("wlasciwosc_profilu"),
-    pole: z.discriminatedUnion("rodzaj", [
-      z.object({ rodzaj: z.literal("standard"), nazwa: z.enum(POLA_STANDARDOWE_PROFILU) }),
-      z.object({ rodzaj: z.literal("wlasna"), nazwa: kluczPola }),
-    ]),
-    ...polaWarunku,
-  }),
-]).superRefine((w, ctx) => {
+const warunekZdarzenia = z.object({ typ: z.literal("wlasciwosc_zdarzenia"), pole: kluczPola, ...polaWarunku });
+const warunekProfilu = z.object({
+  typ: z.literal("wlasciwosc_profilu"),
+  pole: z.discriminatedUnion("rodzaj", [
+    z.object({ rodzaj: z.literal("standard"), nazwa: z.enum(POLA_STANDARDOWE_PROFILU) }),
+    z.object({ rodzaj: z.literal("wlasna"), nazwa: kluczPola }),
+  ]),
+  ...polaWarunku,
+});
+
+function sprawdzWartosc(w: { typPola: TypPola; operator: string; wartosc?: unknown }, ctx: z.RefinementCtx) {
   const blad = bladWartosci(w.typPola, w.operator, w.wartosc);
   if (blad) ctx.addIssue({ code: "custom", message: blad, path: ["wartosc"] });
+}
+
+/** Warunek po wlasciwosci zdarzenia (filtr wyzwalacza, split po zdarzeniu, "gdzie" w metryce profilu). */
+export const schematWarunkuZdarzenia = warunekZdarzenia.superRefine(sprawdzWartosc);
+export type WarunekZdarzenia = z.infer<typeof warunekZdarzenia>;
+
+// ── E4b: warunki po historii profilu (plan 3.2) ─────────────────────────────
+
+/** Operatory liczby zdarzen ("zrobil X razy"). */
+export const OPERATORY_LICZNIKA = ["rowna", "rozna", "wieksza", "wieksza_rowna", "mniejsza", "mniejsza_rowna", "miedzy"] as const;
+export type OperatorLicznika = (typeof OPERATORY_LICZNIKA)[number];
+const MAX_LICZNIK = 1_000_000;
+const licznik = z.number().int().min(0).max(MAX_LICZNIK);
+
+/**
+ * Okno czasu warunku po historii:
+ *  - `startu_flow`: od wejscia osoby do automatyzacji (Klaviyo: "since starting this flow");
+ *    zdarzenie, ktore ja wprowadzilo, sie nie liczy. Tylko w automatyzacji;
+ *  - `ostatnich_dni`: od `teraz - N dni`;
+ *  - `zawsze`: cala historia.
+ */
+export const schematOkna = z.discriminatedUnion("od", [
+  z.object({ od: z.literal("startu_flow") }),
+  z.object({ od: z.literal("ostatnich_dni"), dni: z.number().int().min(1).max(3650) }),
+  z.object({ od: z.literal("zawsze") }),
+]);
+export type OknoWarunku = z.infer<typeof schematOkna>;
+
+/**
+ * Metryka w warunku: po nazwie, opcjonalnie z integracja. Bez integracji = metryka o tej nazwie
+ * z KAZDEGO zrodla (np. "Placed Order" z WooCommerce, Shopify i API naraz): szablony flow
+ * porzuconego koszyka dzialaja tak samo na kazdej platformie (plan integracji, rola placed_order).
+ */
+export const schematMetrykiWarunku = z.object({
+  integracja: z.string().min(1).max(64).regex(/^[a-z0-9_.-]+$/).optional(),
+  nazwa: z.string().min(1).max(127),
+});
+export type MetrykaWarunku = z.infer<typeof schematMetrykiWarunku>;
+
+const warunekMetryki = z.object({
+  typ: z.literal("metryka_profilu"),
+  metryka: schematMetrykiWarunku,
+  /** zawsze liczba zdarzen (Klaviyo: "has done X ... times") */
+  operator: z.enum(OPERATORY_LICZNIKA),
+  wartosc: z.union([licznik, z.tuple([licznik, licznik])]),
+  okno: schematOkna,
+  /** wlasciwosci zdarzen tej metryki, laczone I (Klaviyo: "where ...") */
+  gdzie: z.array(schematWarunkuZdarzenia).max(10).optional(),
+});
+
+/**
+ * "Byl w automatyzacji" (Klaviyo: "has been in flow"). `biezacy` = ta sama automatyzacja (szablony
+ * nie znaja jej id); biezacy przebieg osoby sie nie liczy.
+ */
+const warunekFlow = z.object({
+  typ: z.literal("byl_w_flow"),
+  flow: z.union([z.literal("biezacy"), z.string().uuid()]),
+  jest: z.boolean(),
+  okno: z.discriminatedUnion("od", [
+    z.object({ od: z.literal("ostatnich_dni"), dni: z.number().int().min(1).max(3650) }),
+    z.object({ od: z.literal("zawsze") }),
+  ]),
+});
+
+export const schematWarunku = z.discriminatedUnion("typ", [warunekZdarzenia, warunekProfilu, warunekMetryki, warunekFlow]).superRefine((w, ctx) => {
+  if (w.typ === "wlasciwosc_zdarzenia" || w.typ === "wlasciwosc_profilu") sprawdzWartosc(w, ctx);
+  if (w.typ === "metryka_profilu") {
+    const x = w.wartosc;
+    if (w.operator === "miedzy" ? !(Array.isArray(x) && x[0] <= x[1]) : Array.isArray(x)) {
+      ctx.addIssue({ code: "custom", message: w.operator === "miedzy" ? "Podaj dwie liczby: od i do (od ≤ do)." : "Podaj jedną liczbę.", path: ["wartosc"] });
+    }
+  }
 });
 
 export type Warunek = z.infer<typeof schematWarunku>;
+export type WarunekMetryki = z.infer<typeof warunekMetryki>;
+export type WarunekFlow = z.infer<typeof warunekFlow>;
+/** Typy warunkow, ktore liczy sie na historii profilu (tylko SQL w silniku, TS w testach parytetu). */
+export const TYPY_HISTORII: ReadonlySet<Warunek["typ"]> = new Set(["metryka_profilu", "byl_w_flow"]);
 
 export const schematFiltra = z.object({
   grupy: z.array(z.object({ warunki: z.array(schematWarunku).min(1).max(50) })).max(20),
 });
 export type Filtr = z.infer<typeof schematFiltra>;
 
+function tylkoTypy(dozwolone: ReadonlySet<Warunek["typ"]>, komunikat: string) {
+  return (f: Filtr, ctx: z.RefinementCtx) => {
+    f.grupy.forEach((g, gi) =>
+      g.warunki.forEach((w, wi) => {
+        if (!dozwolone.has(w.typ)) ctx.addIssue({ code: "custom", message: komunikat, path: ["grupy", gi, "warunki", wi, "typ"] });
+      }),
+    );
+  };
+}
+
 /**
  * Filtr WYZWALACZA: wylacznie warunki po wlasciwosciach zdarzenia (jak w Klaviyo "trigger
  * filters"). Warunek po profilu liczony bez profilu dawalby zawsze to samo (np. "email
  * nieustawione" = prawda dla kazdego zdarzenia), wiec schemat go nie przyjmuje; filtr
- * profilu to osobna warstwa (E4b, 4.6).
+ * profilu to osobna warstwa (E4b, 4.6). Ten sam schemat ma split po zdarzeniu (4.8).
  */
-export const schematFiltraZdarzenia = schematFiltra.superRefine((f, ctx) => {
-  f.grupy.forEach((g, gi) =>
-    g.warunki.forEach((w, wi) => {
-      if (w.typ !== "wlasciwosc_zdarzenia") {
-        ctx.addIssue({ code: "custom", message: "Filtr wyzwalacza przyjmuje tylko warunki po właściwościach zdarzenia.", path: ["grupy", gi, "warunki", wi, "typ"] });
-      }
-    }),
-  );
-});
+export const schematFiltraZdarzenia = schematFiltra.superRefine(
+  tylkoTypy(new Set(["wlasciwosc_zdarzenia"]), "Filtr wyzwalacza przyjmuje tylko warunki po właściwościach zdarzenia."),
+);
+
+/**
+ * Filtr PROFILU (filtr profilu flow, dodatkowe filtry maila, warunek Tak/Nie): wlasciwosci
+ * profilu i jego historia (metryka, udzial w automatyzacji). Bez wlasciwosci zdarzenia: te
+ * maja swoj split (Klaviyo rozdziela "conditional split" i "trigger split" tak samo).
+ */
+export const schematFiltraProfilu = schematFiltra.superRefine(
+  tylkoTypy(new Set(["wlasciwosc_profilu", "metryka_profilu", "byl_w_flow"]), "Ten filtr przyjmuje warunki po profilu: właściwości, zdarzenia osoby i udział w automatyzacji."),
+);
+
 export type Grupa = Filtr["grupy"][number];
 
 // ── Daty ────────────────────────────────────────────────────────────────────

@@ -32,6 +32,7 @@ const WZORCE = [
   "^DSN (tenant|obcy)$",
   "^DUPL (tenant|obcy)$",
   "^EDYT (tenant|obcy)$",
+  "^FHIST (tenant|obcy)$",
   "^FLOW tenant$",
   "^HARM tenant$",
   "^IMP tenant [ABC]$",

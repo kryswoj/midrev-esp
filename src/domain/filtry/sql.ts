@@ -1,4 +1,4 @@
-import { parsujDate, type Filtr, type PoleStandardoweProfilu, type Warunek } from "./typy";
+import { parsujDate, type Filtr, type PoleStandardoweProfilu, type Warunek, type WarunekFlow, type WarunekMetryki } from "./typy";
 
 /**
  * Kompilacja filtra do fragmentu WHERE w SQL. Semantyka 1:1 z `ewaluacja.ts` (test
@@ -21,7 +21,24 @@ export interface ZrodloSql {
     properties: string;
     /** wyrazenia kolumn standardowych (text) */
     kolumny: Record<PoleStandardoweProfilu, string>;
+    /**
+     * Wyrazenia `id` i `tenant_id` profilu (uuid): wymagane przez warunki po historii
+     * (`metryka_profilu`, `byl_w_flow`), ktore sa skorelowanymi podzapytaniami. Predykat
+     * tenanta podzapytania pochodzi z WIERSZA profilu, ktory zewnetrzne zapytanie juz
+     * zawezilo do tenanta (`zapytanieFiltrowane`), wiec nie da sie go pominac.
+     */
+    id?: string;
+    tenantId?: string;
   };
+}
+
+/** Kontekst automatyzacji w SQL (te same wartosci co `KontekstFlow` w TS), zawsze jako parametry. */
+export interface KontekstFlowSql {
+  flowId: string;
+  /** entered_at przebiegu: tekst znacznika czasu prosto z bazy (bez utraty mikrosekund) */
+  start: string;
+  zdarzenieWyzwalajaceId: string | null;
+  uczestnikId: string | null;
 }
 
 export class Parametry {
@@ -30,13 +47,13 @@ export class Parametry {
     this.wartosci = [...poczatkowe];
   }
   /** Dodaje wartosc i zwraca placeholder z rzutowaniem, np. `$3::text`. */
-  dodaj(v: unknown, typ: "text" | "float8" | "text[]" | "jsonb" | "timestamptz" | "int"): string {
+  dodaj(v: unknown, typ: "text" | "float8" | "text[]" | "jsonb" | "timestamptz" | "int" | "uuid"): string {
     this.wartosci.push(v);
     return `$${this.wartosci.length}::${typ}`;
   }
 }
 
-function wyrazeniePola(w: Warunek, z: ZrodloSql, p: Parametry): string {
+function wyrazeniePola(w: Extract<Warunek, { typ: "wlasciwosc_zdarzenia" | "wlasciwosc_profilu" }>, z: ZrodloSql, p: Parametry): string {
   if (w.typ === "wlasciwosc_zdarzenia") {
     if (!z.zdarzenie) throw new Error("filtr: warunek na zdarzeniu bez źródła zdarzenia");
     return `(${z.zdarzenie} -> ${p.dodaj(w.pole, "text")})`;
@@ -52,7 +69,55 @@ function iso(s: unknown): string {
   return new Date(t).toISOString();
 }
 
-export function kompilujWarunek(w: Warunek, z: ZrodloSql, p: Parametry, teraz: Date): string {
+const OPERATORY_SQL: Record<Exclude<WarunekMetryki["operator"], "miedzy">, string> = {
+  rowna: "=", rozna: "<>", wieksza: ">", wieksza_rowna: ">=", mniejsza: "<", mniejsza_rowna: "<=",
+};
+
+function profilHistorii(z: ZrodloSql): { id: string; tenantId: string } {
+  if (!z.profil?.id || !z.profil.tenantId) throw new Error("filtr: warunek po historii profilu bez id profilu w źródle");
+  return { id: z.profil.id, tenantId: z.profil.tenantId };
+}
+
+function kompilujMetryke(w: WarunekMetryki, z: ZrodloSql, p: Parametry, teraz: Date, k: KontekstFlowSql | null): string {
+  const pr = profilHistorii(z);
+  const warunki = [
+    `me.tenant_id = ${pr.tenantId}`,
+    `me.profile_id = ${pr.id}`,
+    `mm.name = ${p.dodaj(w.metryka.nazwa, "text")}`,
+  ];
+  if (w.metryka.integracja !== undefined) warunki.push(`mm.integration_key = ${p.dodaj(w.metryka.integracja, "text")}`);
+  if (w.okno.od === "startu_flow") {
+    if (!k) throw new Error("filtr: „od startu automatyzacji” poza automatyzacją");
+    warunki.push(`me.occurred_at >= ${p.dodaj(k.start, "timestamptz")}`);
+    if (k.zdarzenieWyzwalajaceId) warunki.push(`me.id <> ${p.dodaj(k.zdarzenieWyzwalajaceId, "uuid")}`);
+  } else if (w.okno.od === "ostatnich_dni") {
+    warunki.push(`me.occurred_at >= ${p.dodaj(teraz.toISOString(), "timestamptz")} - make_interval(days => ${p.dodaj(w.okno.dni, "int")})`);
+  }
+  for (const g of w.gdzie ?? []) warunki.push(kompilujWarunek(g, { zdarzenie: "me.properties" }, p, teraz, k));
+  const licznik = `(select count(*) from metric_events me join metrics mm on mm.tenant_id = me.tenant_id and mm.id = me.metric_id where ${warunki.join(" and ")})`;
+  if (w.operator === "miedzy") {
+    const [a, b] = w.wartosc as [number, number];
+    return `(${licznik} between ${p.dodaj(a, "int")} and ${p.dodaj(b, "int")})`;
+  }
+  return `(${licznik} ${OPERATORY_SQL[w.operator]} ${p.dodaj(w.wartosc, "int")})`;
+}
+
+function kompilujFlow(w: WarunekFlow, z: ZrodloSql, p: Parametry, teraz: Date, k: KontekstFlowSql | null): string {
+  const pr = profilHistorii(z);
+  let flowId: string;
+  if (w.flow === "biezacy") {
+    if (!k) throw new Error("filtr: „ta automatyzacja” poza automatyzacją");
+    flowId = k.flowId;
+  } else flowId = w.flow;
+  const warunki = [`fp.tenant_id = ${pr.tenantId}`, `fp.profile_id = ${pr.id}`, `fp.flow_id = ${p.dodaj(flowId, "uuid")}`];
+  if (w.okno.od === "ostatnich_dni") warunki.push(`fp.entered_at >= ${p.dodaj(teraz.toISOString(), "timestamptz")} - make_interval(days => ${p.dodaj(w.okno.dni, "int")})`);
+  if (k?.uczestnikId) warunki.push(`fp.id <> ${p.dodaj(k.uczestnikId, "uuid")}`);
+  return `(${w.jest ? "" : "not "}exists (select 1 from flow_participants fp where ${warunki.join(" and ")}))`;
+}
+
+export function kompilujWarunek(w: Warunek, z: ZrodloSql, p: Parametry, teraz: Date, k: KontekstFlowSql | null = null): string {
+  if (w.typ === "metryka_profilu") return kompilujMetryke(w, z, p, teraz, k);
+  if (w.typ === "byl_w_flow") return kompilujFlow(w, z, p, teraz, k);
   const v = wyrazeniePola(w, z, p);
   const ustawione = `(${v} is not null and jsonb_typeof(${v}) <> 'null')`;
   if (w.operator === "ustawione") return ustawione;
@@ -132,9 +197,9 @@ export function kompilujWarunek(w: Warunek, z: ZrodloSql, p: Parametry, teraz: D
 }
 
 /** Grupy AND, warunki OR; pusty filtr = `true`. */
-export function kompilujFiltr(f: Filtr | null | undefined, z: ZrodloSql, p: Parametry, teraz: Date): string {
+export function kompilujFiltr(f: Filtr | null | undefined, z: ZrodloSql, p: Parametry, teraz: Date, k: KontekstFlowSql | null = null): string {
   if (!f || !f.grupy.length) return "true";
-  return f.grupy.map((g) => `(${g.warunki.map((w) => kompilujWarunek(w, z, p, teraz)).join(" or ")})`).join(" and ");
+  return f.grupy.map((g) => `(${g.warunki.map((w) => kompilujWarunek(w, z, p, teraz, k)).join(" or ")})`).join(" and ");
 }
 
 /**
@@ -153,10 +218,11 @@ export function zapytanieFiltrowane(opcje: {
   zrodlo: ZrodloSql;
   teraz: Date;
   koniec?: string;
+  kontekst?: KontekstFlowSql | null;
 }): { sql: string; parametry: unknown[] } {
   if (!/^[a-z_][a-z0-9_]*$/.test(opcje.alias)) throw new Error(`filtr: niedozwolony alias ${opcje.alias}`);
   const p = new Parametry([opcje.tenantId]);
-  const filtr = kompilujFiltr(opcje.filtr, opcje.zrodlo, p, opcje.teraz);
+  const filtr = kompilujFiltr(opcje.filtr, opcje.zrodlo, p, opcje.teraz, opcje.kontekst ?? null);
   return {
     sql: `select ${opcje.kolumny} from ${opcje.zrodloSql} where ${opcje.alias}.tenant_id = $1::uuid and (${filtr})${opcje.koniec ? ` ${opcje.koniec}` : ""}`,
     parametry: p.wartosci,
