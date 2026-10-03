@@ -54,14 +54,14 @@ describe("Popup: klauzula zgody i lista (0041)", () => {
   it("skrypt on-site pokazuje DOKŁADNIE tekst wersji, niezaznaczone pole i odsyła numer wersji", async () => {
     const odp = await skryptGET(new NextRequest(`http://test/s/${tenantA}`), { params: Promise.resolve({ tenantId: tenantA }) });
     const js = await odp.text();
-    expect(odp.headers.get("X-Script-Version")).toBe("1.1.0");
-    // konfiguracja jako JSON: tekst 1:1 (z polskimi znakami)
-    expect(js).toContain(JSON.stringify(KLAUZULA_1).slice(1, -1));
-    expect(js).toContain('"consentVersion":1');
-    expect(js).toContain("zgoda.checked = false");
-    expect(js).toContain("wersjaKlauzuli: K.consentVersion");
-    // regex adresu polityki przetrwal szablon (bez zjedzonych ukosnikow)
-    expect(js).toContain("/^https?:\\/\\//i");
+    // 2.0.0 (0043): builder formularzy; kontrakt klauzuli bez zmian
+    expect(odp.headers.get("X-Script-Version")).toBe("2.0.0");
+    // konfiguracja jako JSON: tekst 1:1 (z polskimi znakami) w obiekcie zgody formularza
+    expect(js).toContain(JSON.stringify({ tekst: KLAUZULA_1, url: "https://sklep.example/polityka", wersja: 1 }));
+    expect(js).toMatch(/\.checked = false/);
+    expect(js).toContain("wersjaKlauzuli: f.zgoda.wersja");
+    // test adresu polityki przetrwal wstrzykniecie (bez zjedzonych ukosnikow)
+    expect(js).toContain("/^https?:\\/\\/[^\\s<>\"]+$/i");
     const pub = await popupPubliczny(popupA);
     expect(pub?.consent_wording).toBe(KLAUZULA_1);
   });

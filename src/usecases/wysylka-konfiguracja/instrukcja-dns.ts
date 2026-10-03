@@ -58,6 +58,9 @@ export interface Instrukcja {
   dostawca: DomenaPlatformowa["dostawca"];
   gotowa: boolean;
   wygasa: Date;
+  /** „jeden wpis" (serwery naszej strefy: dane publiczne, bez identyfikatorów konta) */
+  tryb: DomenaPlatformowa["tryb"];
+  delegacja: DomenaPlatformowa["delegacja"];
 }
 
 /** null = token nieznany, wygasły, unieważniony albo domena odłączona (strona pokazuje 404). */
@@ -72,5 +75,5 @@ export async function odczytajInstrukcje(token: string, teraz = new Date()): Pro
   if (!l) return null;
   const d = await domenaPlatformowaPoId(l.tenant_id, l.sending_domain_id);
   if (!d) return null;
-  return { domena: d.domena, strefa: d.strefa, rekordy: d.rekordy, raport: d.raport, dostawca: d.dostawca, gotowa: d.gotowa, wygasa: l.expires_at };
+  return { domena: d.domena, strefa: d.strefa, rekordy: d.rekordy, raport: d.raport, dostawca: d.dostawca, gotowa: d.gotowa, wygasa: l.expires_at, tryb: d.tryb, delegacja: d.delegacja };
 }

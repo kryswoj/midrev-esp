@@ -2,7 +2,8 @@ import { getPool } from "../adapters/db/pool";
 import { smtpPlatformy } from "../adapters/aws/fabryka";
 import { AdapterNodemailer } from "../adapters/email/nodemailer";
 import { config } from "../config";
-import { portSes } from "../adapters/aws/fabryka";
+import { portRoute53, portSes } from "../adapters/aws/fabryka";
+import { zglosBrakRoute53 } from "../usecases/wysylka-konfiguracja/delegacja-dns";
 import { podepnijZasobyOpcjonalne, sprawdzDomenePlatformowa, type OpcjeDomeny } from "../usecases/wysylka-konfiguracja/domena-platformowa";
 
 /**
@@ -83,6 +84,13 @@ export async function tikDomen(o: OpcjeDomeny & { wyslij?: WyslijPowiadomienie; 
     const { rows: blokada } = await klient.query("select pg_try_advisory_lock($1) as mam", [BLOKADA]);
     if (!blokada[0]?.mam) return { sprawdzone, gotowe };
     try {
+      // delegacja NS włączona flagą, ale bez kluczy: jeden alert na proces (kreator i tak
+      // działa w trybie ręcznym, tylko operator musi wiedzieć, że opcja jest ukryta)
+      await zglosBrakRoute53(config().ROUTE53_DELEGACJA, o.route53 === undefined ? portRoute53() : o.route53, async (t) => {
+        if (o.alert) return o.alert(t);
+        const { wyslijAlert } = await import("./alerty");
+        await wyslijAlert(t, { poziom: "uwaga" });
+      });
       const { rows } = await klient.query<{ tenant_id: string; id: string }>(
         `select tenant_id, id from sending_domains
           where managed_by = 'platforma' and (next_check_at is null or next_check_at <= $1)

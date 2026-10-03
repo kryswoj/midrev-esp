@@ -19,6 +19,16 @@ export interface DostawcaDns {
   link: string | null;
   /** dodatkowa pułapka tego panelu, jeśli jest */
   uwaga?: string;
+  /**
+   * Rekord NS dla subdomeny („jeden wpis"). Research 02.10.2026 (pomoc dostawców, linki w
+   * raporcie 08-delegacja-ns.md): wszystkie znane panele na to pozwalają. `nsDlaSubdomeny:
+   * false` = panel blokuje, kreator proponuje wtedy rekordy ręczne jako zalecane.
+   */
+  nsDlaSubdomeny: boolean;
+  /** jeden rekord przyjmuje kilka serwerów (Google Cloud DNS); reszta: osobny wiersz na serwer */
+  nsWJednymWpisie: boolean;
+  /** pułapka panelu przy NS, jedno zdanie */
+  nsUwaga?: string;
 }
 
 export const DOSTAWCY_DNS: readonly DostawcaDns[] = [
@@ -30,6 +40,9 @@ export const DOSTAWCY_DNS: readonly DostawcaDns[] = [
     gdzie: "Panel klienta Hostido → Twoje usługi → DirectAdmin → Zarządzanie DNS (wybierz domenę).",
     link: "https://panel.hostido.pl",
     uwaga: "Ten panel dokleja nazwę domeny do adresów bez kropki na końcu. Wartości rekordów CNAME i MX kopiuj razem z kropką; rekordy TXT wklej bez zmian.",
+    nsDlaSubdomeny: true,
+    nsWJednymWpisie: false,
+    nsUwaga: "Wpis zadziała, jeśli domena korzysta z serwerów Hostido (ns1.hostido.net.pl).",
   },
   {
     klucz: "homepl",
@@ -38,6 +51,9 @@ export const DOSTAWCY_DNS: readonly DostawcaDns[] = [
     kropkaNaKoncu: true,
     gdzie: "Panel home.pl → Domeny → wybierz domenę → Strefa DNS → Dodaj rekord.",
     link: "https://panel.home.pl",
+    nsDlaSubdomeny: true,
+    nsWJednymWpisie: false,
+    nsUwaga: "Nie zakładaj subdomeny news jako osobnej usługi w panelu, dodaj sam rekord.",
   },
   {
     klucz: "ovh",
@@ -46,6 +62,8 @@ export const DOSTAWCY_DNS: readonly DostawcaDns[] = [
     kropkaNaKoncu: true,
     gdzie: "Panel OVHcloud → Web Cloud → Nazwy domen → wybierz domenę → zakładka Strefa DNS → Dodaj rekord.",
     link: "https://www.ovh.com/manager/",
+    nsDlaSubdomeny: true,
+    nsWJednymWpisie: false,
   },
   {
     klucz: "nazwapl",
@@ -54,6 +72,9 @@ export const DOSTAWCY_DNS: readonly DostawcaDns[] = [
     kropkaNaKoncu: true,
     gdzie: "Panel nazwa.pl → Domeny → wybierz domenę → Zarządzanie strefą DNS.",
     link: "https://admin.nazwa.pl",
+    nsDlaSubdomeny: true,
+    nsWJednymWpisie: false,
+    nsUwaga: "Najpierw włącz „Ręczna konfiguracja DNS” dla tej domeny (przycisk „Zmień”).",
   },
   {
     klucz: "cloudflare",
@@ -63,6 +84,8 @@ export const DOSTAWCY_DNS: readonly DostawcaDns[] = [
     gdzie: "Cloudflare → wybierz domenę → DNS → Records → Add record.",
     link: "https://dash.cloudflare.com",
     uwaga: "Przy rekordach CNAME wyłącz pomarańczową chmurkę (ustaw „DNS only”), inaczej sprawdzenie nie przejdzie.",
+    nsDlaSubdomeny: true,
+    nsWJednymWpisie: false,
   },
   {
     klucz: "godaddy",
@@ -71,6 +94,9 @@ export const DOSTAWCY_DNS: readonly DostawcaDns[] = [
     kropkaNaKoncu: false,
     gdzie: "GoDaddy → Moje produkty → Domeny → wybierz domenę → DNS → Dodaj nowy rekord.",
     link: "https://dcc.godaddy.com/control/portfolio",
+    nsDlaSubdomeny: true,
+    nsWJednymWpisie: false,
+    nsUwaga: "GoDaddy może poprosić o kod z SMS przy zapisie (ochrona domeny).",
   },
   {
     klucz: "cyberfolks",
@@ -80,6 +106,8 @@ export const DOSTAWCY_DNS: readonly DostawcaDns[] = [
     gdzie: "Panel cyber_Folks → DirectAdmin → Zarządzanie DNS (wybierz domenę).",
     link: "https://panel.cyberfolks.pl",
     uwaga: "Ten panel dokleja nazwę domeny do adresów bez kropki na końcu. Wartości rekordów CNAME i MX kopiuj razem z kropką; rekordy TXT wklej bez zmian.",
+    nsDlaSubdomeny: true,
+    nsWJednymWpisie: false,
   },
   {
     klucz: "lhpl",
@@ -88,6 +116,9 @@ export const DOSTAWCY_DNS: readonly DostawcaDns[] = [
     kropkaNaKoncu: true,
     gdzie: "Panel LH.pl → Domeny → wybierz domenę → Strefa DNS.",
     link: "https://panel.lh.pl",
+    nsDlaSubdomeny: true,
+    nsWJednymWpisie: false,
+    nsUwaga: "Wpis zadziała, jeśli domena korzysta z serwerów LH.pl. W przeciwnym razie panel pozwala tylko zmienić serwery całej domeny: wtedy wpisz rekordy samodzielnie.",
   },
   {
     klucz: "google",
@@ -96,6 +127,9 @@ export const DOSTAWCY_DNS: readonly DostawcaDns[] = [
     kropkaNaKoncu: true,
     gdzie: "Google Cloud Console → Network services → Cloud DNS → wybierz strefę → Add standard.",
     link: "https://console.cloud.google.com/net-services/dns/zones",
+    nsDlaSubdomeny: true,
+    nsWJednymWpisie: true,
+    nsUwaga: "Jeśli domena jest w Squarespace (dawniej Google Domains): ten panel przyjmuje wpis NS dla subdomeny dopiero po wyłączeniu DNSSEC w ustawieniach domeny. Jeśli nie chcesz go wyłączać, wpisz rekordy samodzielnie (niżej).",
   },
 ];
 
@@ -106,6 +140,8 @@ export const DOSTAWCA_NIEZNANY: DostawcaDns = {
   kropkaNaKoncu: true,
   gdzie: "Zaloguj się tam, gdzie kupiłeś domenę albo masz hosting, i znajdź „Strefa DNS”, „Rekordy DNS” albo „Zarządzanie DNS”.",
   link: null,
+  nsDlaSubdomeny: true,
+  nsWJednymWpisie: false,
 };
 
 /** Dostawca po liście serwerów NS strefy (nazwy bez kropki, dowolna wielkość liter). */

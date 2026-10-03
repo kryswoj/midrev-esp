@@ -121,6 +121,14 @@ export interface DefinicjaMetrykiWbudowanej extends KluczMetryki {
 export const METRYKI_WBUDOWANE = {
   /** popup (zglos-popup.ts); unique_id `form:{popup_id}:{event_id}`; properties `{form_id, form_name}` */
   zgloszenieFormularza: { integracja: "midrev", nazwa: "Submitted Form", mozeWyzwalac: true, ukryta: false },
+  /**
+   * wyświetlenie formularza na stronie (pierwszy krok; 0043); profil NULL (anonimowy gość);
+   * unique_id `v:{form_id}:0:{gość}:{dzień UTC}` = najwyżej jedno na gościa dziennie;
+   * properties `{form_id, form_name, form_type, step_index, step_name}`. Nie wyzwala flow.
+   */
+  wyswietlenieFormularza: { integracja: "midrev", nazwa: "Viewed Form", mozeWyzwalac: false, ukryta: false },
+  /** wyświetlenie kolejnego kroku (step_index ≥ 1, także krok sukcesu); jak wyżej, ukryte */
+  wyswietlenieKrokuFormularza: { integracja: "midrev", nazwa: "Viewed Form Step", mozeWyzwalac: false, ukryta: true },
   /** zamówienie Woo przy PIERWSZYM pojawieniu się; unique_id = orders.id; value_minor = suma zamówienia */
   zlozoneZamowienie: { integracja: "woocommerce", nazwa: "Placed Order", mozeWyzwalac: true, ukryta: false },
   /** jedna na pozycję zamówienia Woo; unique_id `{orders.id}:{line_id}`; properties w kształcie Klaviyo (ProductID, ProductName, Quantity...) */
