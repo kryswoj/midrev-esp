@@ -1,0 +1,5 @@
+node_modules/
+.shopify/
+# konfiguracje per klient mają client_id (nie sekret), ale zostają poza repo, żeby nie mieszać klientów
+shopify.app.*.toml
+!shopify.app.toml.szablon

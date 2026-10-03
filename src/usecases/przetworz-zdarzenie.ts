@@ -40,6 +40,15 @@ import { emitujKlienta, emitujStatusZamowienia, emitujZamowienie } from "./zdarz
  */
 export async function przetworzZdarzenie(tenantId: string, rawEventId: string): Promise<void> {
   const pool = getPool();
+  // Shopify (0047) ma tematy spoza bytów portu (checkouty z linkiem powrotu, zgody, zwroty, RODO,
+  // odinstalowanie) i własną fazę 2 po TEMACIE; ten sam rodzaj joba, więc ponawianie zaległych
+  // działa dla obu platform. Zamówienia i klienci Shopify i tak idą przez wspólny upsert portu.
+  const { rows: zrodlo } = await pool.query<{ source: string }>("select source from raw_events where tenant_id = $1 and id = $2", [tenantId, rawEventId]);
+  if (zrodlo[0]?.source === "shopify") {
+    const { przetworzZdarzenieShopify } = await import("./shopify/przetwarzanie");
+    await przetworzZdarzenieShopify(tenantId, rawEventId);
+    return;
+  }
   const klient = await pool.connect();
   try {
     await klient.query("begin");

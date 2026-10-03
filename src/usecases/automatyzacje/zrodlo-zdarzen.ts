@@ -164,7 +164,10 @@ export const zrodloZdarzenMetricEvents: ZrodloZdarzenDoWyzwalaczy = {
     // „Placed Order” ze sklepu: `OrderId` w properties to id zamowienia W SKLEPIE (parytet
     // Klaviyo, np. numer Woo), a nasze `orders.id` jest w `unique_id` (kontrakt A-B, §3).
     // Warunek „wartosc zamowienia” i regula wyjscia po zakupie potrzebuja `orders.id`.
-    const zamowienieSklepu = kluczMetryki(z.metryka) === kluczMetryki(METRYKI_WBUDOWANE.zlozoneZamowienie);
+    // Shopify (0047) ma ten sam kontrakt: `shopify/Placed Order` z unique_id = orders.id
+    const zamowienieSklepu =
+      kluczMetryki(z.metryka) === kluczMetryki(METRYKI_WBUDOWANE.zlozoneZamowienie) ||
+      kluczMetryki(z.metryka) === kluczMetryki({ integracja: "shopify", nazwa: "Placed Order" });
     return rows.map((r) => {
       const w = wiersz(r, r.source as ZrodloZdarzenia, r.backfill === true);
       w.ingestedAtMs = Number(r.ingested_ms);

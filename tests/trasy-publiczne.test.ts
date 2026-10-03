@@ -54,6 +54,10 @@ const OCZEKIWANE_PUBLICZNE = new Set([
   "/api/integracje/woocommerce/[storeId]/zdarzenia",
   "/api/integracje/woocommerce/[storeId]/ping",
   "/api/integracje/woocommerce/[storeId]/rozlacz",
+  // Shopify (0047): webhooki (HMAC sekretem aplikacji), wejście instalacji i callback OAuth (HMAC + stan)
+  "/api/webhooks/shopify",
+  "/api/shopify/auth",
+  "/api/shopify/callback",
 ]);
 
 /** Wzorce tras wymagające sesji panelu. */

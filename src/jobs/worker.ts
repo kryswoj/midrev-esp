@@ -17,6 +17,7 @@ import { HANDLERY_AUTOMATYZACJI } from "./handlery-automatyzacje";
 import { HANDLERY_CYKLICZNE, zarejestrujCykliczne } from "./handlery-cykliczne";
 import { HANDLERY_ODBICIA, ODSTEP_ODBIC_MS, zaplanujOdbicia } from "./handlery-odbicia";
 import { HANDLERY_IMPORTU } from "./handlery-import";
+import { HANDLERY_SHOPIFY } from "./handlery-shopify";
 import { HANDLERY_ZDARZEN, zaplanujZdarzenia } from "./handlery-zdarzenia";
 import { ODSTEP_DOMEN_MS, tikDomen } from "./handlery-domeny";
 
@@ -48,6 +49,7 @@ const HANDLERY: Record<string, (z: Zadanie) => Promise<void>> = {
   ...HANDLERY_CYKLICZNE,
   ...HANDLERY_ODBICIA,
   ...HANDLERY_IMPORTU,
+  ...HANDLERY_SHOPIFY,
   ...HANDLERY_ZDARZEN,
   async wyslij_kampanie(z) {
     const campaignId = String(z.payload.campaignId);

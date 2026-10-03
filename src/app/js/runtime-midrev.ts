@@ -138,6 +138,8 @@ export const RUNTIME_MIDREV = String.raw`(function (w, d, K) {
       if (typeof w.wp_has_consent === "function" && w.consent_api_set_by) return !!w.wp_has_consent("statistics");
       var cp = w.customerPrivacy || (w.Shopify && w.Shopify.customerPrivacy);
       if (cp) {
+        // Shopify: śledzenie MidRev to cel marketingowy, więc obie zgody naraz
+        if (typeof cp.analyticsProcessingAllowed === "function" && typeof cp.marketingAllowed === "function") return cp.analyticsProcessingAllowed() === true && cp.marketingAllowed() === true;
         if (typeof cp.analyticsProcessingAllowed === "function") return !!cp.analyticsProcessingAllowed();
         if (typeof cp.isAnalyticsAllowed === "function") return !!cp.isAnalyticsAllowed();
       }
@@ -170,7 +172,9 @@ export const RUNTIME_MIDREV = String.raw`(function (w, d, K) {
       kolejkaPrzedZgoda = [];
     }
   }
-  function sprawdzZgode() { if (!K.zgoda || trybRecznej) return; var v = zgodaCmp(); if (v !== null) ustawZgode(v, "cmp"); }
+  // K.recz: zgodę podaje WYŁĄCZNIE most platformy (Shopify app embed → Customer Privacy API, marketing
+  // i analityka); wykrywanie CMP/GCM wyłączone, żeby nie śledzić na samej zgodzie analitycznej
+  function sprawdzZgode() { if (!K.zgoda || trybRecznej || K.recz) return; var v = zgodaCmp(); if (v !== null) ustawZgode(v, "cmp"); }
 
   // ── identify / track ──────────────────────────────────────────────────────
   var POLA = { first_name: 1, last_name: 1, organization: 1, title: 1, locale: 1 };
@@ -386,7 +390,10 @@ export const RUNTIME_MIDREV = String.raw`(function (w, d, K) {
     if (nazwa === "identify") return identify(c[1]);
     if (nazwa === "track") return track(c[1], c[2]);
     if (nazwa === "trackViewedItem") return trackViewedItem(c[1]);
-    if (nazwa === "consent") { trybRecznej = true; ustawZgode(c[1] !== false, "push"); return P(true); }
+    // K.recz (Shopify): zwykłe consent ze strony (stary snippet, obcy CMP) może zgodę tylko COFNĄĆ;
+    // nadać ją może wyłącznie most platformy komendą platformConsent (Customer Privacy API)
+    if (nazwa === "consent") { if (K.recz && c[1] !== false) return P(false); trybRecznej = true; ustawZgode(c[1] !== false, "push"); return P(true); }
+    if (nazwa === "platformConsent") { trybRecznej = true; ustawZgode(c[1] === true, "platforma"); return P(true); }
     if (nazwa === "subscribe") return subscribe(c[1]);
     return P(false);
   }
@@ -401,7 +408,7 @@ export const RUNTIME_MIDREV = String.raw`(function (w, d, K) {
     trackViewedItem: function (o) { return bezpieczneWykonaj(["trackViewedItem", o]); },
     isIdentified: function () { return P(zgoda && rozpoznany()); },
     subscribe: function (o) { return bezpieczneWykonaj(["subscribe", o]); },
-    consent: function (v) { trybRecznej = true; ustawZgode(v !== false, "api"); return P(zgoda); },
+    consent: function (v) { if (K.recz && v !== false) return P(zgoda); trybRecznej = true; ustawZgode(v !== false, "api"); return P(zgoda); },
     _mapujGa4: mapujGa4,
     __midrev: true
   };
@@ -491,9 +498,11 @@ export interface KonfiguracjaMidrevJs {
   shim: boolean;
   /** adres loadera formularzy (istniejący /s/{tenantId}) albo null */
   formy: string | null;
+  /** true = zgodę daje tylko jawne `consent` (most platformy, np. Shopify), bez wykrywania CMP */
+  tylkoJawnaZgoda?: boolean;
 }
 
 export function zbudujMidrevJs(k: KonfiguracjaMidrevJs): string {
-  const konfig = { v: WERSJA_MIDREV_JS, id: k.id, api: k.api, zgoda: k.zgoda, ga4: k.ga4, shim: k.shim, formy: k.formy };
+  const konfig = { v: WERSJA_MIDREV_JS, id: k.id, api: k.api, zgoda: k.zgoda, ga4: k.ga4, shim: k.shim, formy: k.formy, ...(k.tylkoJawnaZgoda ? { recz: true } : {}) };
   return `/* midrev.js v${WERSJA_MIDREV_JS} */\n` + RUNTIME_MIDREV.replace("__KONFIG__", () => bezpiecznyJsonSkryptu(konfig));
 }

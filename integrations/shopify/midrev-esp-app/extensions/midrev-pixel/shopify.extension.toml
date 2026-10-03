@@ -1,0 +1,28 @@
+# Piksel MidRev: zdarzenia sklepu (oglądany produkt, dodanie do koszyka, identyfikacja
+# w checkoucie) → /client/events MidRev. Ustawienia zapisuje backend (webPixelCreate).
+type = "web_pixel_extension"
+name = "midrev-pixel"
+runtime_context = "strict"
+
+# Shopify uruchamia piksel wyłącznie po zgodzie na analitykę i marketing (tam, gdzie zgoda
+# jest wymagana) i blokuje go przy sprzeciwie wobec sprzedaży danych.
+[customer_privacy]
+analytics = true
+marketing = true
+preferences = false
+sale_of_data = "enabled"
+
+[settings]
+type = "object"
+
+[settings.fields.siteKey]
+name = "Klucz strony MidRev"
+description = "Publiczny klucz strony (company_id) z panelu MidRev"
+type = "single_line_text_field"
+validations = [{ name = "min", value = "6" }, { name = "max", value = "10" }]
+
+[settings.fields.apiUrl]
+name = "Adres API MidRev"
+description = "Adres, pod który piksel wysyła zdarzenia, np. https://link.midrev.pl"
+type = "single_line_text_field"
+validations = [{ name = "min", value = "10" }]

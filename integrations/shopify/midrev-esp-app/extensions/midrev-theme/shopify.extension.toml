@@ -1,0 +1,5 @@
+# Rozszerzenie motywu MidRev: app embed (formularze, popupy, midrev.js) i blok formularza
+# osadzonego. Włączenie app embed: deep link z kreatora MidRev
+#   https://{sklep}.myshopify.com/admin/themes/current/editor?context=apps&activateAppId={client_id}/midrev-embed
+type = "theme"
+name = "midrev-theme"

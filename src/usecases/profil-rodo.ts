@@ -53,7 +53,11 @@ const PREDYKAT_SUROWYCH = `
         where o.tenant_id = $1 and o.profile_id = $2))
     or ($3::text is not null and (
        lower(btrim(r.payload -> 'billing' ->> 'email')) = lower(btrim($3))
-       or lower(btrim(r.payload ->> 'email')) = lower(btrim($3))))
+       or lower(btrim(r.payload ->> 'email')) = lower(btrim($3))
+       -- Shopify (0047): zgoda (email_address), zamówienie (contact_email), klient/RODO (customer.email)
+       or lower(btrim(r.payload ->> 'email_address')) = lower(btrim($3))
+       or lower(btrim(r.payload ->> 'contact_email')) = lower(btrim($3))
+       or lower(btrim(r.payload -> 'customer' ->> 'email')) = lower(btrim($3))))
   )`;
 
 /**

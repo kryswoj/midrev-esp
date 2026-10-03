@@ -1,0 +1,12 @@
+{
+  "shop_id": 954889,
+  "shop_domain": "sklep-a.myshopify.com",
+  "customer": {
+    "id": 115310627314723950,
+    "email": "jan.kowalski@example.test",
+    "phone": "555-625-1199"
+  },
+  "orders_to_redact": [
+    820982911946154500
+  ]
+}

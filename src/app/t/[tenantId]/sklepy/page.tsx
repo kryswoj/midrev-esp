@@ -56,7 +56,11 @@ export default async function Sklepy({
   // renderowac sam segment strony) - patrz src/app/autoryzacja.ts
   await wymaganyTenant(tenantId);
   const { ok, blad } = await searchParams;
-  const [sklepy, kluczStrony] = await Promise.all([sklepyZeStanemWebhookow(tenantId), kluczStronyTenanta(tenantId)]);
+  const [wszystkie, kluczStrony] = await Promise.all([sklepyZeStanemWebhookow(tenantId), kluczStronyTenanta(tenantId)]);
+  // Shopify ma własny kreator (/sklepy/shopify) i własny stan połączenia (webhooki na jeden adres
+  // /api/webhooks/shopify, nie per sklep); karty poniżej to sklepy z listą webhooków (WooCommerce)
+  const sklepy = wszystkie.filter((s) => s.platform !== "shopify");
+  const shopify = wszystkie.filter((s) => s.platform === "shopify");
   const { rows: metody } = await getPool().query<{ connection_method: string | null }>(
     "select connection_method from stores where tenant_id = $1 and platform = 'woocommerce' and status = 'connected' order by created_at desc limit 1",
     [tenantId],
@@ -77,10 +81,11 @@ export default async function Sklepy({
             tenantId={tenantId}
             stany={{
               woocommerce: woo ? (woo.connection_method === "wc_auth" ? "podstawowa" : "polaczony") : null,
+              shopify: shopify.some((s) => s.status === "connected") ? "polaczony" : shopify.length ? "w_trakcie" : null,
               wlasna: kluczStrony?.domeny.length ? "polaczony" : null,
             }}
           />
-          {sklepy.length === 0 ? (
+          {sklepy.length === 0 && shopify.length > 0 ? null : sklepy.length === 0 ? (
             <Card>
               <CardHeader title="Podłączony sklep" description="Źródło zamówień, profili i zdarzeń dla tego konta." />
               <EmptyState icon="sklep" title="Sklep nie jest jeszcze podłączony" description="Panel nie ma jeszcze skąd pobierać zamówień ani profili. Wybierz platformę wyżej." />

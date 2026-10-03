@@ -1,0 +1,9 @@
+{
+  "customer_id": 115310627314723950,
+  "email_address": "jan.kowalski@example.test",
+  "email_marketing_consent": {
+    "state": "subscribed",
+    "opt_in_level": "single_opt_in",
+    "consent_updated_at": "2026-10-03T10:30:00+02:00"
+  }
+}

@@ -29,6 +29,7 @@ const WZORCE = [
   "^AUT tenant$",
   "^CDP (Tenant [AB]|Sklep Testowy( 2| Anon| Case| Delete)?)$",
   "^CUSTOM (A|B|E2E)$",
+  "^SHOPIFY (A|B)$",
   "^CYKLICZNE A$",
   "^DSN (tenant|obcy)$",
   "^DUPL (tenant|obcy)$",
