@@ -33,9 +33,13 @@ export async function zapiszZgodeSklepu(
     return "duplikat";
   }
   if (z.stan === "granted") {
-    if (ostatnia && ostatnia.state === "withdrawn" && ostatnia.occurred_at.getTime() >= kiedy.getTime()) {
-      return "pominieta_nowszy_wypis";
-    }
+    // KAŻDY wypis nowszy albo równy (nie tylko ostatni wpis) wygrywa ze spóźnioną zgodą
+    const { rows: wyp } = await klient.query<{ jest: boolean }>(
+      `select exists (select 1 from consents where tenant_id = $1 and profile_id = $2 and channel = 'email'
+                        and state = 'withdrawn' and occurred_at >= $3) as jest`,
+      [tenantId, profileId, kiedy],
+    );
+    if (wyp[0].jest) return "pominieta_nowszy_wypis";
     const { rows: wykl } = await klient.query<{ sklepowe: boolean }>(
       `select coalesce((select ts.action = 'suppressed' from tenant_suppressions ts
                          join profiles p on p.tenant_id = ts.tenant_id and p.id = $2
@@ -44,8 +48,9 @@ export async function zapiszZgodeSklepu(
       [tenantId, profileId],
     );
     if (wykl[0]?.sklepowe || (await jestWykluczonyGlobalnie(z.email, klient))) return "pominieta_wykluczony";
-  } else if (!ostatnia || ostatnia.state === "withdrawn" || ostatnia.occurred_at.getTime() > kiedy.getTime()) {
-    // wycofanie ze sklepu starsze niż nasza ostatnia zgoda (albo brak zgody) niczego nie zmienia
+  } else if (ostatnia && ostatnia.occurred_at.getTime() >= kiedy.getTime()) {
+    // wycofanie starsze niż nasz ostatni wpis niczego nie zmienia; nowsze zapisujemy ZAWSZE
+    // (także po wcześniejszym wypisie), żeby spóźniona starsza zgoda nie wróciła (review Shopify P1)
     return "bez_zmian";
   }
   await klient.query(

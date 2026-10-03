@@ -224,6 +224,10 @@ describe("Port „Sklep”: ingest, metryki, role, koszyki, zgody, katalog", () 
       expect(nowsza).toBe("zapisana");
       const powtorka = await zapiszZgodeSklepu(klient, tenantId, profil, { email: "port-kupujacy@example.test", stan: "granted", kiedy: new Date("2026-10-02T13:00:00Z"), zrodlo: "checkout_woocommerce" });
       expect(powtorka).toBe("duplikat");
+      // wypis ze sklepu (14:00) po naszym wcześniejszym wypisie, potem spóźniona zgoda z 13:30
+      expect(await zapiszZgodeSklepu(klient, tenantId, profil, { email: "port-kupujacy@example.test", stan: "withdrawn", kiedy: new Date("2026-10-02T14:00:00Z"), zrodlo: "shopify" })).toBe("zapisana");
+      expect(await zapiszZgodeSklepu(klient, tenantId, profil, { email: "port-kupujacy@example.test", stan: "withdrawn", kiedy: new Date("2026-10-02T15:00:00Z"), zrodlo: "shopify" })).toBe("zapisana");
+      expect(await zapiszZgodeSklepu(klient, tenantId, profil, { email: "port-kupujacy@example.test", stan: "granted", kiedy: new Date("2026-10-02T14:30:00Z"), zrodlo: "shopify" })).toBe("pominieta_nowszy_wypis");
       await klient.query("commit");
     } finally {
       klient.release();
