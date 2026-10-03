@@ -126,9 +126,9 @@ const schematParowania = z.object({
 
 export interface WynikParowania {
   store_id: string;
-  site_key: string;
+  site_key: string | null;
   plugin_secret: string;
-  script_url: string;
+  script_url: string | null;
   api_url: string;
   konfiguracja: KonfiguracjaWtyczki;
 }
@@ -186,29 +186,51 @@ export async function sparujWtyczke(cialo: unknown): Promise<WynikParowania> {
     [token.tenant_id, wynik.storeId, w.data.plugin_version ?? null],
   );
 
-  // midrev.js na sklepie: klucz strony tenanta w trybie woo, domena sklepu na liście domen
-  const klucz = await zapewnijKluczStrony(token.tenant_id);
-  const domena = normalizujDomene(new URL(adres).hostname);
-  await pool.query(
-    `update site_keys set platform = 'woocommerce',
-            link_domains = case when $2 = any(link_domains) or cardinality(link_domains) >= 20 then link_domains else array_append(link_domains, $2) end,
-            allowed_origins = case when $2 = any(allowed_origins) or cardinality(allowed_origins) >= 20 then allowed_origins else array_append(allowed_origins, $2) end,
-            ga4_datalayer = false, updated_at = now()
-      where tenant_id = $1 and id = $3`,
-    [token.tenant_id, domena, klucz.id],
-  );
-  wyczyscPamiecKluczy();
-  await ustawRoleMetrykStrony(token.tenant_id);
-  await zapewnijKlauzuleCheckoutu(token.tenant_id, wynik.storeId);
+  // Kroki po połączeniu są POMOCNICZE: sklep w ESP już działa (klucze, webhooki), więc ich błąd
+  // nie może skończyć się odpowiedzią „nie połączono” (wtyczka skasowałaby wtedy klucz REST, który
+  // ESP właśnie zapisał). Błąd = ostrzeżenie w logu i alert; wtyczka dociągnie konfigurację pingiem.
+  let siteKey: string | null = null;
+  try {
+    siteKey = await przygotujStroneSklepu(token.tenant_id, wynik.storeId, adres);
+  } catch (b) {
+    const opis = b instanceof Error ? b.message : "błąd";
+    console.warn(`[wtyczka] parowanie: kroki pomocnicze nieudane (${opis})`);
+    await wyslijAlert(`parowanie wtyczki Woo (sklep ${wynik.storeId}): sklep połączony, ale kroki pomocnicze padły: ${opis}`, { poziom: "uwaga", tenantId: token.tenant_id }).catch(() => {});
+  }
 
   return {
     store_id: wynik.storeId,
-    site_key: klucz.id,
+    site_key: siteKey,
     plugin_secret: pluginSecret,
-    script_url: `${adresSledzenia().replace(/\/+$/, "")}/js/v1/${klucz.id}.js`,
+    script_url: siteKey ? `${adresSledzenia().replace(/\/+$/, "")}/js/v1/${siteKey}.js` : null,
     api_url: config().APP_URL.replace(/\/+$/, ""),
     konfiguracja: await konfiguracjaWtyczki(token.tenant_id, wynik.storeId),
   };
+}
+
+/** midrev.js na sklepie: klucz strony w trybie woo, domena sklepu, role zachowań, klauzula kasy. */
+async function przygotujStroneSklepu(tenantId: string, storeId: string, adres: string): Promise<string> {
+  const pool = getPool();
+  const klucz = await zapewnijKluczStrony(tenantId);
+  // host bez kropki (sandbox) nie jest domeną: wtedy bez dopisywania do listy domen
+  let domena: string | null = null;
+  try {
+    domena = normalizujDomene(new URL(adres).hostname);
+  } catch {
+    domena = null;
+  }
+  await pool.query(
+    `update site_keys set platform = 'woocommerce',
+            link_domains = case when $2::text is null or $2 = any(link_domains) or cardinality(link_domains) >= 20 then link_domains else array_append(link_domains, $2) end,
+            allowed_origins = case when $2::text is null or $2 = any(allowed_origins) or cardinality(allowed_origins) >= 20 then allowed_origins else array_append(allowed_origins, $2) end,
+            ga4_datalayer = false, updated_at = now()
+      where tenant_id = $1 and id = $3`,
+    [tenantId, domena, klucz.id],
+  );
+  wyczyscPamiecKluczy();
+  await ustawRoleMetrykStrony(tenantId);
+  await zapewnijKlauzuleCheckoutu(tenantId, storeId);
+  return klucz.id;
 }
 
 // ── Klauzula zgody w checkoucie (wersjonowana) ────────────────────────────────────

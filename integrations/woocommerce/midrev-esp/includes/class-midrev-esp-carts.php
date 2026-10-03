@@ -223,7 +223,8 @@ class Midrev_Esp_Carts {
 		}
 		$wartosc = sanitize_text_field( wp_unslash( $_GET['mrv_cart'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- link z maila: autoryzacją jest podpis HMAC, nie nonce
 		$token   = self::verify( $wartosc );
-		$cel     = remove_query_arg( 'mrv_cart' );
+		// porażka: koszyk sklepu (tam motyw pokazuje komunikaty), bez parametru w adresie
+		$cel = wc_get_cart_url();
 		if ( ! $token ) {
 			wc_add_notice( __( 'This cart link has expired. Your cart could not be restored.', 'midrev-esp' ), 'notice' );
 			wp_safe_redirect( $cel );
