@@ -222,7 +222,7 @@ describe("Automatyzacje E4b: parytet (filtry profilu, historia, split, smart sen
 
     it("mail czekał w kolejce (limit dobowy), w tym czasie zakup: bramka przed wysyłką go wstrzymuje i zapisuje powód", async () => {
       await wylaczWszystkie();
-      const f = await flow("E4B checkout kolejka", CHECKOUT, 1, (m, g) => zWezlami(g, "m1", [mail("m1", m[0], "k"), koniec("k")], { filtrProfilu: NIE_KUPIL_OD_STARTU }));
+      const f = await flow("E4B checkout kolejka", CHECKOUT, 2, (m, g) => zWezlami(g, "m1", [mail("m1", m[0], "o1"), opoznienie("o1", "m2", 24), mail("m2", m[1], "k"), koniec("k")], { filtrProfilu: NIE_KUPIL_OD_STARTU }));
       await wlacz(f.id);
       await zdarzenie("darek", CHECKOUT, { temu: "1 minute" });
       // wysylka wstrzymana (jak przy wyczerpanym limicie): mail czeka w kolejce
@@ -249,6 +249,38 @@ describe("Automatyzacje E4b: parytet (filtry profilu, historia, split, smart sen
         [tenantId, profile.darek],
       );
       expect(skip[0].properties["Skip Reason"]).toBe("FILTR_PROFILU");
+      // i osoba WYCHODZI z automatyzacji (nie czeka 24 h na drugi mail)
+      const u = await uczestnik(f.id, "darek");
+      expect(u.status).toBe("wyszedl");
+      expect(u.exit_reason).toBe("filtr_profilu");
+    });
+
+    it("smart sending też tuż przed wysyłką: mail czekał w kolejce, w tym czasie wyszła kampania = mail flow pominięty", async () => {
+      await wylaczWszystkie();
+      const f = await flow("E4B smart przy wysylce", CHECKOUT, 1, (m, g) => zWezlami(g, "m1", [mail("m1", m[0], "k", { smartSending: true }), koniec("k")]));
+      await wlacz(f.id);
+      await zdarzenie("henryk", CHECKOUT, { temu: "1 minute" });
+      await getPool().query("update tenants set sending_paused_at = now(), sending_pause_reason = 'test' where id = $1", [tenantId]);
+      const d = new DostawcaAtrapa();
+      try {
+        await uruchomAutomatyzacje(tenantId, { dostawca: d });
+        expect((await wiadomosciFlow(f.id, "henryk"))[0].current_state).toBe("queued");
+        // kampania wyslana w tym czasie (np. przez inny proces): stan sent + zdarzenie sent
+        const { rows } = await getPool().query(
+          `insert into messages (tenant_id, profile_id, source_type, source_id, email, subject, body_html, click_token, unsubscribe_token, current_state, current_rank, created_at)
+           values ($1, $2, 'campaign', $3, $4, 'kampania', '<p>x</p>', md5(random()::text), md5(random()::text), 'sent', 3, now() - interval '30 hours') returning id`,
+          [tenantId, profile.henryk, randomUUID(), email("henryk")],
+        );
+        await getPool().query("insert into message_events (tenant_id, message_id, event_type, payload, occurred_at) values ($1, $2, 'sent', '{}', now() - interval '5 minutes')", [tenantId, rows[0].id]);
+      } finally {
+        await getPool().query("update tenants set sending_paused_at = null, sending_pause_reason = null where id = $1", [tenantId]);
+      }
+      await wyslijPartie(tenantId, { dostawca: d });
+      expect(d.wyslane).toEqual([]);
+      const m = await wiadomosciFlow(f.id, "henryk");
+      expect(m[0].current_state).toBe("suppressed");
+      const t = await przejscia(f.id, "henryk");
+      expect(t.some((x) => x.kind === "pominieto" && x.detail.powod === "smart_sending" && x.detail.przyWysylce === true)).toBe(true);
     });
   });
 

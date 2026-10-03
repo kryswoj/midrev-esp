@@ -118,6 +118,7 @@ function ocenMetryke(w: WarunekMetryki, d: DaneDoFiltra): boolean {
       e.nazwa === w.metryka.nazwa &&
       (w.metryka.integracja === undefined || e.integracja === w.metryka.integracja) &&
       e.occurredAtMs >= od &&
+      e.occurredAtMs <= d.teraz.getTime() &&
       e.id !== wyklucz &&
       (w.gdzie ?? []).every((g) => ocenWarunek(g, { zdarzenie: e.properties, teraz: d.teraz })),
   ).length;
@@ -132,7 +133,7 @@ function ocenFlow(w: WarunekFlow, d: DaneDoFiltra): boolean {
     flowId = d.flow.flowId;
   } else flowId = w.flow;
   const od = w.okno.od === "ostatnich_dni" ? d.teraz.getTime() - w.okno.dni * DZIEN_MS : -Infinity;
-  const byl = d.historia.przebiegi.some((p) => p.flowId === flowId && p.enteredAtMs >= od && p.id !== (d.flow?.uczestnikId ?? null));
+  const byl = d.historia.przebiegi.some((p) => p.flowId === flowId && p.enteredAtMs >= od && p.enteredAtMs <= d.teraz.getTime() && p.id !== (d.flow?.uczestnikId ?? null));
   return byl === w.jest;
 }
 

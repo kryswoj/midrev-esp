@@ -20,7 +20,7 @@ import {
   type ZrodloWyzwalacza,
 } from "../../domain/automatyzacje/graf";
 import { filtrPusty, ocenFiltr, opiszFiltr } from "../../domain/filtry";
-import { emitujPominiecie, kontekstUczestnika, OPISY_POMINIEC, profilSpelnia, type PowodPominiecia } from "./bramka-filtrow";
+import { emitujPominiecie, kontekstUczestnika, niedawnyMail, OPISY_POMINIEC, profilSpelnia, type PowodPominiecia } from "./bramka-filtrow";
 import {
   type ZdarzenieWyzwalajace,
   kluczWejscia,
@@ -550,8 +550,7 @@ type WynikWiadomosci =
   /** mail pominiety (dodatkowy filtr, smart sending): osoba idzie dalej, bez przesuwania */
   | { ok: false; pominiecie: PowodPominiecia };
 
-/** Stany wiadomosci, ktore NIE sa wysylka (smart sending ich nie liczy). */
-const STANY_NIEWYSLANE = ["suppressed", "failed", "dropped"];
+
 
 /**
  * Wezel e-mail: buduje wiadomosc `queued` dla uczestnika Z MIGAWKI jego wersji.
@@ -598,18 +597,9 @@ async function zbudujWiadomoscWezla(
   // budujace mail tej samej osobie w tej samej chwili ida po kolei, wiec smart sending drugiego
   // WIDZI wiadomosc pierwszego (read committed: kolejne polecenie po blokadzie ma nowy obraz).
   await klient.query("select pg_advisory_xact_lock(hashtextextended($1, 7150416))", [`wiadomosc-osoby:${tenantId}:${u.profile_id}`]);
-  if (w.smartSending && !transakcyjny) {
-    const { rows: ss } = await klient.query(
-      `select exists (
-         select 1 from messages m
-          where m.tenant_id = $1 and m.profile_id = $2
-            and m.created_at > now() - make_interval(hours => $3::int)
-            and not (m.current_state = any($4::text[]))
-            and not (m.source_type = 'journey' and m.source_id = $5 and m.journey_run_id is not distinct from $6::uuid)
-       ) as niedawno`,
-      [tenantId, u.profile_id, w.smartSendingGodzin ?? SMART_SENDING_GODZIN, STANY_NIEWYSLANE, emailId, u.id],
-    );
-    if (ss[0].niedawno) return { ok: false, pominiecie: "smart_sending" };
+  if (w.smartSending && !transakcyjny
+    && (await niedawnyMail(klient, tenantId, u.profile_id, w.smartSendingGodzin ?? SMART_SENDING_GODZIN, { zKolejka: true, pominPrzebieg: { emailId, uczestnikId: u.id } }))) {
+    return { ok: false, pominiecie: "smart_sending" };
   }
 
   let temat: string;

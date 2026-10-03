@@ -131,6 +131,7 @@ const licznik = z.number().int().min(0).max(MAX_LICZNIK);
  *    zdarzenie, ktore ja wprowadzilo, sie nie liczy. Tylko w automatyzacji;
  *  - `ostatnich_dni`: od `teraz - N dni`;
  *  - `zawsze`: cala historia.
+ * Zawsze do `teraz` wlacznie: zdarzenie z czasem w przyszlosci (backfill z API) sie nie liczy.
  */
 export const schematOkna = z.discriminatedUnion("od", [
   z.object({ od: z.literal("startu_flow") }),

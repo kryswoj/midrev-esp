@@ -339,7 +339,7 @@ function WierszWarunku({ w, rodzaje, katalog, metryki, wFlow, onZmiana, onUsun }
           <option value="nie">nie był</option>
           <option value="tak">był</option>
         </select>
-        <select className="pole min-w-0 flex-1" aria-label="automatyzacja" value={w.flow} onChange={(e) => onZmiana({ ...w, flow: e.target.value })}>
+        <select className="pole min-w-[180px] flex-1" aria-label="automatyzacja" value={w.flow} onChange={(e) => onZmiana({ ...w, flow: e.target.value })}>
           {wFlow ? <option value="biezacy">w tej automatyzacji</option> : <option value="" disabled>wybierz automatyzację…</option>}
           {flowy.map((f) => <option key={f.id} value={f.id}>w „{f.nazwa}”</option>)}
         </select>

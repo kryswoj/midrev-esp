@@ -93,6 +93,8 @@ function kompilujMetryke(w: WarunekMetryki, z: ZrodloSql, p: Parametry, teraz: D
   } else if (w.okno.od === "ostatnich_dni") {
     warunki.push(`me.occurred_at >= ${p.dodaj(teraz.toISOString(), "timestamptz")} - make_interval(days => ${p.dodaj(w.okno.dni, "int")})`);
   }
+  // zdarzenia z czasem w przyszlosci (API przyjmuje do roku naprzod jako backfill) sie nie licza
+  warunki.push(`me.occurred_at <= ${p.dodaj(teraz.toISOString(), "timestamptz")}`);
   for (const g of w.gdzie ?? []) warunki.push(kompilujWarunek(g, { zdarzenie: "me.properties" }, p, teraz, k));
   const licznik = `(select count(*) from metric_events me join metrics mm on mm.tenant_id = me.tenant_id and mm.id = me.metric_id where ${warunki.join(" and ")})`;
   if (w.operator === "miedzy") {
@@ -111,6 +113,7 @@ function kompilujFlow(w: WarunekFlow, z: ZrodloSql, p: Parametry, teraz: Date, k
   } else flowId = w.flow;
   const warunki = [`fp.tenant_id = ${pr.tenantId}`, `fp.profile_id = ${pr.id}`, `fp.flow_id = ${p.dodaj(flowId, "uuid")}`];
   if (w.okno.od === "ostatnich_dni") warunki.push(`fp.entered_at >= ${p.dodaj(teraz.toISOString(), "timestamptz")} - make_interval(days => ${p.dodaj(w.okno.dni, "int")})`);
+  warunki.push(`fp.entered_at <= ${p.dodaj(teraz.toISOString(), "timestamptz")}`);
   if (k?.uczestnikId) warunki.push(`fp.id <> ${p.dodaj(k.uczestnikId, "uuid")}`);
   return `(${w.jest ? "" : "not "}exists (select 1 from flow_participants fp where ${warunki.join(" and ")}))`;
 }

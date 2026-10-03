@@ -1,5 +1,5 @@
 import type pg from "pg";
-import { schematGrafu, type Graf } from "../../domain/automatyzacje/graf";
+import { SMART_SENDING_GODZIN, schematGrafu, type Graf } from "../../domain/automatyzacje/graf";
 import { filtrPusty, opiszFiltr, zapytanieFiltrowane, type Filtr, type KontekstFlowSql, type ZrodloSql } from "../../domain/filtry";
 import { zapiszZdarzenie } from "../zdarzenia/zapisz-zdarzenie";
 
@@ -39,6 +39,44 @@ export async function profilSpelnia(klient: Klient, tenantId: string, profileId:
 /** Kontekst flow z wiersza uczestnika (entered_at jako tekst z bazy, bez utraty mikrosekund). */
 export function kontekstUczestnika(u: { id: string | null; flow_id: string; entered_at: string; trigger_event_id: string | null }): KontekstFlowSql {
   return { flowId: u.flow_id, start: u.entered_at, zdarzenieWyzwalajaceId: u.trigger_event_id, uczestnikId: u.id };
+}
+
+/** Stany wiadomosci, ktore NIE sa wysylka (smart sending ich nie liczy). */
+export const STANY_NIEWYSLANE = ["suppressed", "failed", "dropped"];
+/** Stany, w ktorych wiadomosc jeszcze nie wyszla (przy budowie licza sie, przy wysylce nie). */
+export const STANY_W_KOLEJCE = ["queued", "claimed"];
+
+/**
+ * Smart sending (plan 3.5): czy osoba dostala od nas mail w ostatnich N godzinach. Czas maila =
+ * moment WYSLANIA (zdarzenie `sent`), a gdy go jeszcze nie ma, utworzenie: mail utworzony 20 h
+ * temu i wyslany godzine temu blokuje. `zKolejka`: przy BUDOWIE licza sie tez maile czekajace
+ * w kolejce (dwa flow naraz = 1 mail); przy WYSYLCE tylko te, ktore juz wyszly (pierwszy
+ * z dwoch czekajacych wychodzi, drugi wtedy widzi go jako wyslany).
+ */
+export async function niedawnyMail(
+  klient: Klient,
+  tenantId: string,
+  profileId: string,
+  godzin: number,
+  opcje: { zKolejka: boolean; pominWiadomosc?: string | null; pominPrzebieg?: { emailId: string; uczestnikId: string } | null },
+): Promise<boolean> {
+  const { rows } = await klient.query(
+    `select exists (
+       select 1 from messages m
+        where m.tenant_id = $1 and m.profile_id = $2
+          and m.created_at > now() - make_interval(hours => $3::int) - interval '7 days'
+          and not (m.current_state = any($4::text[]))
+          and ($5::boolean or not (m.current_state = any($6::text[])))
+          and m.id is distinct from $7::uuid
+          and not (m.source_type = 'journey' and m.source_id is not distinct from $8::uuid and m.journey_run_id is not distinct from $9::uuid)
+          and coalesce((select max(e.occurred_at) from message_events e
+                         where e.tenant_id = m.tenant_id and e.message_id = m.id and e.event_type = 'sent'), m.created_at)
+              > now() - make_interval(hours => $3::int)
+     ) as niedawno`,
+    [tenantId, profileId, godzin, STANY_NIEWYSLANE, opcje.zKolejka, STANY_W_KOLEJCE, opcje.pominWiadomosc ?? null,
+     opcje.pominPrzebieg?.emailId ?? null, opcje.pominPrzebieg?.uczestnikId ?? null],
+  );
+  return rows[0].niedawno === true;
 }
 
 export type PowodPominiecia = "filtr_profilu" | "dodatkowy_filtr" | "smart_sending" | "blad_definicji";
@@ -103,7 +141,7 @@ export async function bramkaFiltrowPrzedWysylka(
   if (!u) return { wolno: true };
   // tani test bez parsowania: definicja bez filtrow (v1, v2, v3 bez filtrow) nie ma czego sprawdzac
   const tekst = JSON.stringify(u.definition);
-  if (!tekst.includes('"filtrProfilu"') && !tekst.includes('"dodatkoweFiltry"')) return { wolno: true };
+  if (!tekst.includes('"filtrProfilu"') && !tekst.includes('"dodatkoweFiltry"') && !tekst.includes('"smartSending":true')) return { wolno: true };
   const parsed = schematGrafu.safeParse(u.definition);
   const g: Graf | null = parsed.success ? parsed.data : null;
   let powod: PowodPominiecia | null = null;
@@ -118,9 +156,26 @@ export async function bramkaFiltrowPrzedWysylka(
     } else if (wezelMaila?.typ === "email" && !(await profilSpelnia(klient, tenantId, u.profile_id, wezelMaila.dodatkoweFiltry, kontekst))) {
       powod = "dodatkowy_filtr";
       filtrOpis = opiszFiltr(wezelMaila.dodatkoweFiltry);
+    } else if (wezelMaila?.typ === "email" && wezelMaila.smartSending && !wezelMaila.transakcyjny
+      && (await niedawnyMail(klient, tenantId, u.profile_id, wezelMaila.smartSendingGodzin ?? SMART_SENDING_GODZIN, { zKolejka: false, pominWiadomosc: m.messageId }))) {
+      // smart sending tez TUZ PRZED wysylka (Klaviyo ocenia go przy wysylce): mail czekal w
+      // kolejce, a w tym czasie wyszla kampania albo inny flow
+      powod = "smart_sending";
     }
   }
   if (!powod) return { wolno: true };
+  if (powod === "filtr_profilu") {
+    // Kto nie spelnia filtra profilu, WYCHODZI z automatyzacji (jak przed kazda akcja).
+    // `skip locked`: jesli worker przejsc trzyma teraz ten przebieg, nie czekamy (kolejnosc
+    // blokad wiadomosc -> uczestnik); worker sprawdzi filtr przed nastepna akcja sam.
+    await klient.query(
+      `update flow_participants set status = 'wyszedl', exit_reason = 'filtr_profilu', finished_at = now(), resume_at = null
+        where tenant_id = $1 and id = (
+          select id from flow_participants where tenant_id = $1 and id = $2 and status = 'w_toku' for update skip locked
+        )`,
+      [tenantId, u.id],
+    );
+  }
   const wezelId = g?.wezly.find((w) => w.typ === "email" && w.emailId === m.emailId)?.id ?? u.node_id;
   await klient.query(
     `insert into flow_transitions (tenant_id, participant_id, flow_id, profile_id, version, from_node, to_node, kind, detail, occurred_at)
