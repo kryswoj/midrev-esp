@@ -476,6 +476,40 @@ describe("Shopify: instalacja, webhooki, RODO, import (baza testowa + atrapa)", 
     expect(o[0]).toMatchObject({ status: "processing", suma: 25800 });
   });
 
+  it("zakup zamyka koszyki osoby tylko w TYM sklepie i tylko sprzed zamówienia (także przy orders/updated)", async () => {
+    const pool = getPool();
+    const profileId = (await pool.query("select profile_id from carts where tenant_id = $1 and store_id = $2 and profile_id is not null limit 1", [tenantA, storeA])).rows[0].profile_id;
+    const drugi = (
+      await pool.query(
+        `insert into stores (tenant_id, platform, base_url, credentials_encrypted, status)
+         values ($1, 'woocommerce', 'https://drugi-sklep-shopify-test.example', '\\x00'::bytea, 'connected') returning id`,
+        [tenantA],
+      )
+    ).rows[0].id;
+    const zamowione = new Date(Math.floor(Date.now() / 1000) * 1000 - 600_000);
+    const przed = new Date(zamowione.getTime() - 60_000).toISOString();
+    const po = new Date(zamowione.getTime() + 60_000).toISOString();
+    const koszyk = (sklep: string, token: string, kiedy: string) =>
+      pool.query(
+        `insert into carts (tenant_id, store_id, platform_token, profile_id, stage, items, source_updated_at)
+         values ($1, $2, $3, $4, 'cart', '[]', $5)`,
+        [tenantA, sklep, token, profileId, kiedy],
+      );
+    await koszyk(drugi, "INNY-SKLEP-1", przed);
+    await koszyk(storeA, "cart:PO-ZAKUPIE-1", po);
+    await koszyk(storeA, "cart:PRZED-ZAKUPEM-1", przed);
+    // spóźniony orders/updated tego samego zamówienia (created_at = zamowione)
+    const tekst = FX("zamowienie.json").replace(/2026-10-03T10:20:00\+02:00/g, zamowione.toISOString()).replace("2026-10-03T10:20:05+02:00", new Date().toISOString());
+    expect((await postWebhook(webhook("orders/updated", tekst))).status).toBe(200);
+    await przetworzSurowe(tenantA);
+    const etap = async (token: string) => (await pool.query("select stage from carts where tenant_id = $1 and platform_token = $2", [tenantA, token])).rows[0].stage;
+    expect(await etap("INNY-SKLEP-1")).toBe("cart");
+    expect(await etap("cart:PO-ZAKUPIE-1")).toBe("cart");
+    expect(await etap("cart:PRZED-ZAKUPEM-1")).toBe("ordered");
+    await pool.query("delete from carts where tenant_id = $1 and platform_token = any($2::text[])", [tenantA, ["INNY-SKLEP-1", "cart:PO-ZAKUPIE-1", "cart:PRZED-ZAKUPEM-1"]]);
+    await pool.query("delete from stores where id = $1", [drugi]);
+  });
+
   it("wysyłka, zwrot, anulowanie: Fulfilled/Refunded Order raz, z datą ze źródła; starszy update nie cofa statusu", async () => {
     expect((await postWebhook(webhook("orders/fulfilled", FX("zamowienie-wyslane.json")))).status).toBe(200);
     expect((await postWebhook(webhook("orders/updated", FX("zamowienie-wyslane.json")))).status).toBe(200);
@@ -505,6 +539,15 @@ describe("Shopify: instalacja, webhooki, RODO, import (baza testowa + atrapa)", 
     expect((await postWebhook(webhook("customers_email_marketing_consent/update", FX("zgoda-zapis.json")))).status).toBe(200);
     await przetworzSurowe(tenantA);
     expect((await zgody()).map((z) => z.state)).toEqual(["granted", "withdrawn"]);
+    // 3d305d4 (P1): nowszy wypis ze Shopify po naszym wypisie też się zapisuje, więc spóźniona
+    // zgoda starsza od niego (ale nowsza od naszego wypisu) nie przywraca zgody
+    const zgoda = (stan: string, kiedy: string) =>
+      FX("zgoda-zapis.json").replace('"subscribed"', JSON.stringify(stan)).replace("2026-10-03T10:30:00+02:00", kiedy);
+    expect((await postWebhook(webhook("customers_email_marketing_consent/update", zgoda("unsubscribed", "2026-10-03T09:40:00Z")))).status).toBe(200);
+    await przetworzSurowe(tenantA);
+    expect((await postWebhook(webhook("customers_email_marketing_consent/update", zgoda("subscribed", "2026-10-03T09:35:00Z")))).status).toBe(200);
+    await przetworzSurowe(tenantA);
+    expect((await zgody()).map((z) => z.state)).toEqual(["granted", "withdrawn", "withdrawn"]);
   });
 
   it("katalog: produkt z webhooka (warianty, cena od, przekreślona), usunięcie = active=false", async () => {

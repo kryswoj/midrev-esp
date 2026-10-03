@@ -202,8 +202,10 @@ async function zamowienie(k: Kontekst, p: any): Promise<boolean> {
 
 /**
  * Zakup zamyka koszyk: po tokenach checkoutu/koszyka z zamówienia (webhook checkoutu i piksel)
- * oraz każdy otwarty koszyk tej osoby sprzed zamówienia. To szybkie wyjście z flow porzuconych
- * obok filtra „nie złożył zamówienia od startu flow” (E4b).
+ * oraz otwarte koszyki tej osoby W TYM SKLEPIE zmienione NIE PÓŹNIEJ niż złożenie zamówienia
+ * (ta sama reguła co `zamknijKoszykiZamowieniem` portu, 3b0e65a: woła się to przy każdym
+ * orders/updated, więc okno „+5 minut” zamykałoby nowy koszyk założony zaraz po zakupie).
+ * To szybkie wyjście z flow porzuconych obok filtra „nie złożył zamówienia od startu flow” (E4b).
  */
 async function zamknijKoszyki(k: Kontekst, z: ZamowienieSklepu, profileId: string | null, p: any) {
   const tokeny = [typeof p?.checkout_token === "string" ? p.checkout_token : null, typeof p?.cart_token === "string" ? `cart:${p.cart_token}` : null].filter(
@@ -215,7 +217,7 @@ async function zamknijKoszyki(k: Kontekst, z: ZamowienieSklepu, profileId: strin
       where tenant_id = $1 and stage <> 'ordered' and (
             (store_id = $2 and platform_token = any($3::text[]))
          or (store_id is null and $5::text is not null and platform_token = $5)
-         or ($6::uuid is not null and store_id = $2 and profile_id = $6 and source_updated_at <= $7::timestamptz + interval '5 minutes'))`,
+         or ($6::uuid is not null and store_id = $2 and profile_id = $6 and source_updated_at <= $7::timestamptz))`,
     [k.tenantId, k.storeId, tokeny, z.externalId, tokenKoszyka, profileId, z.occurredAt],
   );
 }
