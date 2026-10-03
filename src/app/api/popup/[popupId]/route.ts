@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { KlauzulaNieaktualna, przyjmijZgloszenie, schematZgloszenia } from "../../../../usecases/popupy/zglos-popup";
 import { popupPubliczny } from "../../../../usecases/popupy/zarzadzaj";
-import { adresKlienta } from "../../../../adapters/ip-klienta";
+import { CORS, ipZadania, stworzLimit } from "../limit";
 import { przeczytajOgraniczone } from "../../przeczytaj-ograniczone";
 
 /**
@@ -11,65 +11,12 @@ import { przeczytajOgraniczone } from "../../przeczytaj-ograniczone";
  * dlatego CORS jest otwarty, a ochrona to walidacja, limity dlugosci i rate limit.
  */
 
-// Skrypt on-site siedzi na dowolnej domenie sklepu, wiec origin jest z definicji
-// obcy. `*` jest tu poprawne: endpoint nie czyta ciasteczek ani sesji, wiec nie
-// ma czego ukrasc cudzym originem; dane ida tylko W STRONE serwera.
-const CORS: Record<string, string> = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type",
-  "Access-Control-Max-Age": "86400",
-};
+// Limit zgłoszeń: 5 na minutę z jednego IP, 120 na minutę na cały proces (patrz limit.ts).
+const przekroczonyLimit = stworzLimit(5, 120);
 
-// Prosty rate limit w pamieci procesu: 5 zgloszen na minute z jednego IP.
-// Swiadomy kompromis fazy 1 - nie przezyje restartu i nie dziala miedzy replikami,
-// ale zatrzymuje najgorsze: petle floodujace baze profilami z jednego zrodla.
-//
-// X-Forwarded-For jest naglowkiem od klienta, wiec per-IP jest tylko pierwsza
-// linia (znalezisko review: falszywy XFF go omija). Dlatego obok dziala limit
-// GLOBALNY na caly proces: nawet z tysiacem zmyslonych adresow flood zatrzymuje
-// sie na twardym suficie, a mapa licznikow nie rosnie bez konca.
-const LIMIT_IP = 5;
-const LIMIT_GLOBALNY = 120;
-const OKNO_MS = 60_000;
-const liczniki = new Map<string, { ile: number; resetPo: number }>();
-let globalny = { ile: 0, resetPo: 0 };
-
-function przekroczonyLimit(ip: string): boolean {
-  const teraz = Date.now();
-
-  // najpierw per-IP: request odbity limitem IP nie moze zjadac puli globalnej,
-  // inaczej jeden adres spamem odrzucanych POST-ow wylacza popupy wszystkim
-  // (znalezisko drugiej rundy review)
-  // sprzatanie przy okazji, zeby mapa nie rosla bez konca po tygodniu ruchu;
-  // twardy sufit rozmiaru chroni pamiec przed zalewem zmyslonych adresow z XFF
-  if (liczniki.size > 10_000) {
-    for (const [klucz, wpis] of liczniki) if (wpis.resetPo <= teraz) liczniki.delete(klucz);
-    if (liczniki.size > 10_000) liczniki.clear();
-  }
-  const wpis = liczniki.get(ip);
-  if (!wpis || wpis.resetPo <= teraz) {
-    liczniki.set(ip, { ile: 1, resetPo: teraz + OKNO_MS });
-  } else {
-    wpis.ile += 1;
-    if (wpis.ile > LIMIT_IP) return true;
-  }
-
-  // pula globalna liczy tylko requesty, ktore przeszly limit per-IP
-  if (globalny.resetPo <= teraz) globalny = { ile: 0, resetPo: teraz + OKNO_MS };
-  globalny.ile += 1;
-  return globalny.ile > LIMIT_GLOBALNY;
-}
-
-function ipZadania(zadanie: NextRequest): string {
-  // adres z naglowka ustawionego przez ZAUFANE proxy (TRUSTED_PROXY): pierwszy wpis
-  // X-Forwarded-For podaje klient i kazda proba dostawalaby nowy licznik
-  return adresKlienta(zadanie.headers) ?? "nieznane";
-}
-
-// zgloszenie to email + imie; wiekszy payload nie ma prawa istniec, a czytanie
-// go w calosci przed walidacja byloby zaproszeniem do zapychania pamieci
-const MAKS_CIALO_B = 4096;
+// zgloszenie to email, imie, telefon i odpowiedzi na pytania; wiekszy payload nie ma prawa
+// istniec, a czytanie go w calosci przed walidacja byloby zaproszeniem do zapychania pamieci
+const MAKS_CIALO_B = 8192;
 
 
 // id waliduje zod, a nie bezposrednio SQL: zly format uuid w zapytaniu pg konczy sie
@@ -152,8 +99,9 @@ export async function POST(zadanie: NextRequest, ctx: { params: Promise<{ popupI
   if (!wynik) {
     return NextResponse.json({ ok: false, blad: "nie_znaleziono" }, { status: 404, headers: CORS });
   }
+  // discountCode dla skryptu 1.1 (stary popup); kody i token dla skryptu 2.x
   return NextResponse.json(
-    { ok: true, ...(wynik.discountCode ? { discountCode: wynik.discountCode } : {}) },
+    { ok: true, ...(wynik.discountCode ? { discountCode: wynik.discountCode } : {}), kody: wynik.kody, token: wynik.token },
     { headers: CORS },
   );
 }

@@ -49,7 +49,7 @@ export async function popupyTenanta(tenantId: string): Promise<WierszPopupu[]> {
        from popups p
        ${ZLACZENIE_WERSJI}
        left join lists l on l.tenant_id = p.tenant_id and l.id = p.list_id
-      where p.tenant_id = $1
+      where p.tenant_id = $1 and p.archived_at is null
       order by p.created_at desc`,
     [tenantId],
   );
@@ -284,7 +284,11 @@ export async function ustawAktywnosc(
   aktywny: boolean,
 ): Promise<boolean> {
   const wynik = await getPool().query(
-    "update popups set active = $3 where tenant_id = $1 and id = $2",
+    // wlaczyc mozna tylko formularz, ktory ma wersje do pokazania: opublikowana definicje (0043)
+    // albo stary format (draft i definition puste). Szkic nigdy nieopublikowany i archiwum: nie.
+    `update popups set active = $3
+      where tenant_id = $1 and id = $2
+        and (not $3 or (archived_at is null and (definition is not null or draft is null)))`,
     [tenantId, popupId, aktywny],
   );
   return (wynik.rowCount ?? 0) > 0;
@@ -303,7 +307,7 @@ export async function aktywnyPopup(tenantId: string): Promise<Popup | null> {
        from popups p
        join popup_consent_versions v
          on v.tenant_id = p.tenant_id and v.popup_id = p.id and v.version = p.consent_version
-      where p.tenant_id = $1 and p.active
+      where p.tenant_id = $1 and p.active and p.archived_at is null
       order by p.created_at desc
       limit 1`,
     [tenantId],
@@ -323,7 +327,7 @@ export async function popupPubliczny(popupId: string): Promise<Omit<Popup, "disc
        from popups p
        join popup_consent_versions v
          on v.tenant_id = p.tenant_id and v.popup_id = p.id and v.version = p.consent_version
-      where p.id = $1 and p.active`,
+      where p.id = $1 and p.active and p.archived_at is null`,
     [popupId],
   );
   return rows[0] ?? null;
