@@ -6,7 +6,9 @@
 #   link.midrev.pl  WYŁĄCZNIE trasy, które woła odbiorca maila albo strona sklepu:
 #                   /r (klik), /u (wypis + RFC 8058 One-Click POST), /api/o (pixel),
 #                   /o (obrazy w mailach), /s (skrypt popupów), /api/popup (dane i zapis
-#                   popupu). Wszystko inne na link. = 404 z Caddy, zanim dotknie aplikacji.
+#                   popupu), /js/v1/{klucz}.js (skrypt midrev.js, 0044), /client/{events,
+#                   profiles,subscriptions} (Client API zgodne z Klaviyo, klucz publiczny
+#                   strony w ?company_id=). Wszystko inne na link. = 404 z Caddy, zanim dotknie aplikacji.
 #                   Lista pochodzi z src/trasy-publiczne.ts (TRASY_PUBLICZNE) po odjęciu
 #                   tras panelu, sklepu i klienta agencji (/logowanie, /_next, /favicon.ico,
 #                   /akceptacja, /api/webhooks, /api/zdrowie). Nowa trasa odbiorcy = dopisać tutaj.
@@ -119,7 +121,25 @@ link.midrev.pl {
 		method GET HEAD POST OPTIONS
 	}
 
+	# integracja custom (0044): skrypt midrev.js po kluczu publicznym strony (6-10 znaków)
+	@odbiorca_skrypt {
+		path_regexp skrypt ^/js/v1/[A-Za-z0-9]{6,10}\.js$
+		method GET HEAD
+	}
+	# Client API zgodne z Klaviyo: zapis zdarzeń, identyfikacja, subskrypcja z dowodem zgody;
+	# z ukośnikiem na końcu i bez (klaviyo.js woła `/client/events/`), preflight CORS (OPTIONS)
+	@odbiorca_klient {
+		path_regexp klient ^/client/(?:events|profiles|subscriptions)/?$
+		method POST OPTIONS
+	}
+
 	handle @odbiorca_odczyt {
+		import upstream
+	}
+	handle @odbiorca_skrypt {
+		import upstream
+	}
+	handle @odbiorca_klient {
 		import upstream
 	}
 	handle @odbiorca_wypis {
@@ -181,6 +201,14 @@ Disallow: /
 # 	@api_klaviyo {
 # 		path_regexp api ^/api/events/?$
 # 		method POST
+# 	}
+# 	# Client API (0044): to samo co na link., gdyby strony miały wołać api.midrev.pl
+# 	@api_klient {
+# 		path_regexp klient ^/client/(?:events|profiles|subscriptions)/?$
+# 		method POST OPTIONS
+# 	}
+# 	handle @api_klient {
+# 		import upstream
 # 	}
 # 	handle @api_klaviyo {
 # 		import upstream

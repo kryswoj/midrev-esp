@@ -68,7 +68,7 @@ const nextConfig: NextConfig = {
       // `default-src 'none'; sandbox`) i API zostają przy swoich nagłówkach — drugi
       // nagłówek CSP zaostrzałby je w sposób, którego nie chcemy tu zgadywać.
       {
-        source: "/((?!o/|api/|s/|_next/).*)",
+        source: "/((?!o/|api/|s/|js/|client/|_next/).*)",
         headers: [
           { key: "Content-Security-Policy", value: "frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'" },
           // panel nie jest stroną do indeksowania (akceptacja i wypis też nie)

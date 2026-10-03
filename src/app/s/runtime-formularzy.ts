@@ -414,6 +414,8 @@ export function uruchomFormularze(K: any, CSS: string, czyPokazac: (r: any, k: a
             zapisz(P + "zapisany", "1");
             zapisz(P + f.id + "_z", "1");
             usun(P + f.id + "_t");
+            // integracja z midrev.js (0044): skrypt strony rozpozna osobę (po zgodzie na cookies)
+            try { d.dispatchEvent(new CustomEvent("midrev:identify", { detail: { email: stan.dane.email } })); } catch (e) { /* bez midrev.js */ }
           }
           // właściwości wysłane: kolejny krok wysyła już tylko swoje
           stan.dane.pola = {};

@@ -33,6 +33,7 @@ const ZRODLA_ZGOD: Record<string, string> = {
 
 export function zrodloZgody(source: string): string {
   if (source.startsWith("popup:")) return `popup „${source.slice("popup:".length)}”`;
+  if (source.startsWith("strona:")) return `formularz na stronie „${source.slice("strona:".length)}”`;
   return ZRODLA_ZGOD[source] ?? source;
 }
 

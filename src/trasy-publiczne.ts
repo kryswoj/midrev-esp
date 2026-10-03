@@ -41,6 +41,12 @@ export const TRASY_PUBLICZNE = [
   // API zgodne z Klaviyo (klucz API tenanta w nagłówku Authorization, nie sesja);
   // docelowo pod osobnym hostem api.midrev.pl (deploy/Caddyfile)
   "/api/events",
+  // integracja „custom” jak Klaviyo (0044): skrypt midrev.js po kluczu publicznym strony
+  // i Client API (`?company_id=` = klucz publiczny; tylko zapis, CORS, limity per IP i klucz)
+  "/js/v1",
+  "/client/events",
+  "/client/profiles",
+  "/client/subscriptions",
 ] as const;
 
 /**
@@ -50,7 +56,7 @@ export const TRASY_PUBLICZNE = [
  * `skipTrailingSlashRedirect`, a middleware przepisuje (rewrite, bez 308) te ścieżki na
  * wersję bez ukośnika. Pozostałe ścieżki z ukośnikiem dostają dotychczasowe 308.
  */
-export const TRASY_API_Z_UKOSNIKIEM = ["/api/events"] as const;
+export const TRASY_API_Z_UKOSNIKIEM = ["/api/events", "/client/events", "/client/profiles", "/client/subscriptions"] as const;
 
 export function czyTrasaPubliczna(sciezka: string): boolean {
   return TRASY_PUBLICZNE.some((p) => sciezka === p || sciezka.startsWith(p + "/"));

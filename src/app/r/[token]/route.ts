@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getPool } from "../../../adapters/db/pool";
 import { config } from "../../../config";
 import { zapiszZaangazowanie } from "../../../usecases/wysylka/zaangazowanie";
+import { celZIdentyfikacja } from "../../../usecases/integracja/token-linku";
 import {
   adresIp,
   agentUzytkownika,
@@ -40,7 +41,7 @@ export async function GET(zadanie: NextRequest, ctx: { params: Promise<{ token: 
   const pool = getPool();
 
   const { rows } = await pool.query(
-    `select tenant_id, id, links from messages
+    `select tenant_id, id, profile_id, links from messages
       where click_token = $1 and source_type in ('campaign', 'journey')`,
     [token],
   );
@@ -66,5 +67,8 @@ export async function GET(zadanie: NextRequest, ctx: { params: Promise<{ token: 
     `kliknięcie wiadomości ${wiersz.id}`,
   );
 
-  return NextResponse.redirect(cel, { status: 302 });
+  // D5: na domenie sklepu tenanta cel dostaje token `_mx` (skrypt midrev.js rozpozna osobę
+  // po zgodzie na cookies). Atrybucja i zapis kliku wyżej używają celu BEZ tokenu.
+  const celKoncowy = await celZIdentyfikacja(wiersz.tenant_id, wiersz.profile_id ?? null, cel);
+  return NextResponse.redirect(celKoncowy, { status: 302 });
 }

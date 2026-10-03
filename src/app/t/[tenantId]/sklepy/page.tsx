@@ -4,6 +4,7 @@ import { nazwaMozliwosci } from "../../../../domain/statusy";
 import { sklepyZeStanemWebhookow } from "../../../../adapters/store/stan-webhookow";
 import type { StanWebhookow, WpisWebhooka } from "../../../../adapters/store/webhooki";
 import { ocenSklep, PROG_CISZY_GODZIN, type OcenaSklepu } from "../../../../usecases/cisza-sklepow";
+import { kluczStronyTenanta } from "../../../../usecases/integracja/klucz-strony";
 import { importujAkcja } from "../../../akcje";
 import { Alert, Badge, Button, Card, PrzyciskFormularza, CardBody, CardHeader, EmptyState, Icon, MobileList, MobileListItem, Table, TBody, Td, Th, THead } from "../../../ui";
 import { Komunikat, Naglowek } from "../naglowek";
@@ -53,7 +54,7 @@ export default async function Sklepy({
   // renderowac sam segment strony) - patrz src/app/autoryzacja.ts
   await wymaganyTenant(tenantId);
   const { ok, blad } = await searchParams;
-  const sklepy = await sklepyZeStanemWebhookow(tenantId);
+  const [sklepy, kluczStrony] = await Promise.all([sklepyZeStanemWebhookow(tenantId), kluczStronyTenanta(tenantId)]);
 
   return (
     <>
@@ -65,6 +66,25 @@ export default async function Sklepy({
 
       <div className="tresc-strony">
         <div className="flex w-full max-w-[900px] flex-col gap-6">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <a href="#woocommerce" className="karta flex items-start gap-3 p-4 transition-colors hover:border-[var(--color-akcent)]">
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-[9px] bg-[var(--color-akcent-tlo)] text-[var(--color-akcent)]"><Icon name="sklep" size={18} /></span>
+              <span className="min-w-0">
+                <span className="block text-[14px] font-semibold text-[var(--color-tekst)]">WooCommerce</span>
+                <span className="block text-[13px] leading-[19px] text-[var(--color-tekst-2)]">Zamówienia, klienci i webhooki przez klucze REST.</span>
+              </span>
+            </a>
+            <a href={`/t/${tenantId}/sklepy/wlasna-strona`} className="karta flex items-start gap-3 p-4 transition-colors hover:border-[var(--color-akcent)]">
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-[9px] bg-[var(--color-akcent-tlo)] text-[var(--color-akcent)]"><Icon name="formularz" size={18} /></span>
+              <span className="min-w-0">
+                <span className="flex items-center gap-2 text-[14px] font-semibold text-[var(--color-tekst)]">
+                  Własna strona / inny sklep
+                  {kluczStrony?.domeny.length ? <Badge ton="ok">podłączona</Badge> : null}
+                </span>
+                <span className="block text-[13px] leading-[19px] text-[var(--color-tekst-2)]">Jeden kod jak w Klaviyo: Magento, PrestaShop, IdoSell, własny sklep, landing.</span>
+              </span>
+            </a>
+          </div>
           {sklepy.length === 0 ? (
             <Card>
               <CardHeader title="Podłączony sklep" description="Źródło zamówień, profili i zdarzeń dla tego konta." />
@@ -144,7 +164,7 @@ export default async function Sklepy({
             </div>
           )}
 
-          <Card>
+          <Card id="woocommerce">
             <CardHeader title={sklepy.length === 0 ? "Podłącz sklep WooCommerce" : "Dodaj kolejny sklep WooCommerce"} description="Klucze są sprawdzane przed zapisaniem, a po połączeniu panel zakłada wymagane webhooki." />
             <CardBody className="p-0 max-md:p-0">
               <FormularzPodlaczenia tenantId={tenantId} />
