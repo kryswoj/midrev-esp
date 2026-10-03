@@ -137,6 +137,16 @@ describe("Wtyczka WooCommerce po stronie ESP", () => {
     expect(role.map((r) => r.role)).toEqual(expect.arrayContaining(["added_to_cart", "placed_order", "started_checkout", "viewed_product"]));
     const { rows: sk } = await getPool().query("select platform, link_domains, ga4_datalayer, require_cookie_consent from site_keys where tenant_id = $1", [tenantId]);
     expect(sk[0]).toMatchObject({ platform: "woocommerce", link_domains: ["127.0.0.1"], ga4_datalayer: false, require_cookie_consent: true });
+    // późniejsze wyłączenie wymogu na ekranie „Własna strona” nie zdejmuje zgody ze sklepu Woo:
+    // midrev.js i tak czeka na zgodę (wtyczka bierze __mx_id za zgodę, review r4)
+    await getPool().query("update site_keys set require_cookie_consent = false where tenant_id = $1", [tenantId]);
+    const { wyczyscPamiecKluczy } = await import("../src/usecases/integracja/klucz-strony");
+    wyczyscPamiecKluczy();
+    const { GET: getSkrypt } = await import("../src/app/js/v1/[plik]/route");
+    const js = await (await getSkrypt(new NextRequest(new URL(`/js/v1/${w.site_key}.js`, "https://link.midrev.test")), { params: Promise.resolve({ plik: `${w.site_key}.js` }) })).text();
+    expect(js).toContain('"zgoda":true');
+    await getPool().query("update site_keys set require_cookie_consent = true where tenant_id = $1", [tenantId]);
+    wyczyscPamiecKluczy();
   });
 
   function podpisane(cialo: unknown, ts = Math.floor(Date.now() / 1000), klucz = sekret) {

@@ -49,7 +49,11 @@ export async function GET(zadanie: NextRequest, ctx: { params: Promise<{ plik: s
   const formy = klucz.zaladujFormularze && (await formularzeNaStrone(klucz.tenantId)).length > 0 ? `${adres}/s/${klucz.tenantId}` : null;
   // Shopify: zgodę podaje most w app embed (Customer Privacy API, marketing + analityka)
   const shopify = klucz.platforma === "shopify";
-  const js = zbudujMidrevJs({ id: klucz.id, api: adres, zgoda: klucz.wymagajZgodyCookies || shopify, ga4: klucz.ga4, shim: true, formy, tylkoJawnaZgoda: shopify });
+  // WooCommerce (RODO wariant B, 03.10): wtyczka traktuje ciasteczko __mx_id jako zgodę na
+  // zdarzenia koszyka i kasy, więc midrev.js na sklepie Woo ZAWSZE czeka na zgodę na cookies,
+  // niezależnie od przełącznika na ekranie „Własna strona” (review Codeksa r4)
+  const woo = klucz.platforma === "woocommerce";
+  const js = zbudujMidrevJs({ id: klucz.id, api: adres, zgoda: klucz.wymagajZgodyCookies || shopify || woo, ga4: klucz.ga4, shim: true, formy, tylkoJawnaZgoda: shopify });
   // 5 min: zmiana ustawień w panelu (GA4, zgoda) dociera do stron szybko, a ruch jest z cache
   return new NextResponse(js, { headers: naglowki("public, max-age=300") });
 }
