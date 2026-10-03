@@ -15,6 +15,8 @@ export function ImportHistorii({ tenantId, storeId, poczatkowy }: { tenantId: st
   const [plan, zaplanuj] = useActionState<PlanImportuWidok | undefined, FormData>(planImportuAkcja, undefined);
   const [stan, ustawStan] = useState<StanImportu>(poczatkowy);
   const [blad, ustawBlad] = useState<string | null>(null);
+  // plan, z którym import już ruszył, znika (po imporcie liczy się wynik, nie stary plan)
+  const [uzytyPlan, ustawUzytyPlan] = useState<PlanImportuWidok | undefined>(undefined);
   const trwa = stan.stan === "w_kolejce" || stan.stan === "trwa";
   useEffect(() => {
     if (!trwa) return;
@@ -61,7 +63,7 @@ export function ImportHistorii({ tenantId, storeId, poczatkowy }: { tenantId: st
       ) : null}
 
       {plan?.blad ? <p className="text-[13px] text-[var(--color-blad)]">{plan.blad}</p> : null}
-      {plan && !plan.blad && !trwa ? (
+      {plan && !plan.blad && !trwa && plan !== uzytyPlan ? (
         <div className="rounded-lg border border-[var(--color-linia)] p-4">
           <ul className="space-y-1 text-[13px]">
             <li><b className="liczba">{liczba(plan.zamowienia)}</b> zamówień{plan.najstarsze ? <> od <span className="liczba">{new Date(plan.najstarsze).toLocaleDateString("pl-PL")}</span></> : null}</li>
@@ -75,7 +77,10 @@ export function ImportHistorii({ tenantId, storeId, poczatkowy }: { tenantId: st
               ustawBlad(null);
               const w = await startImportuAkcja(tenantId, storeId);
               if (!w.ok) ustawBlad(w.blad ?? "Nie udało się uruchomić importu.");
-              else ustawStan({ ...stan, stan: "w_kolejce" });
+              else {
+                ustawUzytyPlan(plan);
+                ustawStan({ ...stan, stan: "w_kolejce" });
+              }
             }}
           >
             Importuj historię
