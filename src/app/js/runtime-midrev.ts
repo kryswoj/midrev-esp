@@ -138,6 +138,8 @@ export const RUNTIME_MIDREV = String.raw`(function (w, d, K) {
       if (typeof w.wp_has_consent === "function" && w.consent_api_set_by) return !!w.wp_has_consent("statistics");
       var cp = w.customerPrivacy || (w.Shopify && w.Shopify.customerPrivacy);
       if (cp) {
+        // Shopify: śledzenie MidRev to cel marketingowy, więc obie zgody naraz
+        if (typeof cp.analyticsProcessingAllowed === "function" && typeof cp.marketingAllowed === "function") return cp.analyticsProcessingAllowed() === true && cp.marketingAllowed() === true;
         if (typeof cp.analyticsProcessingAllowed === "function") return !!cp.analyticsProcessingAllowed();
         if (typeof cp.isAnalyticsAllowed === "function") return !!cp.isAnalyticsAllowed();
       }
@@ -170,7 +172,9 @@ export const RUNTIME_MIDREV = String.raw`(function (w, d, K) {
       kolejkaPrzedZgoda = [];
     }
   }
-  function sprawdzZgode() { if (!K.zgoda || trybRecznej) return; var v = zgodaCmp(); if (v !== null) ustawZgode(v, "cmp"); }
+  // K.recz: zgodę podaje WYŁĄCZNIE most platformy (Shopify app embed → Customer Privacy API, marketing
+  // i analityka); wykrywanie CMP/GCM wyłączone, żeby nie śledzić na samej zgodzie analitycznej
+  function sprawdzZgode() { if (!K.zgoda || trybRecznej || K.recz) return; var v = zgodaCmp(); if (v !== null) ustawZgode(v, "cmp"); }
 
   // ── identify / track ──────────────────────────────────────────────────────
   var POLA = { first_name: 1, last_name: 1, organization: 1, title: 1, locale: 1 };
@@ -491,9 +495,11 @@ export interface KonfiguracjaMidrevJs {
   shim: boolean;
   /** adres loadera formularzy (istniejący /s/{tenantId}) albo null */
   formy: string | null;
+  /** true = zgodę daje tylko jawne `consent` (most platformy, np. Shopify), bez wykrywania CMP */
+  tylkoJawnaZgoda?: boolean;
 }
 
 export function zbudujMidrevJs(k: KonfiguracjaMidrevJs): string {
-  const konfig = { v: WERSJA_MIDREV_JS, id: k.id, api: k.api, zgoda: k.zgoda, ga4: k.ga4, shim: k.shim, formy: k.formy };
+  const konfig = { v: WERSJA_MIDREV_JS, id: k.id, api: k.api, zgoda: k.zgoda, ga4: k.ga4, shim: k.shim, formy: k.formy, ...(k.tylkoJawnaZgoda ? { recz: true } : {}) };
   return `/* midrev.js v${WERSJA_MIDREV_JS} */\n` + RUNTIME_MIDREV.replace("__KONFIG__", () => bezpiecznyJsonSkryptu(konfig));
 }

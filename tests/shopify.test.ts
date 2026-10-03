@@ -12,6 +12,7 @@ import { bytWebhooka } from "../src/adapters/store/shopify/webhooki";
 import { GET as getAuth } from "../src/app/api/shopify/auth/route";
 import { GET as getCallback } from "../src/app/api/shopify/callback/route";
 import { POST as postWebhook } from "../src/app/api/webhooks/shopify/route";
+import { GET as getSkrypt } from "../src/app/js/v1/[plik]/route";
 import { profilSpelnia } from "../src/usecases/automatyzacje/bramka-filtrow";
 import { wyczyscLimity } from "../src/usecases/api/limity";
 import { wyczyscPamiecKluczy } from "../src/usecases/integracja/klucz-strony";
@@ -209,6 +210,9 @@ describe("Shopify: czyste funkcje (OAuth, HMAC, mapowanie, piksel)", () => {
     expect(d.id).toBe("820982911946154500");
     expect(d.orders_to_redact).toEqual(["820982911946154500"]);
     expect(d.q).toBe(2);
+    // liczby w napisach, z ucieczkami, ułamki i bezpieczne liczby bez zmian
+    const e = parsujJsonShopify('{"n": "id: 820982911946154500, \\"x\\": 1", "a": -9007199254740993, "f": 1.5, "s": 9007199254740991, "z": [12345678901234567890]}') as any;
+    expect(e).toEqual({ n: 'id: 820982911946154500, "x": 1', a: "-9007199254740993", f: 1.5, s: 9007199254740991, z: ["12345678901234567890"] });
   });
 
   it("mapowanie zamówienia: data ze źródła, kwoty w groszach, status w słowniku systemu", () => {
@@ -369,6 +373,11 @@ describe("Shopify: instalacja, webhooki, RODO, import (baza testowa + atrapa)", 
     const klucz = await getPool().query("select platform, require_cookie_consent, link_domains from site_keys where tenant_id = $1 and revoked_at is null", [tenantA]);
     expect(klucz.rows[0]).toMatchObject({ platform: "shopify", require_cookie_consent: true });
     expect(klucz.rows[0].link_domains).toEqual(expect.arrayContaining([DOMENA_A, "sklep-a.example"]));
+    // midrev.js na Shopify: zgoda wymagana i TYLKO z mostu (Customer Privacy), bez wykrywania CMP/GCM
+    const idKlucza = JSON.parse(atrapa.piksel!.settings).siteKey;
+    const js = await (await getSkrypt(new NextRequest(new URL(`/js/v1/${idKlucza}.js`, "https://link.midrev.test")), { params: Promise.resolve({ plik: `${idKlucza}.js` }) })).text();
+    expect(js).toContain('"zgoda":true');
+    expect(js).toContain('"recz":true');
     // ponowne „Sprawdź” nie zakłada drugich subskrypcji
     const ile = atrapa.subskrypcje.length;
     const { poInstalacji } = await import("../src/usecases/shopify/instalacja");
@@ -577,7 +586,8 @@ describe("Shopify: instalacja, webhooki, RODO, import (baza testowa + atrapa)", 
     const { rows: k } = await getPool().query("select count(*)::int as n from carts where tenant_id = $1 and store_id = $2", [tenantA, storeA]);
     expect(k[0].n).toBe(0);
     const { rows: g } = await getPool().query("select status from shopify_gdpr_requests where tenant_id = $1 and topic = 'shop/redact'", [tenantA]);
-    expect(g[0].status).toBe("done");
+    // profile sklepu zostają do decyzji operatora: żądanie otwarte
+    expect(g[0].status).toBe("needs_operator");
     // atrapa nie dostała żadnego żądania do hosta spoza Shopify
     expect(atrapa.wywolania.every((w) => w.host.endsWith(".myshopify.com"))).toBe(true);
   });

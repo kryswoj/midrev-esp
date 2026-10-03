@@ -29,7 +29,7 @@
     d.addEventListener("visitorConsentCollected", function (e) {
       try {
         var x = e && e.detail;
-        if (x) ustaw(x.marketingAllowed === true && x.analyticsAllowed !== false);
+        if (x) ustaw(x.marketingAllowed === true && x.analyticsAllowed === true);
         else zPrywatnosci();
       } catch (b) {}
     });

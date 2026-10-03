@@ -72,19 +72,34 @@ export async function zaplanujImportShopify(tenantId: string, storeId: string, m
 
 /** Start przebiegu. Jeden trwający import na sklep (indeks z 0024): drugi start oddaje istniejący. */
 export async function rozpocznijImportShopify(tenantId: string, storeId: string, plan: PlanImportuShopify): Promise<string> {
-  const pool = getPool();
-  const { rows: trwa } = await pool.query<{ id: string }>(
-    "select id from import_runs where tenant_id = $1 and store_id = $2 and status in ('planned', 'running') order by created_at desc limit 1",
-    [tenantId, storeId],
-  );
-  if (trwa[0]) return trwa[0].id;
-  const { rows } = await pool.query<{ id: string }>(
-    `insert into import_runs (tenant_id, store_id, status, planned, range_from, range_to, progress)
-     values ($1, $2, 'planned', $3, $4, now(), '{"etap": null}'::jsonb) returning id`,
-    [tenantId, storeId, JSON.stringify(plan), plan.od],
-  );
-  await dodajZadanie(tenantId, "import_shopify", { runId: rows[0].id });
-  return rows[0].id;
+  const klient = await getPool().connect();
+  try {
+    await klient.query("begin");
+    // blokada (tenant, sklep): dwa kliknięcia naraz nie założą dwóch przebiegów (review r1;
+    // indeks z 0024 obejmuje tylko 'running', a nowy przebieg startuje jako 'planned')
+    await klient.query("select pg_advisory_xact_lock(hashtextextended('import-shopify:' || $1::text || ':' || $2::text, 0))", [tenantId, storeId]);
+    const { rows: trwa } = await klient.query<{ id: string }>(
+      "select id from import_runs where tenant_id = $1 and store_id = $2 and status in ('planned', 'running') order by created_at desc limit 1",
+      [tenantId, storeId],
+    );
+    if (trwa[0]) {
+      await klient.query("commit");
+      return trwa[0].id;
+    }
+    const { rows } = await klient.query<{ id: string }>(
+      `insert into import_runs (tenant_id, store_id, status, planned, range_from, range_to, progress)
+       values ($1, $2, 'planned', $3, $4, now(), '{"etap": null}'::jsonb) returning id`,
+      [tenantId, storeId, JSON.stringify(plan), plan.od],
+    );
+    await dodajZadanie(tenantId, "import_shopify", { runId: rows[0].id }, { przez: klient });
+    await klient.query("commit");
+    return rows[0].id;
+  } catch (b) {
+    await klient.query("rollback").catch(() => {});
+    throw b;
+  } finally {
+    klient.release();
+  }
 }
 
 export interface PostepImportu {

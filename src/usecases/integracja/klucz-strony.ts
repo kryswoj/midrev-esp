@@ -29,6 +29,8 @@ export interface KluczStrony {
   zaladujFormularze: boolean;
   tekstZgody: string | null;
   politykaUrl: string | null;
+  /** adapter piksela (0044 `platform`): custom / woocommerce / shopify / shoper */
+  platforma: string;
   utworzono: Date;
 }
 
@@ -43,11 +45,12 @@ interface Wiersz {
   load_forms: boolean;
   consent_wording: string | null;
   consent_privacy_url: string | null;
+  platform: string;
   created_at: Date;
 }
 
 const KOLUMNY = `id, tenant_id, link_domains, restrict_origins, require_cookie_consent, identify_from_links,
-  ga4_datalayer, load_forms, consent_wording, consent_privacy_url, created_at`;
+  ga4_datalayer, load_forms, consent_wording, consent_privacy_url, platform, created_at`;
 
 function zWiersza(w: Wiersz): KluczStrony {
   return {
@@ -61,6 +64,7 @@ function zWiersza(w: Wiersz): KluczStrony {
     zaladujFormularze: w.load_forms,
     tekstZgody: w.consent_wording,
     politykaUrl: w.consent_privacy_url,
+    platforma: w.platform ?? "custom",
     utworzono: w.created_at,
   };
 }

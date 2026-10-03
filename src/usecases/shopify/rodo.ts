@@ -68,7 +68,14 @@ export async function obsluzZadanieRodo(tenantId: string, rawEventId: string): P
     wynik.zaslepioneZamowienia = await zaslepZamowienia(tenantId, r.store_id, zadanie.klientId, zadanie.zamowienia);
   } else if (zadanie.temat === "shop/redact") {
     Object.assign(wynik, await zaslepSklep(tenantId, r.store_id));
-    alert = `Shopify: shop/redact dla sklepu ${r.store_id}. Surowe dane sklepu zaślepione, token usunięty. Profile zostały (lista marketingowa klienta) - zdecyduj z klientem, czy je usunąć.`;
+    // Profile osób z tego sklepu to lista marketingowa klienta agencji (administratora), często
+    // zasilana też z innych źródeł; automatycznie ich nie kasujemy. Żądanie zostaje OTWARTE
+    // (needs_operator) z listą profili, dopóki człowiek nie zdecyduje z klientem (review r1).
+    const profile = await profileSklepu(tenantId, r.store_id);
+    wynik.profileIds = profile.slice(0, 5000);
+    wynik.profile = profile.length;
+    status = "needs_operator";
+    alert = `Shopify: shop/redact dla sklepu ${r.store_id}. Surowe dane sklepu zaślepione, token usunięty. ${profile.length} profili ma zamówienia albo koszyki z tego sklepu: zdecyduj z klientem, czy je zanonimizować (żądanie otwarte w shopify_gdpr_requests).`;
   }
 
   const klient = await pool.connect();
@@ -163,6 +170,15 @@ async function przygotujZadanie(tenantId: string, rawEventId: string, storeId: s
     klient.release();
   }
   return { temat, profileIds, zamowienia, klientId };
+}
+
+/** Profile z zamówieniami tego sklepu (do decyzji operatora po shop/redact). */
+async function profileSklepu(tenantId: string, storeId: string): Promise<string[]> {
+  const { rows } = await getPool().query<{ id: string }>(
+    "select distinct profile_id as id from orders where tenant_id = $1 and store_id = $2 and profile_id is not null",
+    [tenantId, storeId],
+  );
+  return rows.map((x) => x.id);
 }
 
 /** Profile osoby: po adresie (tylko ten tenant) i po zamówieniach TEGO sklepu z żądania. */
