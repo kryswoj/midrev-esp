@@ -13,6 +13,7 @@ import { kluczeTenanta, uniewaznijKlucz, utworzKlucz, uwierzytelnij } from "../s
 import { LIMIT_ZDARZEN, sprawdzLimit, sprawdzSufitDobowy, wyczyscLimity, zaliczDoSufitu } from "../src/usecases/api/limity";
 import { przetworzZdarzenieApi, RODZAJ_JOBA } from "../src/usecases/api/przyjmij-zdarzenie";
 import { czasZTekstu } from "../src/usecases/api/zdarzenie-api";
+import { sciezkaPoPrzepisaniu } from "../src/trasy-publiczne";
 
 // E2 (plan 2.x, 7.3): API zdarzeń zgodne z Klaviyo jako specyfikacja wykonywalna.
 // Kontrakt: żądania z workflowów n8n Sports-med (tests/fixtures/n8n-klaviyo, zanonimizowane)
@@ -38,9 +39,10 @@ async function wyslij(cialo: string, klucz: string | null, dodatkowe: Record<str
   const wstepne = zadanie(cialo, naglowki, sciezka);
   const mw = middleware(wstepne);
   expect(mw.headers.get("location"), "middleware nie może przekierować POST-a API").toBeNull();
-  const cel = mw.headers.get("x-middleware-rewrite") ?? new URL(sciezka, "https://api.midrev.test").toString();
-  expect(new URL(cel).pathname).toBe("/api/events");
-  const odp = await POST(zadanie(cialo, naglowki, new URL(cel).pathname));
+  expect(mw.headers.get("x-middleware-rewrite"), "rewrite robi next.config, nie middleware").toBeNull();
+  const cel = sciezkaPoPrzepisaniu(new URL(sciezka, "https://api.midrev.test").pathname);
+  expect(cel).toBe("/api/events");
+  const odp = await POST(zadanie(cialo, naglowki, cel));
   const tekst = await odp.text();
   return { status: odp.status, cialo: tekst ? JSON.parse(tekst) : null, naglowki: odp.headers };
 }

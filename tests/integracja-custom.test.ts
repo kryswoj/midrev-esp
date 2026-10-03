@@ -22,6 +22,7 @@ import { importujFeed, zapiszFeed } from "../src/usecases/katalog/katalog";
 import { osProfilu } from "../src/usecases/zdarzenia/odczyt";
 import { anonimizujProfil } from "../src/usecases/profil-rodo";
 import { ponowZalegleZdarzeniaApi } from "../src/jobs/handlery-zdarzenia";
+import { sciezkaPoPrzepisaniu } from "../src/trasy-publiczne";
 
 // Integracja „custom” jak Klaviyo (0044): klucz publiczny strony, Client API, token _mx,
 // katalog z feedu, stan koszyka, podgląd „Sprawdź połączenie” i oś profilu.
@@ -204,7 +205,8 @@ describe("Integracja custom jak Klaviyo (0044)", () => {
     it("/client/events/ z ukośnikiem: middleware przepisuje bez 308; /client i /js same nie są publiczne", () => {
       const mw = middleware(new NextRequest(new URL(`/client/events/?company_id=${kluczA}`, "https://link.midrev.test"), { method: "POST", body: "{}" }));
       expect(mw.headers.get("location")).toBeNull();
-      expect(new URL(mw.headers.get("x-middleware-rewrite")!).pathname).toBe("/client/events");
+      expect(mw.headers.get("x-middleware-rewrite")).toBeNull();
+      expect(sciezkaPoPrzepisaniu("/client/events/")).toBe("/client/events");
       const panel = middleware(new NextRequest(new URL("/client", "https://link.midrev.test")));
       expect(panel.headers.get("location")).toContain("/logowanie");
     });
