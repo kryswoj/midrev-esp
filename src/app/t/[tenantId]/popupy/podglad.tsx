@@ -14,6 +14,10 @@ export const CSS_PODGLADU = `${CSS_FORMULARZA}
 .mf-podglad.mf-nakladka,.mf-podglad.mf-flyout,.mf-podglad.mf-teaser{position:absolute;animation:none}
 .mf-podglad.mf-nakladka{z-index:1}
 .mf-podglad .mf-karta{max-height:none}
+.mf-root:not(.mf-statyczny) .mf-karta{overflow:visible}
+.mf-root:not(.mf-statyczny) .mf-obraz-lewo .mf-obraz{border-radius:var(--mf-radius) 0 0 var(--mf-radius)}
+.mf-root:not(.mf-statyczny) .mf-obraz-prawo .mf-obraz{border-radius:0 var(--mf-radius) var(--mf-radius) 0}
+.mf-root:not(.mf-statyczny) .mf-obraz-gora .mf-obraz{border-radius:var(--mf-radius) var(--mf-radius) 0 0}
 .mf-root.mf-statyczny{height:100%}
 .mf-zgoda .mf-link{text-decoration:underline}
 .mfb{position:relative;border-radius:6px;outline:1.5px solid transparent;outline-offset:3px;cursor:pointer;transition:outline-color .12s}
