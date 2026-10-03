@@ -20,7 +20,7 @@ class Midrev_Esp_Frontend {
 
 	/** Podpięcie akcji. */
 	public static function init(): void {
-		add_action( 'wp_enqueue_scripts', array( __CLASS__, 'enqueue' ) );
+		add_action( 'wp_enqueue_scripts', array( __CLASS__, 'enqueue' ), 30 );
 		add_action( 'init', array( __CLASS__, 'register_cookie_info' ) );
 	}
 
@@ -35,6 +35,12 @@ class Midrev_Esp_Frontend {
 	public static function enqueue(): void {
 		if ( ! Midrev_Esp_Api::is_connected() ) {
 			return;
+		}
+		// Kasa klasyczna: WooCommerce odświeża podsumowanie (update_order_review) przy zmianie adresu,
+		// ale nie przy samym e-mailu. Po wpisaniu e-maila prosimy WOO o odświeżenie, a Started
+		// Checkout liczy serwer (hook update_order_review), nie ten skrypt. Blokowa kasa nie potrzebuje.
+		if ( function_exists( 'is_checkout' ) && is_checkout() && wp_script_is( 'wc-checkout', 'enqueued' ) ) {
+			wp_add_inline_script( 'wc-checkout', "jQuery(function(\$){\$(document.body).on('change','#billing_email',function(){\$(document.body).trigger('update_checkout');});});" );
 		}
 		$c = Midrev_Esp_Api::config();
 		if ( empty( $c['script_url'] ) || ! wp_http_validate_url( $c['script_url'] ) ) {
